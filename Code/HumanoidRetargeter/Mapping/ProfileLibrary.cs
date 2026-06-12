@@ -81,10 +81,90 @@ public static class ProfileLibrary
     /// </summary>
     public static Profile ClassicBvh { get; } = BuildClassicBvh();
 
+    /// <summary>
+    /// 3ds Max Character Studio Biped rigs: every bone is "&lt;BipedName&gt; &lt;Part&gt;"
+    /// where the biped name defaults to <c>Bip01</c> (3ds Max ≤2009) / <c>Bip001</c>
+    /// (2010+) per the Autodesk "Naming the Biped" documentation; some exporters mangle
+    /// the spaces to underscores (<c>Bip01_L_Thigh</c>), hence the <c>^Bip\d+[ _]</c>
+    /// namespace pattern (alias comparison is separator-insensitive, so "L UpperArm" and
+    /// "L_UpperArm" normalize identically). Sided bones use a bare mid-name <c>L/R</c>:
+    /// <c>L Clavicle→L UpperArm→L Forearm→L Hand</c> arms,
+    /// <c>L Thigh→L Calf→L Foot→L Toe0</c> legs. Fingers are numbered chains
+    /// <c>L Finger0..4</c> (0 = thumb) with phalanx segments <c>Finger01/Finger02</c>
+    /// etc. (MotionBuilder's "3ds Max Biped Template" characterization maps exactly these
+    /// names). The COM root <c>Bip01</c> itself, <c>Footsteps</c>, toe segments
+    /// <c>Toe01/Toe02</c> and <c>HorseLink</c> carry no aliases and are never mapped.
+    /// </summary>
+    public static Profile Biped { get; } = BuildBiped();
+
+    /// <summary>
+    /// DAZ/Poser classic naming (Poser 4 era figures, DAZ Generation-4 V4/M4, Genesis 1/2,
+    /// MakeHuman's "Poser/DAZ names" BVH export — verified against the local
+    /// <c>dev/corpus/unknown_rigs/makehuman_cmu_03_03_dazNames.bvh</c>): camel-case bones
+    /// with a lower-case <c>l</c>/<c>r</c> side prefix — <c>hip</c> (the translating
+    /// root), <c>abdomen[→abdomen2]→chest</c> spine, <c>neck</c>, <c>head</c>,
+    /// <c>lCollar→lShldr→lForeArm→lHand</c> arms, <c>lThigh→lShin→lFoot→lToe</c> legs and
+    /// <c>lThumb1..3/lIndex1..3/lMid1..3/lRing1..3/lPinky1..3</c> fingers. The
+    /// <c>l/rButtock</c> thigh helpers and eye bones carry no aliases and stay unmapped.
+    /// DAZ Genesis 3/8/9 renamed the skeleton (<c>abdomenLower</c>, <c>lShldrBend</c>, …)
+    /// and is NOT covered by this preset.
+    /// </summary>
+    public static Profile DazPoser { get; } = BuildDazPoser();
+
+    /// <summary>
+    /// Blender Rigify human rigs, per the metarig definition in the rigify add-on
+    /// (<c>rigify/metarigs/human.py</c>) and the Blender manual's basic.human reference:
+    /// the spine chain is <c>spine→spine.001..spine.006</c> where <c>spine</c> IS the
+    /// pelvis/hips bone (it sits at the pelvis and parents the thighs), spine.001–003 are
+    /// the torso, spine.004/005 the two neck bones (004 carries <see cref="BoneRole.Neck"/>,
+    /// 005 stays unmapped — same policy as ActorCore's NeckTwist02) and spine.006 is the
+    /// head. Limbs: <c>shoulder.L→upper_arm.L→forearm.L→hand.L</c>,
+    /// <c>thigh.L→shin.L→foot.L→toe.L</c>; fingers <c>thumb.01.L..03.L</c> and
+    /// <c>f_index/f_middle/f_ring/f_pinky.01.L..03.L</c>. The <c>^DEF-</c> namespace
+    /// pattern also matches rigify's generated deform skeleton (<c>DEF-spine.001</c>,
+    /// <c>DEF-upper_arm.L</c>, …); the segmented deform twins (<c>DEF-upper_arm.L.001</c>),
+    /// <c>palm.*</c>, <c>pelvis.L/R</c>, <c>heel.02.L</c>, face bones and the generated
+    /// ORG-/MCH-/control bones have no aliases and are never mapped.
+    /// </summary>
+    public static Profile Rigify { get; } = BuildRigify();
+
+    /// <summary>
+    /// VRoid Studio / VRM avatars (UniVRM exports): <c>J_Bip_&lt;side&gt;_&lt;Part&gt;</c>
+    /// bones where side is <c>C</c> (center), <c>L</c> or <c>R</c> — the standard VRoid
+    /// skeleton behind the VRM humanoid spec (vrm-c/vrm-specification, humanoid bone map):
+    /// <c>J_Bip_C_Hips/Spine/Chest/UpperChest/Neck/Head</c>,
+    /// <c>J_Bip_L_Shoulder→UpperArm→LowerArm→Hand</c>,
+    /// <c>J_Bip_L_UpperLeg→LowerLeg→Foot→ToeBase</c>, fingers
+    /// <c>J_Bip_L_Thumb1..3/Index1..3/Middle1..3/Ring1..3/Little1..3</c> ("Little" is the
+    /// pinky, per the VRM littleProximal/Intermediate/Distal humanoid bones). Secondary
+    /// physics/adjust bones (<c>J_Sec_*</c>, <c>J_Adj_*</c>) and the <c>Root</c> bone have
+    /// no aliases and are never mapped.
+    /// </summary>
+    public static Profile Vrm { get; } = BuildVrm();
+
+    /// <summary>
+    /// Blender Auto-Rig Pro humanoid FBX exports — bone names verified empirically against
+    /// the local user repro <c>dev/corpus/todo/Defenses.fbx</c> (the PunchPerfect family):
+    /// <c>.x</c> suffix marks center bones, <c>.l/.r</c> the sides, and the exported limb
+    /// deform bones carry the <c>_stretch</c> twin name — <c>root.x</c> is the hips
+    /// (under a ground bone <c>root</c>), <c>spine_01.x→spine_02.x→spine_03.x</c>,
+    /// <c>neck.x</c>, <c>head.x</c>, arms <c>shoulder.l→arm_stretch.l→forearm_stretch.l→
+    /// hand.l</c> (plain "arm", NOT "upperarm"), legs <c>thigh_stretch.l→leg_stretch.l→
+    /// foot.l→toes_01.l</c> ("leg" is the calf). Fingers keep Auto-Rig Pro's <c>c_</c>
+    /// control prefix on the exported deform chain: <c>c_thumb1.l..3.l</c>,
+    /// <c>c_index/c_middle/c_ring/c_pinky1.l..3.l</c>. Leftover finger-tip markers
+    /// (<c>mixamorig:LeftHandIndex4</c> in the repro) and <c>root</c> have no aliases.
+    /// </summary>
+    public static Profile AutoRigPro { get; } = BuildAutoRigPro();
+
     /// <summary>All built-in presets, in detection order (first wins score ties — see
     /// <see cref="SmplX"/> vs <see cref="Smpl"/>).</summary>
     public static IReadOnlyList<Profile> All { get; } =
-        new[] { Mixamo, ActorCoreCc, UeMannequin, RokokoBvh, SmplX, Smpl, SomaBvh, ClassicBvh };
+        new[]
+        {
+            Mixamo, ActorCoreCc, UeMannequin, RokokoBvh, SmplX, Smpl, SomaBvh, ClassicBvh,
+            Biped, DazPoser, Rigify, Vrm, AutoRigPro,
+        };
 
     // ---------------------------------------------------------------- mixamo
 
@@ -340,6 +420,210 @@ public static class ProfileLibrary
             aliases[Role("Toe", roleSide)] = new[] { $"{nameSide}Toe" };
         }
         return new Profile("classic_bvh", new string[0], aliases);
+    }
+
+    // ---------------------------------------------------------------- 3ds max biped
+
+    private static Profile BuildBiped()
+    {
+        var aliases = new Dictionary<BoneRole, string[]>
+        {
+            [BoneRole.Hips] = new[] { "Pelvis" },
+            [BoneRole.Spine0] = new[] { "Spine" },
+            [BoneRole.Spine1] = new[] { "Spine1" },
+            [BoneRole.Spine2] = new[] { "Spine2" },
+            [BoneRole.Spine3] = new[] { "Spine3" },
+            [BoneRole.Neck] = new[] { "Neck" },
+            [BoneRole.Head] = new[] { "Head" },
+        };
+        foreach (var s in new[] { "L", "R" })
+        {
+            aliases[Role("Clavicle", s)] = new[] { $"{s} Clavicle" };
+            aliases[Role("UpperArm", s)] = new[] { $"{s} UpperArm" };
+            aliases[Role("LowerArm", s)] = new[] { $"{s} Forearm" };
+            aliases[Role("Hand", s)] = new[] { $"{s} Hand" };
+            aliases[Role("UpperLeg", s)] = new[] { $"{s} Thigh" };
+            aliases[Role("LowerLeg", s)] = new[] { $"{s} Calf" };
+            aliases[Role("Foot", s)] = new[] { $"{s} Foot" };
+            aliases[Role("Toe", s)] = new[] { $"{s} Toe0" };
+
+            // Numbered finger chains: Finger0 is the thumb; segment names append the
+            // phalanx digit (Finger0 → Finger01 → Finger02, Finger1 → Finger11 → ...).
+            foreach (var (finger, n) in new[]
+            {
+                ("Thumb", 0), ("Index", 1), ("Middle", 2), ("Ring", 3), ("Pinky", 4),
+            })
+            {
+                aliases[Role($"{finger}Prox", s)] = new[] { $"{s} Finger{n}" };
+                aliases[Role($"{finger}Mid", s)] = new[] { $"{s} Finger{n}1" };
+                aliases[Role($"{finger}Dist", s)] = new[] { $"{s} Finger{n}2" };
+            }
+        }
+        // "Bip01 "/"Bip001 " biped-name prefix; underscore form covers exporters that
+        // mangle the spaces ("Bip01_L_Thigh"). The bare COM root "Bip01" is untouched by
+        // the pattern (no trailing separator) and has no alias.
+        return new Profile("biped", new[] { @"^Bip\d+[ _]" }, aliases);
+    }
+
+    // ---------------------------------------------------------------- daz / poser
+
+    private static Profile BuildDazPoser()
+    {
+        var aliases = new Dictionary<BoneRole, string[]>
+        {
+            [BoneRole.Hips] = new[] { "hip" },
+            [BoneRole.Spine0] = new[] { "abdomen" },
+            // Poser classic / DAZ Gen4 spine is abdomen→chest; DAZ Genesis 1/2 inserts
+            // abdomen2. Ordered preference + used-bone exclusion handles both: without
+            // abdomen2 the chest falls back to Spine1 and Spine2 stays unmapped.
+            [BoneRole.Spine1] = new[] { "abdomen2", "chest" },
+            [BoneRole.Spine2] = new[] { "chest" },
+            [BoneRole.Neck] = new[] { "neck" },
+            [BoneRole.Head] = new[] { "head" },
+        };
+        foreach (var s in new[] { "L", "R" })
+        {
+            var p = s == "L" ? "l" : "r"; // lower-case side prefix: lShldr, rThigh
+            aliases[Role("Clavicle", s)] = new[] { $"{p}Collar" };
+            aliases[Role("UpperArm", s)] = new[] { $"{p}Shldr" };
+            aliases[Role("LowerArm", s)] = new[] { $"{p}ForeArm" };
+            aliases[Role("Hand", s)] = new[] { $"{p}Hand" };
+            aliases[Role("UpperLeg", s)] = new[] { $"{p}Thigh" };
+            aliases[Role("LowerLeg", s)] = new[] { $"{p}Shin" };
+            aliases[Role("Foot", s)] = new[] { $"{p}Foot" };
+            aliases[Role("Toe", s)] = new[] { $"{p}Toe" };
+
+            foreach (var (role, daz) in new[]
+            {
+                ("Thumb", "Thumb"), ("Index", "Index"), ("Middle", "Mid"), ("Ring", "Ring"), ("Pinky", "Pinky"),
+            })
+            {
+                aliases[Role($"{role}Prox", s)] = new[] { $"{p}{daz}1" };
+                aliases[Role($"{role}Mid", s)] = new[] { $"{p}{daz}2" };
+                aliases[Role($"{role}Dist", s)] = new[] { $"{p}{daz}3" };
+            }
+        }
+        return new Profile("daz_poser", new string[0], aliases);
+    }
+
+    // ---------------------------------------------------------------- blender rigify
+
+    private static Profile BuildRigify()
+    {
+        var aliases = new Dictionary<BoneRole, string[]>
+        {
+            // rigify's "spine" bone sits AT the pelvis and parents both thighs — it is
+            // the hips, not a spine link (rigify/metarigs/human.py).
+            [BoneRole.Hips] = new[] { "spine" },
+            [BoneRole.Spine0] = new[] { "spine.001" },
+            [BoneRole.Spine1] = new[] { "spine.002" },
+            [BoneRole.Spine2] = new[] { "spine.003" },
+            // spine.004 + spine.005 are the two neck bones, spine.006 the head;
+            // spine.005 stays unmapped (same policy as ActorCore's NeckTwist02).
+            [BoneRole.Neck] = new[] { "spine.004" },
+            [BoneRole.Head] = new[] { "spine.006" },
+        };
+        foreach (var s in new[] { "L", "R" })
+        {
+            aliases[Role("Clavicle", s)] = new[] { $"shoulder.{s}" };
+            aliases[Role("UpperArm", s)] = new[] { $"upper_arm.{s}" };
+            aliases[Role("LowerArm", s)] = new[] { $"forearm.{s}" };
+            aliases[Role("Hand", s)] = new[] { $"hand.{s}" };
+            aliases[Role("UpperLeg", s)] = new[] { $"thigh.{s}" };
+            aliases[Role("LowerLeg", s)] = new[] { $"shin.{s}" };
+            aliases[Role("Foot", s)] = new[] { $"foot.{s}" };
+            aliases[Role("Toe", s)] = new[] { $"toe.{s}" };
+
+            foreach (var (role, rigify) in new[]
+            {
+                ("Thumb", "thumb"), ("Index", "f_index"), ("Middle", "f_middle"),
+                ("Ring", "f_ring"), ("Pinky", "f_pinky"),
+            })
+            {
+                aliases[Role($"{role}Prox", s)] = new[] { $"{rigify}.01.{s}" };
+                aliases[Role($"{role}Mid", s)] = new[] { $"{rigify}.02.{s}" };
+                aliases[Role($"{role}Dist", s)] = new[] { $"{rigify}.03.{s}" };
+            }
+        }
+        // The generated deform skeleton prefixes every deform bone with "DEF-"; its
+        // segmented limb twins ("DEF-upper_arm.L.001") keep their numeric suffix after
+        // stripping and therefore never collide with the whole-bone aliases.
+        return new Profile("rigify", new[] { "^DEF-" }, aliases);
+    }
+
+    // ---------------------------------------------------------------- vroid / vrm
+
+    private static Profile BuildVrm()
+    {
+        var aliases = new Dictionary<BoneRole, string[]>
+        {
+            [BoneRole.Hips] = new[] { "J_Bip_C_Hips" },
+            [BoneRole.Spine0] = new[] { "J_Bip_C_Spine" },
+            [BoneRole.Spine1] = new[] { "J_Bip_C_Chest" },
+            [BoneRole.Spine2] = new[] { "J_Bip_C_UpperChest" },
+            [BoneRole.Neck] = new[] { "J_Bip_C_Neck" },
+            [BoneRole.Head] = new[] { "J_Bip_C_Head" },
+        };
+        foreach (var s in new[] { "L", "R" })
+        {
+            aliases[Role("Clavicle", s)] = new[] { $"J_Bip_{s}_Shoulder" };
+            aliases[Role("UpperArm", s)] = new[] { $"J_Bip_{s}_UpperArm" };
+            aliases[Role("LowerArm", s)] = new[] { $"J_Bip_{s}_LowerArm" };
+            aliases[Role("Hand", s)] = new[] { $"J_Bip_{s}_Hand" };
+            aliases[Role("UpperLeg", s)] = new[] { $"J_Bip_{s}_UpperLeg" };
+            aliases[Role("LowerLeg", s)] = new[] { $"J_Bip_{s}_LowerLeg" };
+            aliases[Role("Foot", s)] = new[] { $"J_Bip_{s}_Foot" };
+            aliases[Role("Toe", s)] = new[] { $"J_Bip_{s}_ToeBase" };
+
+            foreach (var (role, vrm) in new[]
+            {
+                ("Thumb", "Thumb"), ("Index", "Index"), ("Middle", "Middle"),
+                ("Ring", "Ring"), ("Pinky", "Little"),
+            })
+            {
+                aliases[Role($"{role}Prox", s)] = new[] { $"J_Bip_{s}_{vrm}1" };
+                aliases[Role($"{role}Mid", s)] = new[] { $"J_Bip_{s}_{vrm}2" };
+                aliases[Role($"{role}Dist", s)] = new[] { $"J_Bip_{s}_{vrm}3" };
+            }
+        }
+        return new Profile("vrm", new string[0], aliases);
+    }
+
+    // ---------------------------------------------------------------- auto-rig pro
+
+    private static Profile BuildAutoRigPro()
+    {
+        var aliases = new Dictionary<BoneRole, string[]>
+        {
+            [BoneRole.Hips] = new[] { "root.x" },
+            [BoneRole.Spine0] = new[] { "spine_01.x" },
+            [BoneRole.Spine1] = new[] { "spine_02.x" },
+            [BoneRole.Spine2] = new[] { "spine_03.x" },
+            [BoneRole.Neck] = new[] { "neck.x" },
+            [BoneRole.Head] = new[] { "head.x" },
+        };
+        foreach (var s in new[] { "L", "R" })
+        {
+            var p = s == "L" ? "l" : "r";
+            aliases[Role("Clavicle", s)] = new[] { $"shoulder.{p}" };
+            aliases[Role("UpperArm", s)] = new[] { $"arm_stretch.{p}" };
+            aliases[Role("LowerArm", s)] = new[] { $"forearm_stretch.{p}" };
+            aliases[Role("Hand", s)] = new[] { $"hand.{p}" };
+            aliases[Role("UpperLeg", s)] = new[] { $"thigh_stretch.{p}" };
+            aliases[Role("LowerLeg", s)] = new[] { $"leg_stretch.{p}" };
+            aliases[Role("Foot", s)] = new[] { $"foot.{p}" };
+            aliases[Role("Toe", s)] = new[] { $"toes_01.{p}" };
+
+            // Exported finger deform bones keep ARP's c_ control prefix (Defenses.fbx).
+            foreach (var finger in new[] { "thumb", "index", "middle", "ring", "pinky" })
+            {
+                var role = char.ToUpperInvariant(finger[0]) + finger[1..];
+                aliases[Role($"{role}Prox", s)] = new[] { $"c_{finger}1.{p}" };
+                aliases[Role($"{role}Mid", s)] = new[] { $"c_{finger}2.{p}" };
+                aliases[Role($"{role}Dist", s)] = new[] { $"c_{finger}3.{p}" };
+            }
+        }
+        return new Profile("auto_rig_pro", new string[0], aliases);
     }
 
     // ---------------------------------------------------------------- helpers
