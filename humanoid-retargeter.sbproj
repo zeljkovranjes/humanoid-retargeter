@@ -1,0 +1,7 @@
+{
+	"Title": "Humanoid Retargeter",
+	"Type": "library",
+	"Org": "local",
+	"Ident": "humanoid_retargeter",
+	"Schema": 1
+}
