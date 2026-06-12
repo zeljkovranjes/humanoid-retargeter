@@ -99,7 +99,7 @@ public sealed class RetargetWindow : Widget
 		top.Spacing = 8;
 
 		var add = top.Add( new Button.Primary( "Add Files…" ) { Icon = "add" } );
-		add.ToolTip = "Add .fbx / .bvh animation files to convert";
+		add.ToolTip = "Add .fbx / .bvh / .glb / .gltf animation files to convert";
 		add.Clicked = AddFilesViaDialog;
 
 		top.AddSpacingCell( 8 );
@@ -283,7 +283,7 @@ public sealed class RetargetWindow : Widget
 		var fd = new FileDialog( null ) { Title = "Add animation files…" };
 		fd.SetFindExistingFiles();
 		fd.SetModeOpen();
-		fd.SetNameFilter( "Animation Files (*.fbx *.bvh)" );
+		fd.SetNameFilter( "Animation Files (*.fbx *.bvh *.glb *.gltf)" );
 		if ( !fd.Execute() )
 			return;
 
@@ -740,8 +740,8 @@ public sealed class RetargetWindow : Widget
 		{
 			var empty = _listLayout.Add( new Label( this )
 			{
-				Text = "No files yet. Use \"Add Files…\" or right-click .fbx/.bvh files in the Asset Browser "
-					+ "and choose \"Retarget to s&box rig…\".",
+				Text = "No files yet. Use \"Add Files…\" or right-click .fbx/.bvh/.glb/.gltf files in the "
+					+ "Asset Browser and choose \"Retarget to s&box rig…\".",
 				WordWrap = true,
 			} );
 			empty.SetStyles( $"color: {Theme.TextLight.Hex}; margin: 12px;" );

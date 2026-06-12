@@ -13,13 +13,14 @@ namespace HumanoidRetargeter;
 /// </summary>
 public sealed class RetargetRequest
 {
-    /// <summary>Raw bytes of the source file (.fbx or .bvh).</summary>
+    /// <summary>Raw bytes of the source file (.fbx, .bvh, .glb or .gltf).</summary>
     public required byte[] SourceData { get; init; }
 
     /// <summary>
     /// Source file name (used for the report and DMX provenance). The extension drives the
-    /// format choice (<c>.fbx</c> / <c>.bvh</c>); when the extension is unknown the content
-    /// is sniffed (FBX binary magic / "FBXHeaderExtension" / BVH "HIERARCHY").
+    /// format choice (<c>.fbx</c> / <c>.bvh</c> / <c>.glb</c> / <c>.gltf</c>); when the
+    /// extension is unknown the content is sniffed (FBX binary magic /
+    /// "FBXHeaderExtension" / BVH "HIERARCHY" / GLB 'glTF' magic / glTF JSON).
     /// </summary>
     public required string SourceFileName { get; init; }
 
