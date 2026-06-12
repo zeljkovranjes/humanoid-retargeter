@@ -354,7 +354,9 @@ public sealed class RetargetWindow : Widget
 			{
 				entry.UseDlSolver = true;
 				RefreshAll();
-				OpenPreview( entry );
+				// DL applies to the whole file; preview its first take as representative.
+				if ( entry.Takes.Count > 0 )
+					OpenPreview( entry.Takes[0] );
 			},
 			ManualChosen = () => OpenMappingEditor( entry ),
 		};
