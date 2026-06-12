@@ -7,6 +7,8 @@ using SkeletonModel = HumanoidRetargeter.Skeleton.Skeleton;
 
 namespace HumanoidRetargeter.Solve;
 
+using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global-namespace Vector3 (see Code/HumanoidRetargeter/Assembly.cs)
+
 /// <summary>
 /// The character-level reference frame of a rig, derived purely from rest <b>geometry</b>
 /// (joint positions) — never from bone local axes, which encode no anatomy on the s&amp;box

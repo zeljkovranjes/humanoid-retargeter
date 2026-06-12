@@ -7,6 +7,8 @@ using SkeletonModel = HumanoidRetargeter.Skeleton.Skeleton;
 
 namespace HumanoidRetargeter.Solve;
 
+using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global-namespace Vector3 (see Code/HumanoidRetargeter/Assembly.cs)
+
 /// <summary>
 /// Canonical anatomical frames: one world-space rest basis per mapped <see cref="BoneRole"/>,
 /// derived from rest <b>geometry</b> (joint head positions) of any rig plus its mapping.

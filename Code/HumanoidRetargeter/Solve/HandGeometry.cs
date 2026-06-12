@@ -5,6 +5,8 @@ using HumanoidRetargeter.Maths;
 
 namespace HumanoidRetargeter.Solve;
 
+using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global-namespace Vector3 (see Code/HumanoidRetargeter/Assembly.cs)
+
 /// <summary>
 /// Hand rest-geometry helpers shared by <see cref="CanonicalFrames"/> (finger secondary axes)
 /// and <see cref="RestNormalizer"/> (palm-down roll correction). Everything derives from joint

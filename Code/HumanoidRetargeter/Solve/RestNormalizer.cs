@@ -7,6 +7,8 @@ using SkeletonModel = HumanoidRetargeter.Skeleton.Skeleton;
 
 namespace HumanoidRetargeter.Solve;
 
+using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global-namespace Vector3 (see Code/HumanoidRetargeter/Assembly.cs)
+
 /// <summary>
 /// A skeleton's rest pose as explicit world transforms (indexed like the skeleton's bones).
 /// Produced by <see cref="RestNormalizer"/>; feed it to
