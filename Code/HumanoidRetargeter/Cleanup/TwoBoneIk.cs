@@ -4,6 +4,8 @@ using HumanoidRetargeter.Maths;
 
 namespace HumanoidRetargeter.Cleanup;
 
+using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global-namespace Vector3 (see Code/HumanoidRetargeter/Assembly.cs)
+
 /// <summary>
 /// Analytic two-bone IK (Holden's formulation) with soft reach clamping.
 /// Operates purely on world-space positions and returns world-space rotation deltas,

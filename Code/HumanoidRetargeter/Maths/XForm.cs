@@ -3,6 +3,8 @@ using System.Numerics;
 
 namespace HumanoidRetargeter.Maths;
 
+using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global-namespace Vector3 (see Code/HumanoidRetargeter/Assembly.cs)
+
 /// <summary>
 /// A rigid transform: rotation followed by translation (no scale or shear).
 /// </summary>

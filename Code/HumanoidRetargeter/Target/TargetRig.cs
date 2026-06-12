@@ -9,6 +9,8 @@ using SkeletonModel = HumanoidRetargeter.Skeleton.Skeleton;
 
 namespace HumanoidRetargeter.Target;
 
+using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global-namespace Vector3 (see Code/HumanoidRetargeter/Assembly.cs)
+
 /// <summary>
 /// The s&amp;box humanoid target rig: skeleton plus per-bone <see cref="BoneClass"/> and
 /// (for animated bones) canonical <see cref="BoneRole"/> annotations. Loaded from the

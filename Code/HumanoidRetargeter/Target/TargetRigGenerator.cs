@@ -7,6 +7,8 @@ using HumanoidRetargeter.Skeleton;
 
 namespace HumanoidRetargeter.Target;
 
+using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global-namespace Vector3 (see Code/HumanoidRetargeter/Assembly.cs)
+
 /// <summary>
 /// Generates the committed s&amp;box target-rig definition
 /// (<c>Assets/humanoid_retargeter/target_rig_sbox.json</c>) from the research ground-truth
@@ -71,7 +73,7 @@ public static class TargetRigGenerator
             writer.WriteEndObject();
         }
 
-        return Encoding.UTF8.GetString(buffer.ToArray()) + Environment.NewLine;
+        return Encoding.UTF8.GetString(buffer.ToArray()) + "\n"; // Environment.NewLine is not s&box-whitelisted
     }
 
     private static void WriteVector(Utf8JsonWriter writer, string name, Vector3 v)

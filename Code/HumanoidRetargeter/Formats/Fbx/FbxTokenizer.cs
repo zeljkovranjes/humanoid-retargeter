@@ -214,10 +214,16 @@ public static class FbxTokenizer
                 raw = new byte[expected];
                 try
                 {
-                    using var zs = new ZLibStream(new MemoryStream(compressed), CompressionMode.Decompress);
+                    // s&box whitelist: ZLibStream is banned, DeflateStream is allowed.
+                    // zlib framing = 2-byte header + deflate payload (+ adler32 we never read).
+                    var ms = new MemoryStream(compressed);
+                    ms.Seek(2, SeekOrigin.Begin);
+                    using var zs = new DeflateStream(ms, CompressionMode.Decompress);
                     zs.ReadExactly(raw);
                 }
-                catch (Exception ex) when (ex is InvalidDataException or EndOfStreamException)
+                // broad filter: InvalidDataException (corrupt deflate data) is not
+                // s&box-whitelisted, so it cannot be named here
+                catch (Exception ex) when (ex is not FormatException)
                 {
                     throw new FormatException(
                         $"FBX binary: node '{owner}': zlib array at offset {at} failed to decompress to {expected} bytes.", ex);

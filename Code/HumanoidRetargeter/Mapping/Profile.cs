@@ -116,7 +116,7 @@ public sealed class Profile
 
             writer.WriteEndObject();
         }
-        return Encoding.UTF8.GetString(buffer.ToArray()) + Environment.NewLine;
+        return Encoding.UTF8.GetString(buffer.ToArray()) + "\n"; // Environment.NewLine is not s&box-whitelisted
     }
 
     /// <summary>Parses a profile JSON document produced by <see cref="ToJson"/>.</summary>

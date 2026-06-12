@@ -3,6 +3,8 @@ using System.Numerics;
 
 namespace HumanoidRetargeter.Maths;
 
+using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global-namespace Vector3 (see Code/HumanoidRetargeter/Assembly.cs)
+
 /// <summary>
 /// Quaternion algebra helpers used throughout the retargeting pipeline.
 /// All angles are radians; quaternions are XYZW (<see cref="System.Numerics.Quaternion"/> native);

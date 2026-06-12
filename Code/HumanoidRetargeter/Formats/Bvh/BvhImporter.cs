@@ -8,6 +8,8 @@ using HumanoidRetargeter.Skeleton;
 
 namespace HumanoidRetargeter.Formats.Bvh;
 
+using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global-namespace Vector3 (see Code/HumanoidRetargeter/Assembly.cs)
+
 /// <summary>Options for <see cref="BvhImporter.Import"/>.</summary>
 public sealed class BvhImportOptions
 {

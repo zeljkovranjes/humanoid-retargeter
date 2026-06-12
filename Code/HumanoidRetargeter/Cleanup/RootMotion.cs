@@ -5,6 +5,8 @@ using HumanoidRetargeter.Maths;
 
 namespace HumanoidRetargeter.Cleanup;
 
+using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global-namespace Vector3 (see Code/HumanoidRetargeter/Assembly.cs)
+
 /// <summary>How root motion should be handled in the output clip.</summary>
 public enum RootMotionMode
 {
@@ -120,7 +122,12 @@ public static class RootMotion
     private static Vector3[] Smooth(Vector3[] values, int halfWindow)
     {
         if (halfWindow <= 0)
-            return (Vector3[])values.Clone();
+        {
+            // Array.Clone is explicitly denied by the s&box whitelist; Array.Copy is fine.
+            var copy = new Vector3[values.Length];
+            Array.Copy(values, copy, values.Length);
+            return copy;
+        }
 
         var result = new Vector3[values.Length];
         for (int i = 0; i < values.Length; i++)

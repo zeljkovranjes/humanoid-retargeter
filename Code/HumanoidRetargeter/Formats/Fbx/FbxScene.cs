@@ -4,6 +4,8 @@ using System.Numerics;
 
 namespace HumanoidRetargeter.Formats.Fbx;
 
+using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global-namespace Vector3 (see Code/HumanoidRetargeter/Assembly.cs)
+
 /// <summary>One <c>P</c> entry of a <c>Properties70</c> block: name, FBX type string, values.</summary>
 public sealed class FbxProperty70
 {
@@ -527,7 +529,8 @@ public sealed class FbxScene
         {
             return Convert.ToInt64(p.Values[0], System.Globalization.CultureInfo.InvariantCulture);
         }
-        catch (Exception ex) when (ex is InvalidCastException or OverflowException or FormatException)
+        // ArithmeticException covers OverflowException, which is not s&box-whitelisted
+        catch (Exception ex) when (ex is InvalidCastException or ArithmeticException or FormatException)
         {
             return 0;
         }

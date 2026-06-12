@@ -7,6 +7,8 @@ using HumanoidRetargeter.Maths;
 
 namespace HumanoidRetargeter.Skeleton;
 
+using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global-namespace Vector3 (see Code/HumanoidRetargeter/Assembly.cs)
+
 /// <summary>
 /// Loader for the rig ground-truth JSON produced by <c>research/extract_rig.py</c>
 /// (headless Blender FBX import with <c>automatic_bone_orientation=False</c>).

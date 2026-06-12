@@ -13,17 +13,20 @@ namespace HumanoidRetargeter.Target;
 /// </summary>
 public static partial class SboxBoneClassifier
 {
-    [GeneratedRegex(@"_twist\d+$")]
-    private static partial Regex TwistSuffix();
+    // Plain cached Regex instead of [GeneratedRegex]: the s&box in-engine compiler
+    // does not run the regex source generator, so partial GeneratedRegex methods
+    // fail to compile there ("must have an implementation part").
+    private static readonly Regex TwistSuffixRegex = new(@"_twist\d+$");
+    private static Regex TwistSuffix() => TwistSuffixRegex;
 
-    [GeneratedRegex(@"^(arm_elbow|leg_knee)_helper(_|$)")]
-    private static partial Regex ConstraintHelper();
+    private static readonly Regex ConstraintHelperRegex = new(@"^(arm_elbow|leg_knee)_helper(_|$)");
+    private static Regex ConstraintHelper() => ConstraintHelperRegex;
 
-    [GeneratedRegex(@"(_IK_target|_IK_attach|_ikrule)$")]
-    private static partial Regex IkSuffix();
+    private static readonly Regex IkSuffixRegex = new(@"(_IK_target|_IK_attach|_ikrule)$");
+    private static Regex IkSuffix() => IkSuffixRegex;
 
-    [GeneratedRegex(@"^aim_matrix_")]
-    private static partial Regex AimMatrixPrefix();
+    private static readonly Regex AimMatrixPrefixRegex = new(@"^aim_matrix_");
+    private static Regex AimMatrixPrefix() => AimMatrixPrefixRegex;
 
     /// <summary>Classifies an s&amp;box rig bone by name.</summary>
     public static BoneClass Classify(string name)

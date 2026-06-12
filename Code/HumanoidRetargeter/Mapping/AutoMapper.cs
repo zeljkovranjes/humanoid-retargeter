@@ -8,6 +8,8 @@ using SkeletonModel = HumanoidRetargeter.Skeleton.Skeleton;
 
 namespace HumanoidRetargeter.Mapping;
 
+using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global-namespace Vector3 (see Code/HumanoidRetargeter/Assembly.cs)
+
 /// <summary>
 /// Maps unknown rigs to canonical <see cref="BoneRole"/>s (design §6, steps 2–3).
 /// Stage A tokenizes bone names (namespace stripping, camel/snake/digit splitting, side

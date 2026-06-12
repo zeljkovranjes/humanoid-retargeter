@@ -4,6 +4,8 @@ using HumanoidRetargeter.Maths;
 
 namespace HumanoidRetargeter.Formats.Fbx;
 
+using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global-namespace Vector3 (see Code/HumanoidRetargeter/Assembly.cs)
+
 /// <summary>
 /// Per-node FBX local-transform evaluation: the static pivot/pre-rotation data of one Model
 /// plus the full FBX transform formula.

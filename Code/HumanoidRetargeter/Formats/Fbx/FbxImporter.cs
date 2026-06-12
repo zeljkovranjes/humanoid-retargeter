@@ -6,6 +6,8 @@ using HumanoidRetargeter.Skeleton;
 
 namespace HumanoidRetargeter.Formats.Fbx;
 
+using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global-namespace Vector3 (see Code/HumanoidRetargeter/Assembly.cs)
+
 /// <summary>Options for <see cref="FbxImporter.Import"/>.</summary>
 public sealed class FbxImportOptions
 {

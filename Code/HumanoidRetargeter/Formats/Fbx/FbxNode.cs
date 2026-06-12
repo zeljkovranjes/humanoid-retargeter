@@ -53,13 +53,15 @@ public sealed class FbxNode
             return t;
 
         var target = typeof(T);
-        if (v is IConvertible && (target.IsPrimitive || target == typeof(string)))
+        // s&box whitelist: Type.IsPrimitive is banned; enumerate the convertible targets.
+        if (v is IConvertible && (ConvertTargets.Contains(target) || target == typeof(string)))
         {
             try
             {
                 return (T)Convert.ChangeType(v, target, System.Globalization.CultureInfo.InvariantCulture);
             }
-            catch (Exception ex) when (ex is InvalidCastException or OverflowException or FormatException)
+            // ArithmeticException covers OverflowException, which is not s&box-whitelisted
+            catch (Exception ex) when (ex is InvalidCastException or ArithmeticException or FormatException)
             {
                 throw new FormatException(
                     $"FBX node '{Name}': property {i} is {v.GetType().Name}, not convertible to {target.Name}.", ex);
@@ -146,6 +148,14 @@ public sealed class FbxNode
 
         return (raw, "");
     }
+
+    /// <summary>Primitive scalar types <see cref="Prop{T}"/> converts to (whitelist-safe IsPrimitive substitute).</summary>
+    private static readonly HashSet<Type> ConvertTargets = new()
+    {
+        typeof(bool), typeof(byte), typeof(sbyte), typeof(short), typeof(ushort),
+        typeof(int), typeof(uint), typeof(long), typeof(ulong),
+        typeof(float), typeof(double), typeof(char),
+    };
 
     private object RawProp(int i)
     {
