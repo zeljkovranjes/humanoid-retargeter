@@ -1,8 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using HumanoidRetargeter.Formats.Bvh;
-using HumanoidRetargeter.Formats.Fbx;
 using HumanoidRetargeter.Mapping;
 using HumanoidRetargeter.Skeleton;
 
@@ -89,7 +87,7 @@ public sealed class SourceFileEntry
 		try
 		{
 			entry.Bytes = File.ReadAllBytes( filePath );
-			entry.Scene = Import( entry.Bytes, filePath );
+			entry.Scene = Retargeter.ImportSource( entry.Bytes, filePath );
 			entry.Signature = SkeletonSignature.Compute( entry.Scene.Skeleton );
 		}
 		catch ( Exception e )
@@ -103,47 +101,33 @@ public sealed class SourceFileEntry
 		return entry;
 	}
 
-	/// <summary>Extension-based import with content sniffing as fallback (mirrors the
-	/// facade's import rules - the facade's own importer entry point is internal).</summary>
-	static SourceScene Import( byte[] bytes, string filePath )
-	{
-		var ext = Path.GetExtension( filePath ).TrimStart( '.' ).ToLowerInvariant();
-		switch ( ext )
-		{
-			case "fbx": return FbxImporter.Import( bytes );
-			case "bvh": return BvhImporter.Import( bytes );
-		}
-
-		// Unknown extension: sniff. BVH is ASCII starting with HIERARCHY; try FBX otherwise.
-		var head = System.Text.Encoding.UTF8.GetString( bytes, 0, Math.Min( bytes.Length, 256 ) );
-		if ( head.TrimStart().StartsWith( "HIERARCHY", StringComparison.OrdinalIgnoreCase ) )
-			return BvhImporter.Import( bytes );
-		return FbxImporter.Import( bytes );
-	}
-
+	/// <summary>The facade's single mapping cascade with the Editor-side user-preset lookup
+	/// hooked in front of preset detection (the facade itself can do no file IO).</summary>
 	static void ResolveMapping( SourceFileEntry entry, string assetsPath )
 	{
 		var skeleton = entry.Scene.Skeleton;
+		var (map, report) = Retargeter.ResolveMapping(
+			skeleton,
+			mappingOverride: null,
+			userPresetLookup: assetsPath is null
+				? null
+				: signature => UserPresets.TryLoad( assetsPath, signature, skeleton ) );
 
-		if ( assetsPath is not null
-			&& UserPresets.TryLoad( assetsPath, entry.Signature, skeleton ) is { } userMap )
+		entry.Mapping = map;
+		switch ( map.Source )
 		{
-			entry.Mapping = userMap;
-			entry.MappingConfirmed = true;
-			entry.Status = EntryStatus.Ready;
-			return;
+			case MappingSource.UserPreset:
+				entry.MappingConfirmed = true;
+				entry.Status = EntryStatus.Ready;
+				break;
+			case MappingSource.Preset:
+				entry.Status = EntryStatus.Ready;
+				break;
+			default:
+				entry.NeedsUserDecision = report.NeedsUserDecision;
+				entry.Status = EntryStatus.NeedsReview;
+				break;
 		}
-
-		if ( ProfileDetector.Detect( skeleton ) is { } detected )
-		{
-			entry.Mapping = detected.Result;
-			entry.Status = EntryStatus.Ready;
-			return;
-		}
-
-		entry.Mapping = AutoMapper.Map( skeleton );
-		entry.NeedsUserDecision = entry.Mapping.Confidence < ProfileDetector.DetectionThreshold;
-		entry.Status = EntryStatus.NeedsReview;
 	}
 
 	/// <summary>Display string for the profile chip, e.g. <c>"mixamo · 100%"</c>.</summary>

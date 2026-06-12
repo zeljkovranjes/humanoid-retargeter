@@ -19,7 +19,8 @@ public static partial class SboxBoneClassifier
     private static readonly Regex TwistSuffixRegex = new(@"_twist\d+$");
     private static Regex TwistSuffix() => TwistSuffixRegex;
 
-    private static readonly Regex ConstraintHelperRegex = new(@"^(arm_elbow|leg_knee)_helper(_|$)");
+    // arm_elbow/leg_knee on the human rig; leg_glute on the legacy citizen rig.
+    private static readonly Regex ConstraintHelperRegex = new(@"^(arm_elbow|leg_knee|leg_glute)_helper(_|$)");
     private static Regex ConstraintHelper() => ConstraintHelperRegex;
 
     private static readonly Regex IkSuffixRegex = new(@"(_IK_target|_IK_attach|_ikrule)$");

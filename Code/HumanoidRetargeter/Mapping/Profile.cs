@@ -23,7 +23,14 @@ namespace HumanoidRetargeter.Mapping;
 /// </remarks>
 public sealed class Profile
 {
-    /// <summary>Current JSON schema version written by <see cref="ToJson"/>.</summary>
+    /// <summary>
+    /// Current JSON schema version written by <see cref="ToJson"/>.
+    /// Migration policy: <see cref="FromJson"/> accepts exactly this version and rejects
+    /// everything else loudly (user presets are cheap to regenerate via the preview-confirm
+    /// flow). When the schema changes, bump this constant and add an explicit upgrade path
+    /// in <see cref="FromJson"/> for every prior version that shipped — never reinterpret
+    /// old documents silently.
+    /// </summary>
     public const int SchemaVersion = 1;
 
     private readonly Regex[] _namespaceRegexes;

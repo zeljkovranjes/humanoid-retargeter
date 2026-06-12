@@ -11,23 +11,38 @@ namespace HumanoidRetargeter.Editor;
 /// compiled model (e.g. <c>citizen_human_male.vmdl</c>) is loaded into a
 /// <see cref="SceneModel"/> and its bones are driven directly from
 /// <see cref="ClipResult.SolvedFrames"/> - per frame the solved locals (target skeleton
-/// bone order, target units) are FK-composed to model-space transforms, positions scaled
-/// to engine units, and applied via <see cref="SceneModel.SetBoneOverride"/> (which takes
-/// transforms local to the SceneModel). Bones are matched to the engine model BY NAME, so
-/// helper bones missing from the rig JSON keep their bind pose.
+/// bone order, target units) are FK-composed to model-space transforms, converted to the
+/// engine's axis convention and units, and applied via
+/// <see cref="SceneModel.SetBoneOverride"/> (which takes transforms local to the
+/// SceneModel). Bones are matched to the engine model BY NAME, so helper bones missing
+/// from the rig JSON keep their bind pose.
 /// </summary>
 /// <remarks>
-/// This was chosen over building an in-memory <c>Model.Builder</c> model with
+/// <para><b>Axis conversion.</b> <see cref="TargetUpAxis.YUpCm"/> rigs (the s&amp;box source
+/// skeleton) are authored Y-up in centimeters while the compiled engine model is Z-up in
+/// inches - the same conversion resourcecompiler applies to the Y-up DMX at compile time.
+/// FK world transforms are therefore mapped with the +90° rotation about X taking Y-up to
+/// Z-up - position (x, y, z) → (x, −z, y), rotation q → q_R ⊗ q - then scaled by
+/// <c>positionScale</c> (0.3937 cm→inch). Empirically: the citizen pelvis rests at
+/// y ≈ 93 cm → engine (0, 0, ≈36.6 in), which the UI smoke gate asserts.
+/// <see cref="TargetUpAxis.ZUpEngine"/> rigs (custom compiled-model targets) are already in
+/// engine space - no conversion.</para>
+/// <para>This was chosen over building an in-memory <c>Model.Builder</c> model with
 /// <c>AddAnimation</c>/<c>AddFrame</c>: a builder model carries bones but no mesh, so a
 /// sequence playing on it renders nothing visible - driving the real skinned model shows
 /// the actual character. Camera: fixed 3/4 framing from the model bounds with left-drag
-/// yaw orbit (same idiom as the editor's other preview widgets).
+/// yaw orbit (same idiom as the editor's other preview widgets).</para>
 /// </remarks>
 public sealed class PreviewWidget : SceneRenderingWidget
 {
+	/// <summary>Rotation about +X by 90°, taking Y-up coordinates to Z-up (y→z, z→−y).</summary>
+	static readonly System.Numerics.Quaternion YUpToZUp =
+		System.Numerics.Quaternion.CreateFromAxisAngle( System.Numerics.Vector3.UnitX, MathF.PI * 0.5f );
+
 	SceneModel _sceneModel;
 	TargetRig _rig;
 	float _positionScale = 1f;
+	bool _convertYUpToZUp;
 	int[] _rigToModelBone;
 	XForm[] _worldScratch;
 
@@ -55,13 +70,17 @@ public sealed class PreviewWidget : SceneRenderingWidget
 	/// Creates the preview scene. <paramref name="previewModelPath"/> is the compiled
 	/// model whose bone names match <paramref name="rig"/>;
 	/// <paramref name="positionScale"/> converts rig positions to engine units
-	/// (0.3937 for cm rigs like the s&amp;box source skeleton, 1.0 for engine-unit rigs).
+	/// (0.3937 for cm rigs like the s&amp;box source skeleton, 1.0 for engine-unit rigs);
+	/// <paramref name="upAxis"/> is the rig's axis convention (<see cref="TargetUpAxis.YUpCm"/>
+	/// rigs additionally get the Y-up→Z-up basis conversion, see class remarks).
 	/// </summary>
-	public PreviewWidget( Widget parent, TargetRig rig, string previewModelPath, float positionScale )
+	public PreviewWidget( Widget parent, TargetRig rig, string previewModelPath, float positionScale,
+		TargetUpAxis upAxis = TargetUpAxis.YUpCm )
 		: base( parent )
 	{
 		_rig = rig;
 		_positionScale = positionScale;
+		_convertYUpToZUp = upAxis == TargetUpAxis.YUpCm;
 		MinimumSize = new Vector2( 360, 360 );
 		MouseTracking = true;
 
@@ -159,13 +178,19 @@ public sealed class PreviewWidget : SceneRenderingWidget
 	{
 		if ( !_sceneModel.IsValid() || _clip?.SolvedFrames is not { Count: > 0 } frames )
 			return;
-		ApplyFrame( frames[Math.Clamp( CurrentFrame, 0, frames.Count - 1 )] );
+		ApplyPose( frames[Math.Clamp( CurrentFrame, 0, frames.Count - 1 )] );
 	}
 
-	/// <summary>FK over the target skeleton (locals → model space), then bone overrides
-	/// in engine units on the name-matched model bones.</summary>
-	void ApplyFrame( XForm[] locals )
+	/// <summary>
+	/// Applies an arbitrary pose (local transforms in target-skeleton bone order) to the
+	/// scene model. Public so the UI smoke gate can drive the rig's rest pose headlessly and
+	/// assert engine-space bone positions.
+	/// </summary>
+	public void ApplyPose( XForm[] locals )
 	{
+		if ( !_sceneModel.IsValid() || locals is null )
+			return;
+
 		var skeleton = _rig.Skeleton;
 		var count = Math.Min( locals.Length, skeleton.Count );
 		for ( var i = 0; i < count; i++ )
@@ -180,12 +205,47 @@ public sealed class PreviewWidget : SceneRenderingWidget
 			if ( modelBone < 0 )
 				continue;
 
-			var w = _worldScratch[i];
-			var transform = new Transform(
-				new Vector3( w.Pos.X, w.Pos.Y, w.Pos.Z ) * _positionScale,
-				new Rotation( w.Rot.X, w.Rot.Y, w.Rot.Z, w.Rot.W ) );
-			_sceneModel.SetBoneOverride( modelBone, transform );
+			_sceneModel.SetBoneOverride( modelBone, RigWorldToEngine( _worldScratch[i] ) );
 		}
+
+		// Flush the overrides into the model's bone state NOW: SetBoneOverride only takes
+		// effect on the model's next Update, so without this the rendered pose lags one
+		// frame and headless readers (the UI smoke gate's GetModelBoneTransform asserts)
+		// would read the previous pose. Verified empirically: before the flush the gate read
+		// the bind pose back; with it, the overridden pose.
+		_sceneModel.Update( 0f );
+	}
+
+	/// <summary>
+	/// Rig-space world transform → engine model space: optional Y-up→Z-up basis rotation
+	/// (position (x, y, z) → (x, −z, y); rotation q → q_R ⊗ q), then cm→inch position
+	/// scaling. Identity + scale for engine-space rigs.
+	/// </summary>
+	Transform RigWorldToEngine( in XForm w )
+	{
+		var pos = w.Pos;
+		var rot = w.Rot;
+		if ( _convertYUpToZUp )
+		{
+			pos = new System.Numerics.Vector3( pos.X, -pos.Z, pos.Y );
+			rot = System.Numerics.Quaternion.Normalize( YUpToZUp * rot );
+		}
+
+		return new Transform(
+			new Vector3( pos.X, pos.Y, pos.Z ) * _positionScale,
+			new Rotation( rot.X, rot.Y, rot.Z, rot.W ) );
+	}
+
+	/// <summary>World transform of a model bone (by name) as currently posed; null when the
+	/// model is missing or has no such bone. Used by the UI smoke gate's pose assertions.</summary>
+	public Transform? GetModelBoneTransform( string boneName )
+	{
+		if ( !_sceneModel.IsValid() )
+			return null;
+		var bone = _sceneModel.Model?.Bones?.GetBone( boneName );
+		if ( bone is null )
+			return null;
+		return _sceneModel.GetBoneWorldTransform( bone.Index );
 	}
 
 	void UpdateCamera()

@@ -106,6 +106,7 @@ public static class TargetPickers
 				VmdlScale = 1.0f,                       // engine units already
 				BaseModelPath = asset.Path,
 				DefaultRootBone = RootBoneName( skeleton, map ),
+				UpAxis = TargetUpAxis.ZUpEngine,        // Model.Bones bind pose is engine space
 			},
 			Description = $"Custom model: {asset.Name}",
 			PreviewModelPath = asset.Path,
@@ -153,26 +154,18 @@ public static class TargetPickers
 		};
 	}
 
-	/// <summary>Preset detection, then auto-map; null + message below the threshold
-	/// ("armature not recognized as humanoid", design §9 best-effort rule is for sources -
-	/// targets must be trustworthy).</summary>
+	/// <summary>The facade's single mapping cascade, with this picker's own rejection rule
+	/// on top: targets must be trustworthy (design §9's best-effort rule is for sources), so
+	/// a below-threshold auto map is rejected with a clear message instead of proceeding.</summary>
 	static MappingResult DetectHumanoid( SkeletonModel skeleton, out string error )
 	{
 		error = null;
-		MappingResult map;
-		if ( ProfileDetector.Detect( skeleton ) is { } detected )
+		var (map, report) = Retargeter.ResolveMapping( skeleton );
+		if ( report.NeedsUserDecision )
 		{
-			map = detected.Result;
-		}
-		else
-		{
-			map = AutoMapper.Map( skeleton );
-			if ( map.Confidence < ProfileDetector.DetectionThreshold )
-			{
-				error = $"Armature not recognized as humanoid (mapping confidence "
-					+ $"{map.Confidence * 100f:0}% < {ProfileDetector.DetectionThreshold * 100f:0}%).";
-				return null;
-			}
+			error = $"Armature not recognized as humanoid (mapping confidence "
+				+ $"{map.Confidence * 100f:0}% < {ProfileDetector.DetectionThreshold * 100f:0}%).";
+			return null;
 		}
 
 		return map;

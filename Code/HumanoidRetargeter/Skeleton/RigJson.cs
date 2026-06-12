@@ -67,21 +67,33 @@ public static class RigJson
 
         foreach (var bone in bones.EnumerateArray())
         {
-            var name = bone.GetProperty("name").GetString()
-                ?? throw new ArgumentException("Bone with null name in rig JSON.");
-            var parentProp = bone.GetProperty("parent");
-            var parent = parentProp.ValueKind == JsonValueKind.Null ? null : parentProp.GetString();
+            var definition = ReadBoneDefinition(bone, positionScale);
+            definitions.Add(definition);
 
-            var localPos = ReadVector3(bone.GetProperty("local_pos")) * positionScale;
-            var localRot = MathQ.Normalize(ReadQuaternion(bone.GetProperty("local_rot_xyzw")));
-            definitions.Add(new BoneDefinition(name, parent, new XForm(localPos, localRot)));
-
-            geometry[name] = (
+            geometry[definition.Name] = (
                 ReadVector3(bone.GetProperty("head_local")) * positionScale,
                 ReadVector3(bone.GetProperty("tail_local")) * positionScale);
         }
 
         return (Skeleton.Create(definitions), geometry);
+    }
+
+    /// <summary>
+    /// Shared bone-geometry reader for the JSON bone shape used by both the rig ground-truth
+    /// files and <see cref="Target.TargetRig"/> definitions: <c>name</c>, <c>parent</c>
+    /// (null for roots), <c>local_pos</c> ([x,y,z]), <c>local_rot_xyzw</c> ([x,y,z,w],
+    /// normalized on read). Positions are multiplied by <paramref name="positionScale"/>.
+    /// </summary>
+    internal static BoneDefinition ReadBoneDefinition(JsonElement bone, float positionScale = 1f)
+    {
+        var name = bone.GetProperty("name").GetString()
+            ?? throw new ArgumentException("Bone with null name in rig JSON.");
+        var parentProp = bone.GetProperty("parent");
+        var parent = parentProp.ValueKind == JsonValueKind.Null ? null : parentProp.GetString();
+
+        var localPos = ReadVector3(bone.GetProperty("local_pos")) * positionScale;
+        var localRot = MathQ.Normalize(ReadQuaternion(bone.GetProperty("local_rot_xyzw")));
+        return new BoneDefinition(name, parent, new XForm(localPos, localRot));
     }
 
     /// <summary>

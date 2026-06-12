@@ -24,6 +24,21 @@ public sealed class RetargetRequest
     public required string SourceFileName { get; init; }
 
     /// <summary>
+    /// Caller-supplied identity of this request, echoed verbatim on every produced
+    /// <see cref="ClipResult.SourceId"/> so callers can join results back to their own
+    /// entries unambiguously (e.g. the editor window passes the FULL file path here, since
+    /// two files in different folders may share the same <see cref="SourceFileName"/>).
+    /// Null = <see cref="SourceFileName"/>.
+    /// </summary>
+    public string? SourceId { get; init; }
+
+    /// <summary>
+    /// Import sample rate the source clips are resampled to (BVH native frames / FBX curves
+    /// are evaluated on this grid). Null = the importer default (30 fps).
+    /// </summary>
+    public float? SampleFps { get; init; }
+
+    /// <summary>
     /// UI-supplied mapping (manual mapping table or a user preset loaded Editor-side).
     /// Null = auto-detect per request: preset profiles via <see cref="ProfileDetector"/>,
     /// then the <see cref="AutoMapper"/> as best-effort fallback.
@@ -64,6 +79,28 @@ public sealed class RetargetRequest
 }
 
 /// <summary>
+/// Axis/unit convention of a <see cref="RetargetTargetSpec"/>'s rig data — drives the DMX
+/// axis-system declaration, foot-plant threshold units, and the editor preview's
+/// rig-space → engine-space conversion.
+/// </summary>
+public enum TargetUpAxis
+{
+    /// <summary>
+    /// The s&amp;box source convention: rig authored in centimeters, Y-up (the shipped
+    /// citizen rig, FBX targets). The vmdl's ScaleAndMirror 0.3937 + resourcecompiler's
+    /// Y-up→Z-up conversion take it to engine space at compile time. Default.
+    /// </summary>
+    YUpCm,
+
+    /// <summary>
+    /// Engine space already: rig read from a compiled model's <c>Model.Bones</c>
+    /// (inches, Z-up). The DMX declares a Z-up axis system so the compiler performs no
+    /// further axis conversion.
+    /// </summary>
+    ZUpEngine,
+}
+
+/// <summary>
 /// The conversion target shared by all requests of one <see cref="Retargeter.Convert"/> /
 /// <see cref="Retargeter.ConvertBatch"/> call: the rig plus the vmdl generation parameters.
 /// </summary>
@@ -89,6 +126,15 @@ public sealed class RetargetTargetSpec
     /// <summary>default_root_bone_name of the generated AnimationList (also the bone vmdl
     /// ExtractMotion nodes operate on).</summary>
     public string DefaultRootBone { get; init; } = "pelvis";
+
+    /// <summary>
+    /// Axis/unit convention of <see cref="Rig"/>. <see cref="TargetUpAxis.YUpCm"/> (default)
+    /// for cm Y-up source-space rigs (DMX declares Y-up, compiler converts);
+    /// <see cref="TargetUpAxis.ZUpEngine"/> for rigs read from compiled engine models
+    /// (DMX declares Z-up so no double conversion happens at compile, and cm-tuned cleanup
+    /// thresholds are rescaled to inches).
+    /// </summary>
+    public TargetUpAxis UpAxis { get; init; } = TargetUpAxis.YUpCm;
 
     /// <summary>
     /// The shipped s&amp;box default target: rig parsed from the committed

@@ -112,6 +112,20 @@ public static class EditorPipeline
 			return result;
 		}
 
+		// Augment requested but the batch produced no augmented vmdl (parse failure, name
+		// collision, ...): FAIL the whole operation before anything touches disk. Silently
+		// falling back to a standalone vmdl would look green while ignoring the user's
+		// explicit "add to existing vmdl" choice.
+		if ( augmentVmdlPath is not null && batch.AugmentedVmdl is null )
+		{
+			result.Errors.Add(
+				$"Augmenting {Path.GetFileName( augmentVmdlPath )} failed - nothing was written "
+				+ "(standalone fallback is disabled when augmenting was requested)." );
+			result.Errors.AddRange( batch.Errors.Where(
+				e => e.Contains( "augment", StringComparison.OrdinalIgnoreCase ) ) );
+			return result;
+		}
+
 		// ---- 1. DMX files -------------------------------------------------------------
 		try
 		{
@@ -124,7 +138,7 @@ public static class EditorPipeline
 			}
 
 			// ---- 2. vmdl ---------------------------------------------------------------
-			if ( augmentVmdlPath is not null && batch.AugmentedVmdl is not null )
+			if ( augmentVmdlPath is not null )
 			{
 				File.Copy( augmentVmdlPath, augmentVmdlPath + ".bak", overwrite: true );
 				File.WriteAllText( augmentVmdlPath, batch.AugmentedVmdl );
@@ -150,12 +164,97 @@ public static class EditorPipeline
 			return result;
 		}
 
+		var logOffset = SboxLogLength();
 		result.Compiled = await CompileAndWaitAsync( result.VmdlAsset );
 		result.CompiledFile = Try( () => result.VmdlAsset.GetCompiledFile( true ) );
 		if ( !result.Compiled )
-			result.Errors.Add( $"vmdl did not compile: {result.VmdlAsset.Path} (see console for resourcecompiler output)." );
+		{
+			var detail = TryReadCompileErrors( logOffset,
+				successful.Select( c => c.DmxFileName )
+					.Append( Path.GetFileName( result.VmdlPath ) ).ToList() );
+			result.Errors.Add( detail is null
+				? $"vmdl did not compile: {result.VmdlAsset.Path} (see console for resourcecompiler output)."
+				: $"vmdl did not compile: {result.VmdlAsset.Path}\n{detail}" );
+		}
 
 		return result;
+	}
+
+	// ---- compile-error capture --------------------------------------------------------
+	// The asset system exposes no Asset.LastCompileError-style API (verified against
+	// Sandbox.Tools.xml), but resourcecompiler output lands in <sbox>/logs/sbox-dev.log -
+	// the same per-run log slice dev/editor-rig/run_ui_smoke.ps1 scrapes. Reading the slice
+	// written since our Compile() call gives the actual error text for the UI.
+
+	static string SboxLogFile()
+	{
+		try
+		{
+			// The editor runs with the s&box root as working directory; the exe also lives
+			// directly under it (sbox-dev.exe), so probe both.
+			var candidates = new List<string>
+			{
+				Path.Combine( Environment.CurrentDirectory, "logs", "sbox-dev.log" ),
+			};
+			var exeDir = Path.GetDirectoryName( Environment.ProcessPath );
+			if ( exeDir is not null )
+				candidates.Add( Path.Combine( exeDir, "logs", "sbox-dev.log" ) );
+			return candidates.FirstOrDefault( File.Exists );
+		}
+		catch
+		{
+			return null;
+		}
+	}
+
+	static long SboxLogLength()
+	{
+		try
+		{
+			var file = SboxLogFile();
+			return file is null ? -1 : new FileInfo( file ).Length;
+		}
+		catch
+		{
+			return -1;
+		}
+	}
+
+	/// <summary>Reads the log slice written since <paramref name="fromOffset"/> and returns
+	/// the lines that look like compiler errors for our files, or null when none found.</summary>
+	static string TryReadCompileErrors( long fromOffset, IReadOnlyList<string> fileNames )
+	{
+		try
+		{
+			var file = SboxLogFile();
+			if ( file is null || fromOffset < 0 )
+				return null;
+
+			using var fs = File.Open( file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite );
+			if ( fs.Length < fromOffset )
+				fromOffset = 0; // log was truncated/recreated
+			fs.Seek( fromOffset, SeekOrigin.Begin );
+			using var reader = new StreamReader( fs );
+			var slice = reader.ReadToEnd().Split( '\n' );
+
+			var interesting = slice
+				.Select( l => l.TrimEnd( '\r' ) )
+				.Where( l => l.Length > 0
+					&& (l.Contains( "error", StringComparison.OrdinalIgnoreCase )
+						|| l.Contains( "failed", StringComparison.OrdinalIgnoreCase ))
+					&& (fileNames.Any( f => l.Contains( f, StringComparison.OrdinalIgnoreCase ) )
+						|| l.Contains( "resourcecompiler", StringComparison.OrdinalIgnoreCase )
+						|| l.Contains( "ModelDoc", StringComparison.OrdinalIgnoreCase )) )
+				.ToList();
+
+			if ( interesting.Count == 0 )
+				return null;
+			return string.Join( "\n", interesting.TakeLast( 12 ) );
+		}
+		catch
+		{
+			return null; // error capture must never take the pipeline down
+		}
 	}
 
 	/// <summary>Kicks a full compile and polls until the compiled file exists or the asset

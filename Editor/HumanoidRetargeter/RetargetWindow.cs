@@ -44,6 +44,7 @@ public sealed class RetargetWindow : Widget
 	LineEdit _outputFolderEdit;
 	LineEdit _hipScaleHEdit;
 	LineEdit _hipScaleVEdit;
+	LineEdit _sampleFpsEdit;
 
 	// UI
 	Layout _listLayout;
@@ -164,6 +165,11 @@ public sealed class RetargetWindow : Widget
 		_hipScaleVEdit.ToolTip = "Scale of the pelvis translation along the character up axis. "
 			+ "Empty = automatic (hip-height ratio).";
 
+		options.Layout.Add( new Label( this ) { Text = "Sample fps:" } );
+		_sampleFpsEdit = options.Layout.Add( new LineEdit( this ) { PlaceholderText = "30", FixedWidth = 46 } );
+		_sampleFpsEdit.ToolTip = "Sample rate the source clips are resampled to on import. "
+			+ "Empty or 0 = default (30 fps).";
+
 		options.Layout.Add( new Label( this ) { Text = "Output folder:" } );
 		_outputFolderEdit = options.Layout.Add( new LineEdit( this ) { Text = "animations/retargeted", MinimumWidth = 180 }, 1 );
 		_outputFolderEdit.ToolTip = "Assets-relative folder the DMX files (and the standalone vmdl) are written to.";
@@ -282,26 +288,47 @@ public sealed class RetargetWindow : Widget
 		AddFiles( fd.SelectedFiles );
 	}
 
-	/// <summary>Adds source files (used by Add Files and the asset context menu). Each file
-	/// is inspected immediately; rigs with no matching profile raise the no-profile dialog.</summary>
+	/// <summary>Adds source files (used by Add Files and the asset context menu). Files are
+	/// parsed on a background task so big batches never freeze the editor; rows appear as
+	/// each entry completes, and rigs with no matching profile raise the no-profile dialog
+	/// once the whole batch has loaded.</summary>
 	public void AddFiles( IEnumerable<string> paths )
+	{
+		var list = (paths ?? Enumerable.Empty<string>()).ToList();
+		if ( list.Count == 0 )
+			return;
+		_ = AddFilesAsync( list );
+	}
+
+	async Task AddFilesAsync( IReadOnlyList<string> paths )
 	{
 		var assetsPath = Project.Current?.GetAssetsPath();
 		var needDecision = new List<SourceFileEntry>();
 
-		foreach ( var path in paths ?? Enumerable.Empty<string>() )
+		foreach ( var path in paths )
 		{
 			if ( _entries.Any( e => string.Equals( e.FilePath, path, StringComparison.OrdinalIgnoreCase ) ) )
 				continue;
 
-			var entry = SourceFileEntry.Load( path, assetsPath );
+			SetStatus( $"Loading {System.IO.Path.GetFileName( path )}…", Theme.Blue );
+
+			// Parse off the UI thread; the await resumes on the editor main thread (the same
+			// dispatch pattern the convert/preview paths use), where the UI is updated.
+			var entry = await Task.Run( () => SourceFileEntry.Load( path, assetsPath ) );
+
+			if ( !this.IsValid() )
+				return; // window closed while loading
+			if ( _entries.Any( e => string.Equals( e.FilePath, path, StringComparison.OrdinalIgnoreCase ) ) )
+				continue;
+
 			_entries.Add( entry );
 			if ( entry.NeedsUserDecision )
 				needDecision.Add( entry );
+
+			RefreshAll(); // row appears as soon as the entry is ready
 		}
 
-		RefreshAll();
-
+		// No-profile dialogs prompt after loading completes, one per affected file.
 		foreach ( var entry in needDecision )
 			ShowNoProfileDialog( entry );
 	}
@@ -424,20 +451,22 @@ public sealed class RetargetWindow : Widget
 	{
 		SourceData = entry.Bytes,
 		SourceFileName = entry.FileName,
+		SourceId = entry.FilePath, // full path: same-named files in different folders must not collide
 		MappingOverride = entry.Mapping,
 		RootMotion = _rootMotion,
 		FootPlantCleanup = _footPlant,
 		ArmEffectorIk = _armIk,
 		LoopingOverride = _loopOverride,
+		SampleFps = ParsePositive( _sampleFpsEdit ),
 		Solve = new HumanoidRetargeter.Solve.SolveOptions
 		{
-			HipScaleHorizontal = ParseScale( _hipScaleHEdit ),
-			HipScaleVertical = ParseScale( _hipScaleVEdit ),
+			HipScaleHorizontal = ParsePositive( _hipScaleHEdit ),
+			HipScaleVertical = ParsePositive( _hipScaleVEdit ),
 		},
 	};
 
-	/// <summary>Empty / non-numeric / non-positive = null (automatic hip-height ratio).</summary>
-	static float? ParseScale( LineEdit edit )
+	/// <summary>Empty / non-numeric / non-positive = null (use the automatic default).</summary>
+	static float? ParsePositive( LineEdit edit )
 		=> float.TryParse( edit?.Text, System.Globalization.NumberStyles.Float,
 			System.Globalization.CultureInfo.InvariantCulture, out var v ) && v > 0f
 			? v : null;
@@ -505,15 +534,46 @@ public sealed class RetargetWindow : Widget
 
 			ApplyClipResults( list, batch.Clips );
 			RefreshAll();
+
+			// Batch-level problems (clip failures, augmentation failures) go to the log in
+			// full; the status strip shows the first one.
+			foreach ( var error in batch.Errors )
+				Log.Warning( $"[humanoid-retargeter] {error}" );
+
+			// Augment requested but no augmented vmdl produced: the operation FAILS - never
+			// silently write a standalone vmdl the user did not ask for.
+			if ( augmentText is not null && batch.AugmentedVmdl is null )
+			{
+				var detail = batch.Errors.FirstOrDefault(
+					e => e.Contains( "augment", StringComparison.OrdinalIgnoreCase ) )
+					?? "vmdl augmentation failed.";
+				foreach ( var entry in list )
+				{
+					entry.Status = EntryStatus.Failed;
+					entry.StatusDetail = detail;
+				}
+				RefreshAll();
+				SetStatus( $"Augmenting {_augmentAsset?.Name} failed - nothing written. {detail}", Theme.Red );
+				return;
+			}
+
 			SetStatus( "Compiling…", Theme.Blue );
 
 			var write = await EditorPipeline.WriteAndCompileAsync( batch, outputFolder, augmentPath );
 			_progress = 1f;
 
+			// The heavy payloads (DMX text + solved frames) are on disk now; previews
+			// re-solve on demand, so the retained clip results only need their metadata.
+			foreach ( var clip in batch.Clips )
+				clip.ReleaseHeavyData();
+
+			foreach ( var error in write.Errors )
+				Log.Warning( $"[humanoid-retargeter] {error}" );
+
 			var failures = batch.Clips.Count( c => !c.Success );
 			if ( write.Errors.Count > 0 )
 			{
-				SetStatus( write.Errors[0], Theme.Red );
+				SetStatus( FirstLine( write.Errors[0] ), Theme.Red );
 			}
 			else if ( failures > 0 )
 			{
@@ -546,12 +606,20 @@ public sealed class RetargetWindow : Widget
 		}
 	}
 
+	static string FirstLine( string text )
+	{
+		var newline = text.IndexOf( '\n' );
+		return newline < 0 ? text : text.Substring( 0, newline ).TrimEnd( '\r' );
+	}
+
 	void ApplyClipResults( IReadOnlyList<SourceFileEntry> list, IReadOnlyList<HumanoidRetargeter.ClipResult> clips )
 	{
 		foreach ( var entry in list )
 		{
 			entry.LastClips.Clear();
-			entry.LastClips.AddRange( clips.Where( c => c.SourceFileName == entry.FileName ) );
+			// Join on SourceId (the full path BuildRequest supplied) - same-named files in
+			// different folders must map back to their own rows.
+			entry.LastClips.AddRange( clips.Where( c => c.SourceId == entry.FilePath ) );
 
 			var failed = entry.LastClips.Where( c => !c.Success ).ToList();
 			if ( entry.LastClips.Count == 0 )

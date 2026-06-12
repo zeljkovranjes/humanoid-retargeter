@@ -53,7 +53,9 @@ public sealed class PreviewDialog : Dialog
 		Layout.Spacing = 8;
 
 		// ---- preview viewport ----------------------------------------------------------
-		_preview = new PreviewWidget( this, target.Spec.Rig, target.PreviewModelPath, target.PreviewPositionScale );
+		_preview = new PreviewWidget(
+			this, target.Spec.Rig, target.PreviewModelPath, target.PreviewPositionScale,
+			target.Spec.UpAxis );
 		Layout.Add( _preview, 1 );
 
 		if ( !_preview.HasModel )

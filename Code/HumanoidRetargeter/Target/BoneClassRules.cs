@@ -39,6 +39,12 @@ public sealed class BoneClassRules
     private static readonly Regex HelperRegex = new(
         @"helper|_hlp|corrective|sharebone", RegexOptions.IgnoreCase);
 
+    // Curated s&box literals with no generalizable pattern: neck_clothing is the citizen
+    // rig's constraint-driven clothing helper (SboxBoneClassifier agrees), so sbox-derived
+    // custom models classify identically to the shipped target.
+    private static readonly HashSet<string> ConstraintDrivenLiterals =
+        new(StringComparer.OrdinalIgnoreCase) { "neck_clothing" };
+
     // Twist bones (s&box arm_upper_L_twist0, UE upperarm_twist_01_l,
     // CC CC_Base_L_UpperarmTwist01 / CC_Base_L_RibsTwist) and roll bones
     // (twist equivalents on some rigs: LeftForeArmRoll, ForeArmRoll_L, upperarm_roll_01_l),
@@ -64,7 +70,8 @@ public sealed class BoneClassRules
     {
         ArgumentNullException.ThrowIfNull(boneName);
 
-        if (HasTwistOrRollToken(boneName) || HelperRegex.IsMatch(boneName))
+        if (ConstraintDrivenLiterals.Contains(boneName)
+            || HasTwistOrRollToken(boneName) || HelperRegex.IsMatch(boneName))
             return BoneClass.ConstraintDriven;
 
         if (IkRegex.IsMatch(boneName))

@@ -51,11 +51,19 @@ public sealed class ClipResult
     /// <summary>The file the request came from (as supplied on the request).</summary>
     public required string SourceFileName { get; init; }
 
+    /// <summary>
+    /// Identity of the originating request (<see cref="RetargetRequest.SourceId"/>, falling
+    /// back to <see cref="RetargetRequest.SourceFileName"/>). Callers join clip results back
+    /// to their own entries on this — file NAMES may collide across folders.
+    /// </summary>
+    public string SourceId { get; init; } = "";
+
     /// <summary>Sanitized DMX file name (<c>&lt;clip&gt;.dmx</c>); empty on failure.</summary>
     public string DmxFileName { get; init; } = "";
 
-    /// <summary>Full DMX text (keyvalues2) of the retargeted clip; empty on failure.</summary>
-    public string DmxContent { get; init; } = "";
+    /// <summary>Full DMX text (keyvalues2) of the retargeted clip; empty on failure or after
+    /// <see cref="ReleaseHeavyData"/>.</summary>
+    public string DmxContent { get; internal set; } = "";
 
     /// <summary>Mapping report of the source file; null when the failure happened before
     /// detection (unreadable file).</summary>
@@ -71,9 +79,21 @@ public sealed class ClipResult
     /// The final solved frames (after cleanup and IK baking) — one local
     /// <see cref="XForm"/> per TARGET rig bone, in TARGET skeleton bone order, per frame.
     /// Retained for the UI preview path (<c>Model.Builder.AddFrame</c> consumes exactly
-    /// this layout). Null on failure.
+    /// this layout). Null on failure or after <see cref="ReleaseHeavyData"/>.
     /// </summary>
-    public List<XForm[]>? SolvedFrames { get; init; }
+    public List<XForm[]>? SolvedFrames { get; internal set; }
+
+    /// <summary>
+    /// Drops the heavy per-clip payloads (<see cref="DmxContent"/>, <see cref="SolvedFrames"/>)
+    /// once the caller has written them to disk — UI windows keep clip results around for
+    /// status display, which must not pin megabytes of frame data indefinitely. Previews
+    /// re-solve on demand (subsecond), so nothing else needs the frames after the write.
+    /// </summary>
+    public void ReleaseHeavyData()
+    {
+        DmxContent = "";
+        SolvedFrames = null;
+    }
 
     /// <summary>Output sample rate.</summary>
     public float Fps { get; init; }

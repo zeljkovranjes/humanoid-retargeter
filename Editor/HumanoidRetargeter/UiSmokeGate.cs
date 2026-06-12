@@ -184,13 +184,52 @@ public static class UiSmokeGate
 		{
 			var clip = batch.Clips.First( c => c.Success && c.SolvedFrames is { Count: > 0 } );
 			var preview = new PreviewWidget(
-				null, target.Spec.Rig, target.PreviewModelPath, target.PreviewPositionScale );
+				null, target.Spec.Rig, target.PreviewModelPath, target.PreviewPositionScale,
+				target.Spec.UpAxis );
 			Result.previewModelLoaded = preview.HasModel;
 			preview.SetClip( clip );
 			preview.Scrub( Math.Min( 5, preview.FrameCount - 1 ) );
 			preview.ApplyCurrentFrame();
 			Result.previewWidgetOk = true;
 			Note( $"PreviewWidget: hasModel={preview.HasModel} frames={preview.FrameCount} frame applied OK" );
+
+			// Axis-conversion assertions (Y-up cm rig → Z-up inch engine model). Without the
+			// conversion the preview lies on its back; these pin it upright.
+			if ( preview.HasModel )
+			{
+				var rig = target.Spec.Rig;
+				var skeleton = rig.Skeleton;
+				var hipsIndex = rig.BoneForRole( HumanoidRetargeter.Mapping.BoneRole.Hips ) ?? 0;
+				var pelvisName = skeleton[hipsIndex].Name;
+
+				// (a) Clip frame: the SceneModel's pelvis must match the independently
+				// FK'd + converted solved frame ((x,y,z) → (x,−z,y) × 0.3937). This fails
+				// when the widget skips the conversion OR overrides never reach the model.
+				var frameIndex = Math.Min( 5, clip.SolvedFrames.Count - 1 );
+				var rigWorld = new HumanoidRetargeter.Skeleton.Pose( clip.SolvedFrames[frameIndex] )
+					.ToWorld( skeleton )[hipsIndex].Pos;
+				var expected = new Vector3( rigWorld.X, -rigWorld.Z, rigWorld.Y )
+					* target.PreviewPositionScale;
+				var actual = preview.GetModelBoneTransform( pelvisName )?.Position;
+				var frameOk = actual is { } a && a.Distance( expected ) < 0.5f;
+				Note( $"preview pelvis (clip frame {frameIndex}): actual={actual} expected={expected} ok={frameOk}" );
+
+				// (b) Rest pose: the citizen pelvis rests at y≈93 cm (Y-up) → engine
+				// (0, ~0, ~36.6 in) Z-up. The preview must stand upright, not lie down.
+				var rest = new HumanoidRetargeter.Maths.XForm[skeleton.Count];
+				for ( var i = 0; i < skeleton.Count; i++ )
+					rest[i] = skeleton[i].RestLocal;
+				preview.ApplyPose( rest );
+				var restPelvis = preview.GetModelBoneTransform( pelvisName )?.Position;
+				var restOk = restPelvis is { } r
+					&& MathF.Abs( r.x ) < 2f && MathF.Abs( r.y ) < 2f && r.z is > 30f and < 40f;
+				Result.previewPelvisRest = restPelvis?.ToString() ?? "(unavailable)";
+				Note( $"preview pelvis (rest pose): {Result.previewPelvisRest} expected ~(0, 0, 36.6) ok={restOk}" );
+
+				Result.previewPoseUpright = frameOk && restOk;
+				Result.previewWidgetOk &= Result.previewPoseUpright;
+			}
+
 			preview.Destroy();
 		}
 		catch ( Exception e )
@@ -309,6 +348,8 @@ public static class UiSmokeGate
 		public string[] batchErrors { get; set; } = Array.Empty<string>();
 		public bool previewModelLoaded { get; set; }
 		public bool previewWidgetOk { get; set; }
+		public bool previewPoseUpright { get; set; }
+		public string previewPelvisRest { get; set; }
 		public bool userPresetRoundTrip { get; set; }
 		public int dmxFilesWritten { get; set; }
 		public string vmdlPath { get; set; }

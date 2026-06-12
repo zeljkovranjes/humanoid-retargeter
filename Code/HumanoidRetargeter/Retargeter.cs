@@ -94,11 +94,20 @@ public static class Retargeter
         var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var entries = new List<AnimEntry>();
 
+        // Augment mode: names already taken in the existing vmdl's AnimationList must not be
+        // silently repointed — seed the collision set with every existing node name EXCEPT
+        // our own AnimFiles (source_filename under DmxFolderRelative), which are replaceable
+        // so re-running the same batch stays idempotent.
+        if (options.AugmentVmdlText is not null)
+            SeedUsedNamesFromExistingVmdl(options.AugmentVmdlText, options.DmxFolderRelative, usedNames);
+
+        var mappedPinky = false;
         foreach (var request in requests)
         {
             if (request is null)
                 continue;
-            ProcessRequest(request, target, context, options, usedNames, result.Clips, entries);
+            mappedPinky |= ProcessRequest(
+                request, target, context, options, usedNames, result.Clips, entries);
         }
 
         foreach (var clip in result.Clips)
@@ -114,7 +123,17 @@ public static class Retargeter
         {
             try
             {
-                result.AugmentedVmdl = VmdlAugmenter.Augment(options.AugmentVmdlText, entries, out _);
+                result.AugmentedVmdl = VmdlAugmenter.Augment(
+                    options.AugmentVmdlText, entries, out _,
+                    new AugmentOptions
+                    {
+                        DefaultRootBone = target.DefaultRootBone,
+                        // The citizen base model copies ring→pinky via its CopyPinky
+                        // constraints; when this batch actually drives the pinky, the
+                        // augmented vmdl must neutralize them or the exported pinky
+                        // channels get overridden at runtime.
+                        NeutralizePinkyConstraints = mappedPinky,
+                    });
             }
             catch (Exception e)
             {
@@ -123,6 +142,51 @@ public static class Retargeter
         }
 
         return result;
+    }
+
+    /// <summary>Collects names already present in the existing vmdl's AnimationList that the
+    /// batch must not reuse (everything except our own replaceable AnimFiles).</summary>
+    private static void SeedUsedNamesFromExistingVmdl(
+        string vmdlText, string dmxFolderRelative, HashSet<string> usedNames)
+    {
+        Kv3Document doc;
+        try
+        {
+            doc = Kv3.Parse(vmdlText);
+        }
+        catch (FormatException)
+        {
+            return; // the augmentation step itself surfaces the parse error
+        }
+
+        if (doc.Root is not KvObject root || root.GetOrNull("rootNode") is not KvObject rootNode
+            || rootNode.GetOrNull("children") is not KvArray children)
+            return;
+        var animList = children.Items.OfType<KvObject>()
+            .FirstOrDefault(o => o.GetString("_class") == "AnimationList");
+        if (animList?.GetOrNull("children") is not KvArray items)
+            return;
+
+        var folder = dmxFolderRelative.Replace('\\', '/').TrimEnd('/');
+        foreach (var node in items.Items.OfType<KvObject>())
+        {
+            var name = node.GetString("name");
+            if (string.IsNullOrEmpty(name))
+                continue;
+
+            // Our own AnimFiles (written into the batch's DMX folder) are replaceable.
+            if (node.GetString("_class") == "AnimFile")
+            {
+                var source = (node.GetString("source_filename") ?? "").Replace('\\', '/');
+                var ours = folder.Length == 0
+                    ? !source.Contains('/')
+                    : source.StartsWith(folder + "/", StringComparison.OrdinalIgnoreCase);
+                if (ours)
+                    continue;
+            }
+
+            usedNames.Add(name);
+        }
     }
 
     /// <summary>
@@ -135,26 +199,26 @@ public static class Retargeter
         ArgumentNullException.ThrowIfNull(sourceData);
         ArgumentNullException.ThrowIfNull(fileName);
         var scene = ImportSource(sourceData, fileName);
-        var (map, needsUserDecision) = ResolveMapping(scene.Skeleton, mappingOverride: null);
-        return BuildReport(map, needsUserDecision, scene.Skeleton);
+        return ResolveMapping(scene.Skeleton).Report;
     }
 
     // ================================================================ per-request pipeline
 
-    private static void ProcessRequest(
+    /// <summary>Runs one request end to end. Returns true when at least one clip converted
+    /// successfully with a mapping that drives a pinky role (CopyPinky handling).</summary>
+    private static bool ProcessRequest(
         RetargetRequest request, RetargetTargetSpec target, TargetContext context,
         BatchOptions options, HashSet<string> usedNames,
         List<ClipResult> clips, List<AnimEntry> entries)
     {
+        var sourceId = request.SourceId ?? request.SourceFileName;
         SourceScene scene;
         MappingReportInfo report;
         MappingResult map;
         try
         {
-            scene = ImportSource(request.SourceData, request.SourceFileName);
-            bool needsUserDecision;
-            (map, needsUserDecision) = ResolveMapping(scene.Skeleton, request.MappingOverride);
-            report = BuildReport(map, needsUserDecision, scene.Skeleton);
+            scene = ImportSource(request.SourceData, request.SourceFileName, request.SampleFps);
+            (map, report) = ResolveMapping(scene.Skeleton, request.MappingOverride);
         }
         catch (Exception e)
         {
@@ -162,10 +226,11 @@ public static class Retargeter
             {
                 ClipName = FileStem(request.SourceFileName),
                 SourceFileName = request.SourceFileName,
+                SourceId = sourceId,
                 Success = false,
                 Error = e.Message,
             });
-            return;
+            return false;
         }
 
         if (scene.Clips.Count == 0)
@@ -174,13 +239,35 @@ public static class Retargeter
             {
                 ClipName = FileStem(request.SourceFileName),
                 SourceFileName = request.SourceFileName,
+                SourceId = sourceId,
                 Mapping = report,
                 Success = false,
                 Error = "Source file contains no animation takes.",
             });
-            return;
+            return false;
         }
 
+        var mapsPinky = MapsPinkyRole(map);
+        if (mapsPinky && options.AugmentVmdlText is null
+            && target.BaseModelPath == RetargetTargetSpec.SboxHumanMalePath)
+        {
+            // A standalone child vmdl cannot override the base model's AnimConstraintList:
+            // the citizen's CopyPinky (ring → pinky orient copy) keeps driving the pinky at
+            // runtime even though the DMX carries real pinky channels.
+            AddNote(report,
+                "Pinky channels are exported, but the base model's CopyPinky constraints "
+                + "(ring → pinky copy) cannot be overridden from a standalone vmdl — use "
+                + "augment mode (add to the existing vmdl) to neutralize them.");
+        }
+        if (target.UpAxis == TargetUpAxis.ZUpEngine)
+        {
+            AddNote(report,
+                "Target rig is engine-space (Z-up, inches): the DMX declares a Z-up axis "
+                + "system so resourcecompiler performs no Y-up conversion (best-effort — "
+                + "verify the compiled sequence on engine-space targets).");
+        }
+
+        var anyPinkySuccess = false;
         for (var take = 0; take < scene.Clips.Count; take++)
         {
             var clipName = UniqueClipName(
@@ -194,6 +281,10 @@ public static class Retargeter
                 {
                     Name = clipName,
                     SourceNote = request.SourceFileName,
+                    // Design §3: ConstraintDriven (twist/helper) bones keep their joints +
+                    // bind in the DMX but get NO channels — the engine drives them.
+                    ChannelExcludedBones = context.ConstraintDrivenBones,
+                    UpAxisY = target.UpAxis == TargetUpAxis.YUpCm,
                 });
 
                 var extractMotion = request.RootMotion == RootMotionMode.Extract;
@@ -201,6 +292,7 @@ public static class Retargeter
                 {
                     ClipName = clipName,
                     SourceFileName = request.SourceFileName,
+                    SourceId = sourceId,
                     DmxFileName = dmxFileName,
                     DmxContent = dmx,
                     Mapping = report,
@@ -217,6 +309,7 @@ public static class Retargeter
                     Looping = clip.Looping,
                     ExtractMotion = extractMotion,
                 });
+                anyPinkySuccess |= mapsPinky;
             }
             catch (Exception e)
             {
@@ -224,12 +317,25 @@ public static class Retargeter
                 {
                     ClipName = clipName,
                     SourceFileName = request.SourceFileName,
+                    SourceId = sourceId,
                     Mapping = report,
                     Success = false,
                     Error = e.Message,
                 });
             }
         }
+
+        return anyPinkySuccess;
+    }
+
+    private static bool MapsPinkyRole(MappingResult map)
+    {
+        foreach (var role in map.RoleToBone.Keys)
+        {
+            if (role.ToString().StartsWith("Pinky", StringComparison.Ordinal))
+                return true;
+        }
+        return false;
     }
 
     /// <summary>Solve one take and run the target-space cleanup + IK baking passes.</summary>
@@ -252,9 +358,23 @@ public static class Retargeter
         if (request.FootPlantCleanup)
         {
             if (context.Up is { } up && context.FootChains is { } feet)
-                FootPlant.Apply(frames, target.Rig.Skeleton, feet.Left, feet.Right, up, solved.Fps);
+            {
+                // Default plant thresholds are cm-tuned; engine-space rigs are in inches, so
+                // scale them by the cm→inch factor to keep the same physical sensitivity.
+                var footPlantOptions = new FootPlantOptions();
+                if (target.UpAxis == TargetUpAxis.ZUpEngine)
+                {
+                    footPlantOptions.SpeedThresholdCmPerSec *= RetargetTargetSpec.SboxSourceScale;
+                    footPlantOptions.HeightThresholdCm *= RetargetTargetSpec.SboxSourceScale;
+                }
+                FootPlant.Apply(
+                    frames, target.Rig.Skeleton, feet.Left, feet.Right, up, solved.Fps,
+                    footPlantOptions);
+            }
             else
+            {
                 AddNote(report, "Foot-plant cleanup skipped: " + context.UpOrChainProblem);
+            }
         }
 
         // ---- optional arm effector IK (default off: the solver already matches anatomical
@@ -307,7 +427,9 @@ public static class Retargeter
         }
 
         var root = context.DedicatedRootIndex ?? hips;
-        RootMotion.Apply(frames, new RootMotionAxes
+        // Skeleton-aware overload: hips world via real parent-chain FK, locals re-derived
+        // against the actual parent (HipsParentIsRoot is ignored by this overload).
+        RootMotion.Apply(frames, context.Rig.Skeleton, new RootMotionAxes
         {
             Up = up,
             RootIndex = root,
@@ -327,19 +449,33 @@ public static class Retargeter
 
     // ================================================================ import + mapping
 
-    /// <summary>Extension picks the importer; unknown extensions fall back to content
-    /// sniffing (FBX binary magic / ASCII header token / BVH "HIERARCHY").</summary>
-    internal static SourceScene ImportSource(byte[] data, string fileName)
+    /// <summary>
+    /// Imports source-file bytes exactly like conversion does: the extension picks the
+    /// importer; unknown extensions fall back to content sniffing (FBX binary magic / ASCII
+    /// header token / BVH "HIERARCHY"). Public so UI listings inspect files through the SAME
+    /// import path the pipeline uses (no duplicate sniffing logic caller-side).
+    /// </summary>
+    /// <param name="data">Raw file bytes.</param>
+    /// <param name="fileName">File name; only the extension is consulted.</param>
+    /// <param name="sampleFps">Resample rate for the imported clips; null = importer default
+    /// (30 fps).</param>
+    /// <exception cref="FormatException">Thrown when the bytes are not a readable FBX/BVH.</exception>
+    public static SourceScene ImportSource(byte[] data, string fileName, float? sampleFps = null)
     {
+        ArgumentNullException.ThrowIfNull(data);
+        ArgumentNullException.ThrowIfNull(fileName);
+
+        var fbxOptions = sampleFps is { } fbxFps ? new FbxImportOptions { SampleFps = fbxFps } : null;
+        var bvhOptions = sampleFps is { } bvhFps ? new BvhImportOptions { SampleFps = bvhFps } : null;
         var ext = ExtensionOf(fileName);
         return ext switch
         {
-            "fbx" => FbxImporter.Import(data),
-            "bvh" => BvhImporter.Import(data),
+            "fbx" => FbxImporter.Import(data, fbxOptions),
+            "bvh" => BvhImporter.Import(data, bvhOptions),
             _ => SniffFormat(data) switch
             {
-                "fbx" => FbxImporter.Import(data),
-                "bvh" => BvhImporter.Import(data),
+                "fbx" => FbxImporter.Import(data, fbxOptions),
+                "bvh" => BvhImporter.Import(data, bvhOptions),
                 _ => throw new FormatException(
                     $"Unrecognized source format for '{fileName}' (expected .fbx or .bvh)."),
             },
@@ -374,21 +510,37 @@ public static class Retargeter
     }
 
     /// <summary>
-    /// Per-request mapping resolution: explicit override → preset detection → best-effort
-    /// auto-map. <c>needsUserDecision</c> is true only on the auto path below the preset
-    /// detection threshold — the conversion still proceeds with that map.
+    /// THE mapping cascade, shared by conversion, UI file listings, and custom-target
+    /// detection: explicit override → user preset (via <paramref name="userPresetLookup"/>,
+    /// keyed by <see cref="Mapping.SkeletonSignature"/>) → shipped preset detection →
+    /// best-effort auto-map. The report's <see cref="MappingReportInfo.NeedsUserDecision"/>
+    /// is true only on the auto path below the preset detection threshold — conversion still
+    /// proceeds with that map; callers decide whether to ask/reject.
     /// </summary>
-    private static (MappingResult Map, bool NeedsUserDecision) ResolveMapping(
-        SkeletonModel skeleton, MappingResult? mappingOverride)
+    /// <param name="skeleton">Source (or candidate target) skeleton.</param>
+    /// <param name="mappingOverride">Explicit mapping (manual table / already-resolved user
+    /// preset); wins outright when non-null.</param>
+    /// <param name="userPresetLookup">Editor-side user-preset hook: receives the skeleton's
+    /// signature, returns the stored mapping or null. The facade itself can do no file IO.</param>
+    public static (MappingResult Map, MappingReportInfo Report) ResolveMapping(
+        SkeletonModel skeleton, MappingResult? mappingOverride = null,
+        Func<string, MappingResult?>? userPresetLookup = null)
     {
+        ArgumentNullException.ThrowIfNull(skeleton);
+
         if (mappingOverride is not null)
-            return (mappingOverride, false);
+            return (mappingOverride, BuildReport(mappingOverride, needsUserDecision: false, skeleton));
+
+        if (userPresetLookup is not null
+            && userPresetLookup(Mapping.SkeletonSignature.Compute(skeleton)) is { } userPreset)
+            return (userPreset, BuildReport(userPreset, needsUserDecision: false, skeleton));
 
         if (ProfileDetector.Detect(skeleton) is { } detected)
-            return (detected.Result, false);
+            return (detected.Result, BuildReport(detected.Result, needsUserDecision: false, skeleton));
 
         var auto = AutoMapper.Map(skeleton);
-        return (auto, auto.Confidence < ProfileDetector.DetectionThreshold);
+        var needsUserDecision = auto.Confidence < ProfileDetector.DetectionThreshold;
+        return (auto, BuildReport(auto, needsUserDecision, skeleton));
     }
 
     private static MappingReportInfo BuildReport(
@@ -544,6 +696,10 @@ public static class Retargeter
 
         public bool HasIkBakedBones { get; }
 
+        /// <summary>ConstraintDriven bone indices (twist/helper) — excluded from DMX
+        /// channels per design §3; null when the rig has none.</summary>
+        public IReadOnlySet<int>? ConstraintDrivenBones { get; }
+
         public TargetContext(TargetRig rig)
         {
             Rig = rig;
@@ -557,9 +713,12 @@ public static class Retargeter
                 break;
             }
 
+            var constraintDriven = new HashSet<int>(rig.BonesOfClass(BoneClass.ConstraintDriven));
+            ConstraintDrivenBones = constraintDriven.Count > 0 ? constraintDriven : null;
+
             try
             {
-                Frame = CharacterFrame.Compute(rig.Skeleton, RoleMap(rig), rig.Skeleton.RestWorld);
+                Frame = CharacterFrame.Compute(rig.Skeleton, rig.ToMappingResult(), rig.Skeleton.RestWorld);
                 Up = Frame.Up;
             }
             catch (ArgumentException e)
@@ -574,19 +733,6 @@ public static class Retargeter
                 FootChains = (left, right);
             else
                 UpOrChainProblem = "target rig does not map a complete UpperLeg/LowerLeg/Foot chain on both sides";
-        }
-
-        /// <summary>The rig's role annotations expressed as a <see cref="MappingResult"/>
-        /// (what <see cref="CharacterFrame.Compute"/> consumes).</summary>
-        public static MappingResult RoleMap(TargetRig rig)
-        {
-            var map = new MappingResult(rig.Name, MappingSource.Preset) { Confidence = 1f };
-            for (var i = 0; i < rig.Skeleton.Count; i++)
-            {
-                if (rig.RoleOf(i) is { } role)
-                    map.RoleToBone[role] = i;
-            }
-            return map;
         }
 
         private static FootChain? LegChain(TargetRig rig, BoneRole upper, BoneRole lower, BoneRole foot, BoneRole toe)

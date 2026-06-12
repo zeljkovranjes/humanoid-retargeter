@@ -84,14 +84,11 @@ public sealed class TargetRig
 
         foreach (var bone in bonesJson.EnumerateArray())
         {
-            var boneName = bone.GetProperty("name").GetString()
-                ?? throw new ArgumentException("Target rig bone with null name.");
-            var parentProp = bone.GetProperty("parent");
-            var parent = parentProp.ValueKind == JsonValueKind.Null ? null : parentProp.GetString();
-
-            definitions.Add(new BoneDefinition(boneName, parent, new XForm(
-                ReadVector3(bone.GetProperty("local_pos")),
-                MathQ.Normalize(ReadQuaternion(bone.GetProperty("local_rot_xyzw"))))));
+            // Shared bone-geometry shape (name/parent/local_pos/local_rot_xyzw) — one reader
+            // for rig ground-truth JSON and target-rig JSON (RigJson owns it).
+            var definition = RigJson.ReadBoneDefinition(bone);
+            var boneName = definition.Name;
+            definitions.Add(definition);
 
             var boneClass = Enum.Parse<BoneClass>(bone.GetProperty("class").GetString()!);
             classByName[boneName] = boneClass;
@@ -173,9 +170,4 @@ public sealed class TargetRig
         return new TargetRig(map.ProfileName, skeleton, classes, roles, boneByRole);
     }
 
-    private static Vector3 ReadVector3(JsonElement e)
-        => new((float)e[0].GetDouble(), (float)e[1].GetDouble(), (float)e[2].GetDouble());
-
-    private static Quaternion ReadQuaternion(JsonElement e)
-        => new((float)e[0].GetDouble(), (float)e[1].GetDouble(), (float)e[2].GetDouble(), (float)e[3].GetDouble());
 }
