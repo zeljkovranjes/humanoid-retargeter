@@ -47,18 +47,28 @@ using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global
 /// rig) — so feet default to <see cref="RoleTransferMode.CharacterDeltaFromRest"/>, which
 /// replays the delta with its world axes intact:
 /// <c>R_tgtWorld(f) = M · ΔR(f) · M⁻¹ · R_tgtNormRest</c> with <c>M = Q_tgt·Q_src⁻¹</c>.
+/// The head (rest neck→head directions span 0–27° forward lean across neutral-rest rigs —
+/// head-joint placement is anatomy too) likewise defaults to
+/// <see cref="RoleTransferMode.CharacterDeltaFromRest"/>: the target keeps its own neutral
+/// skull attitude and replays the source's attitude changes.
 /// All three modes differ only in the constant pre/postmultipliers around <c>ΔR(f)</c>
 /// (see <see cref="SolveOptions.DefaultTransferModes"/> for the default role set); with
 /// source == target every mode collapses to <c>ΔR(f)·R_normRest</c>, so the round-trip
 /// identity below holds regardless. Under the DEFAULT modes
-/// (<see cref="SolveOptions.TransferModes"/> = null) feet additionally fall back to
-/// canonical delta when the source foot direction is a <i>virtual</i> character-forward
-/// extension (no mapped toe) but the target's is real anatomy
-/// (<see cref="CanonicalFrames.HasVirtualPrimary"/>). An explicit (non-null) mode map
-/// disables that heuristic along with the defaults: the caller's entries are exact, roles
-/// absent from the map are absolute. The residual planted-stance offset a source with a
-/// non-stance rest pose leaves behind (the delta modes reference the REST) is removed by
-/// the <see cref="Cleanup.FootGroundAlign"/> cleanup pass, not the solver.</para>
+/// (<see cref="SolveOptions.TransferModes"/> = null) two fallbacks adjust the defaults per
+/// rig pair: feet fall back to canonical delta when the source foot direction is a
+/// <i>virtual</i> character-forward extension (no mapped toe) but the target's is real
+/// anatomy (<see cref="CanonicalFrames.HasVirtualPrimary"/>), and the head falls back to
+/// <see cref="RoleTransferMode.AbsoluteDirection"/> (gaze follows the source) when the
+/// source's normalized rest head attitude is implausible as a <i>neutral</i> carriage — a
+/// posed bind, whose rest-relative deltas would constantly tip the output head (measured
+/// ~12° "looking up at an angle" plus a lateral tilt on a fighting-stance bind whose rest
+/// head leans 40.7° forward / 16.9° sideways; neutral rests measure −3..27° forward,
+/// ≤ 3° lateral). An explicit (non-null) mode map disables both heuristics along with the
+/// defaults: the caller's entries are exact, roles absent from the map are absolute. The
+/// residual planted-stance offset a source with a non-stance rest pose leaves behind on the
+/// FEET (the delta modes reference the REST) is removed by the
+/// <see cref="Cleanup.FootGroundAlign"/> cleanup pass, not the solver.</para>
 /// <para>Identity proof (citizen round-trip): with source == target, <c>Q_tgt = Q_src</c>,
 /// <c>C_tgt = C_src</c> and the normalized rests coincide, so
 /// <c>R_tgt(f) = ΔR(f)·R_normRest = R_src(f)</c> exactly.</para>
@@ -279,6 +289,24 @@ public sealed class GeometricSolver : IRetargetSolver
             {
                 mode = RoleTransferMode.DeltaFromRest;
             }
+
+            // Head whose SOURCE rest attitude is implausible as a NEUTRAL carriage (a posed
+            // bind: e.g. a fighting-stance rest with the head chin-down and tilted) falls
+            // back to absolute gaze matching: the delta default replays attitude changes
+            // from the rest, so a posed rest reference constantly tips the output head by
+            // the pose (measured mean −12° pitch — "looking up at an angle" — plus a
+            // lateral tilt, on a rig whose rest head leans 40.7° forward / 16.9° sideways
+            // vs −3..27° forward / ≤ 3° lateral across every neutral-rest corpus rig).
+            // Absolute matching needs REAL skull-base geometry on both sides — a virtual
+            // primary would impose an arbitrary character axis (the virtual-foot lesson).
+            // HEURISTIC, defaults only (see above / SolveOptions.TransferModes).
+            if (!_explicitModes
+                && role == BoneRole.Head
+                && !_srcCanon.HasVirtualPrimary(role) && !_tgtCanon.HasVirtualPrimary(role)
+                && IsPosedRestHead(_srcCanon))
+            {
+                mode = RoleTransferMode.AbsoluteDirection;
+            }
             _direct.Add(new DirectEntry
             {
                 Slot = RegisterSlot(srcBone),
@@ -292,6 +320,37 @@ public sealed class GeometricSolver : IRetargetSolver
                     ? MathQ.Normalize(Quaternion.Conjugate(_basisChange) * _tgtNormRest[tgtBone].Rot)
                     : MathQ.Normalize(cs * Quaternion.Conjugate(ct) * _tgtNormRest[tgtBone].Rot),
             });
+        }
+
+        /// <summary>
+        /// Plausibility band of a NEUTRAL rest head attitude (the rest neck→head direction
+        /// against character up). Measured across 13 neutral-rest corpus rigs the forward
+        /// lean spans −2.9°…27.4° (head-joint placement anatomy: mocap-style BVH rigs sit
+        /// near 0°, character rigs at 21–27°, the s&amp;box rig at 25.5°) and the lateral
+        /// lean stays within ±2.8° (bilateral symmetry — no rig convention tilts a neutral
+        /// head sideways). The posed fighting-stance bind that motivated the gate measures
+        /// 40.7° forward / 16.9° lateral (Defenses.fbx).
+        /// </summary>
+        private const float HeadNeutralFwdLeanMinDeg = -8f;
+        private const float HeadNeutralFwdLeanMaxDeg = 33f;
+        private const float HeadNeutralLatLeanMaxDeg = 6f;
+
+        /// <summary>True when the rig's rest head attitude falls outside the neutral-carriage
+        /// plausibility band above — i.e. its bind pose carries a posed (chin-down / tilted)
+        /// head that makes rest-relative head deltas read constantly tipped. Requires a real
+        /// head primary (callers gate on <see cref="CanonicalFrames.HasVirtualPrimary"/>).</summary>
+        private static bool IsPosedRestHead(CanonicalFrames canon)
+        {
+            var dir = Vector3.Transform(Vector3.UnitX, canon.WorldFrameOf(BoneRole.Head));
+            var up = canon.CharacterUp;
+            var fwd = canon.CharacterForward;
+            var lat = Vector3.Cross(up, fwd);
+            const float toDeg = 180f / MathF.PI;
+            var fwdLean = MathF.Atan2(Vector3.Dot(dir, fwd), Vector3.Dot(dir, up)) * toDeg;
+            var latLean = MathF.Atan2(Vector3.Dot(dir, lat), Vector3.Dot(dir, up)) * toDeg;
+            return fwdLean < HeadNeutralFwdLeanMinDeg
+                || fwdLean > HeadNeutralFwdLeanMaxDeg
+                || MathF.Abs(latLean) > HeadNeutralLatLeanMaxDeg;
         }
 
         private void BuildSpine(MappingResult srcMap, TargetRig rig)

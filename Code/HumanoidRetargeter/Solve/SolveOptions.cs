@@ -53,11 +53,22 @@ public sealed class SolveOptions
     /// ankle anatomy too — rigs diverge 11–44° from the s&amp;box rig's steep ankle, so
     /// absolute matching pitched planted feet up to 25° off flat, the "feet bent
     /// upward/inward" artifact; the character-space delta keeps the rotation's world axes,
-    /// which canonical-frame remapping would tilt by that same divergence). On a toe-less
-    /// source the solver overrides the foot entry to <see cref="RoleTransferMode.DeltaFromRest"/>
-    /// (virtual-foot fallback, see the <see cref="GeometricSolver"/> remarks). Everything
-    /// else (limbs, spine, head, toes, fingers) stays absolute: there the worldspace
-    /// direction IS the pose. Head stays absolute so gaze direction follows the source.
+    /// which canonical-frame remapping would tilt by that same divergence). The head is
+    /// <see cref="RoleTransferMode.CharacterDeltaFromRest"/> for the same reason: the rest
+    /// neck→head direction is head-joint-placement anatomy (measured 0–27° forward lean
+    /// across neutral-rest rigs vs the s&amp;box rig's 25.5°), so the target keeps its own
+    /// neutral skull attitude and replays the source's attitude <i>changes</i> — for the
+    /// head this computes exactly what the previous virtual-frame absolute matching did.
+    /// Two solver fallbacks adjust these defaults per rig pair: on a toe-less source the
+    /// foot entries become <see cref="RoleTransferMode.DeltaFromRest"/> (virtual-foot
+    /// fallback), and a source whose normalized rest head attitude is implausible as a
+    /// neutral carriage (a posed bind — e.g. a chin-down/tilted fighting-stance rest,
+    /// measured 40.7° forward / 16.9° lateral on such a rig where the delta replay read
+    /// ~12° "looking up at an angle") switches the head to
+    /// <see cref="RoleTransferMode.AbsoluteDirection"/> so the gaze follows the source
+    /// absolutely instead of replaying deltas from a posed reference (see the
+    /// <see cref="GeometricSolver"/> remarks for both). Everything else (limbs, spine,
+    /// toes, fingers) stays absolute: there the worldspace direction IS the pose.
     /// </summary>
     public static IReadOnlyDictionary<BoneRole, RoleTransferMode> DefaultTransferModes { get; } =
         new Dictionary<BoneRole, RoleTransferMode>
@@ -65,14 +76,17 @@ public sealed class SolveOptions
             [BoneRole.ClavicleL] = RoleTransferMode.DeltaFromRest,
             [BoneRole.ClavicleR] = RoleTransferMode.DeltaFromRest,
             [BoneRole.Neck] = RoleTransferMode.DeltaFromRest,
+            [BoneRole.Head] = RoleTransferMode.CharacterDeltaFromRest,
             [BoneRole.FootL] = RoleTransferMode.CharacterDeltaFromRest,
             [BoneRole.FootR] = RoleTransferMode.CharacterDeltaFromRest,
         };
 
     /// <summary>
     /// Per-role transfer modes. Null (default) = <see cref="DefaultTransferModes"/> plus the
-    /// solver's virtual-foot heuristic (a toe-less source's virtual foot direction overrides
-    /// the foot default to <see cref="RoleTransferMode.DeltaFromRest"/> — see the
+    /// solver's fallback heuristics (a toe-less source's virtual foot direction overrides
+    /// the foot default to <see cref="RoleTransferMode.DeltaFromRest"/>, and a posed-rest
+    /// source head overrides the head default to
+    /// <see cref="RoleTransferMode.AbsoluteDirection"/> — see the
     /// <see cref="GeometricSolver"/> remarks). A non-null map REPLACES the defaults entirely
     /// and disables every fallback heuristic: each role uses exactly the mode in the map, and
     /// roles absent from it are <see cref="RoleTransferMode.AbsoluteDirection"/>. Pass an

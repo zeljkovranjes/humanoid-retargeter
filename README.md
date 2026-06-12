@@ -52,11 +52,14 @@ No NuGet packages, no native DLLs, no Python, no external tools.
   (immune to bone-roll conventions), A/T-pose rest normalization on both rigs, exact
   identity on same-rig round-trips (≤ 0.00025°), spine chain interpolation (3–5 source
   spine bones → target), finger curl/splay transfer, hip-height-scaled root translation.
-- **Natural shoulder/neck/foot carriage** (option, on by default): clavicles, neck and
-  feet keep the target body's own posture/ankle anatomy and receive only the source's
-  motion — fixes the slumped shoulders / hunched neck / bent-up planted feet look that
-  exact direction-copying produces on differently-proportioned rigs. Toe-less sources
-  automatically get the same treatment (no more heel-standing).
+- **Natural shoulder/neck/head/foot carriage** (option, on by default): clavicles, neck,
+  head and feet keep the target body's own posture/skull/ankle anatomy and receive only
+  the source's motion — fixes the slumped shoulders / hunched neck / bent-up planted feet
+  look that exact direction-copying produces on differently-proportioned rigs. Toe-less
+  sources automatically get the same treatment (no more heel-standing), and a source whose
+  bind pose is itself posed (e.g. a fighting-stance rest with a chin-down head) automatically
+  switches the head to follow the source's gaze instead of replaying deltas from that posed
+  rest (no more "head looking up at an angle").
 - **Deep-learning solver** (experimental): a pure-C# implementation of SAME
   (skeleton-agnostic motion embedding) running the pretrained checkpoint — no mapping
   needed at all. Offered in the no-profile dialog; after previewing, it can derive and

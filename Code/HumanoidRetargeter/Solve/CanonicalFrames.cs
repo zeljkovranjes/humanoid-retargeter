@@ -23,11 +23,13 @@ using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global
 /// <para><b>Primary axis P</b> = normalize(chain-child head − bone head), where the chain
 /// child is the next <i>mapped</i> role down the bone's anatomical chain
 /// (Hips→Spine0..4→Neck→Head; Clavicle→UpperArm→LowerArm→Hand; UpperLeg→LowerLeg→Foot→Toe;
-/// per-finger Meta→Prox→Mid→Dist). Tips use virtual extensions: Head extends along character
-/// up; Hand points at the midpoint of its mapped finger proximals (else along the forearm);
-/// Foot without a toe and Toe extend along character forward; finger distals extend along
-/// their previous segment. Other bones with nothing mapped below inherit the previous chain
-/// segment's direction.</para>
+/// per-finger Meta→Prox→Mid→Dist). Tips: the Head inherits its previous chain segment
+/// (neck→head — the skull-base axis, real anatomy; measured 0–27° forward of character up
+/// across neutral-rest rigs), falling back to a virtual character-up extension only when
+/// that segment is absent or degenerate; Hand points at the midpoint of its mapped finger
+/// proximals (else along the forearm); Foot without a toe and Toe extend along character
+/// forward; finger distals extend along their previous segment. Other bones with nothing
+/// mapped below inherit the previous chain segment's direction.</para>
 /// <para><b>Secondary axis S</b> by bone class: spine/neck/head/hips and legs use character
 /// forward (knee hinge lateral); clavicle/arms/hands use <c>cross(P, characterUp)</c>
 /// (elbow hinge ⊥ limb in the character's horizontal plane at T-pose), falling back to
@@ -70,10 +72,11 @@ public sealed class CanonicalFrames
     /// <summary>
     /// True when the role's primary axis is a <b>virtual</b> character-axis extension rather
     /// than real joint geometry (e.g. a Foot with no mapped Toe extends along character
-    /// forward; the Head and mapped Toes extend along character up/forward by convention).
-    /// Absolute direction matching against a virtual primary imposes an arbitrary direction,
-    /// so the solver falls back to delta transfer when the source is virtual but the target
-    /// is real (see <see cref="GeometricSolver"/> remarks).
+    /// forward; mapped Toes extend along character forward by convention; a Head whose
+    /// neck→head segment is degenerate extends along character up). Absolute direction
+    /// matching against a virtual primary imposes an arbitrary direction, so the solver
+    /// falls back to delta transfer when the source is virtual but the target is real
+    /// (see <see cref="GeometricSolver"/> remarks).
     /// </summary>
     public bool HasVirtualPrimary(BoneRole role) => _virtualPrimary.Contains(role);
 
@@ -200,10 +203,15 @@ public sealed class CanonicalFrames
         switch (kind)
         {
             case ChainKind.Body:
-                // Head extends along character up (virtual head-top point); a body chain that
-                // ends early keeps its previous segment direction, defaulting to up.
+                // Head: its primary is the REAL previous chain segment (neck→head — the
+                // skull-base axis; the rest lean of that segment is head-joint-placement
+                // anatomy the delta transfer modes reference, and the posed-rest gaze
+                // fallback measures — see GeometricSolver remarks). Only a degenerate or
+                // absent segment falls back to the virtual character-up extension (e.g. a
+                // head stacked on the neck). A body chain that ends early keeps its
+                // previous segment direction, defaulting to up.
                 if (role == BoneRole.Head)
-                    return (cf.Up, true);
+                    return prevDir is { } seg && seg.LengthSquared() >= 1e-8f ? (seg, false) : (cf.Up, true);
                 return prevDir is not null ? (prevDir, false) : (cf.Up, true);
 
             case ChainKind.Arm:

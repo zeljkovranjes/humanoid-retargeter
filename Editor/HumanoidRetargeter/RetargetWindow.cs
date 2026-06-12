@@ -156,10 +156,12 @@ public sealed class RetargetWindow : Widget
 		var footPlant = options.Layout.Add( new Checkbox( "Foot-plant cleanup" ) { Value = _footPlant } );
 		footPlant.Clicked = () => _footPlant = footPlant.Value;
 
-		var carriage = options.Layout.Add( new Checkbox( "Natural shoulder/neck/foot carriage" ) { Value = _naturalCarriage } );
-		carriage.ToolTip = "Keep the s&box body's own shoulder line, neck posture and ankle anatomy, transferring only the source's motion. "
-			+ "Untick to exactly copy the source rig's shoulder/neck/foot directions (can look slumped/hunched and bend planted feet upward "
-			+ "on differently-proportioned rigs).";
+		var carriage = options.Layout.Add( new Checkbox( "Natural shoulder/neck/head/foot carriage" ) { Value = _naturalCarriage } );
+		carriage.ToolTip = "Keep the s&box body's own shoulder line, neck posture, skull attitude and ankle anatomy, transferring only the "
+			+ "source's motion (a source whose bind pose is itself posed - e.g. a fighting-stance rest - automatically keeps the head "
+			+ "following the source's gaze instead). "
+			+ "Untick to exactly copy the source rig's shoulder/neck/head/foot directions (can look slumped/hunched, tip the head and bend "
+			+ "planted feet upward on differently-proportioned rigs).";
 		carriage.Clicked = () => _naturalCarriage = carriage.Value;
 
 		var armIk = options.Layout.Add( new Checkbox( "Arm effector IK" ) { Value = _armIk } );
@@ -602,8 +604,9 @@ public sealed class RetargetWindow : Widget
 		{
 			HipScaleHorizontal = ParsePositive( _hipScaleHEdit ),
 			HipScaleVertical = ParsePositive( _hipScaleVEdit ),
-			// null = recommended defaults (clavicle/neck/feet keep the target's natural
-			// carriage); empty map = legacy all-absolute direction matching.
+			// null = recommended defaults (clavicle/neck/head/feet keep the target's
+			// natural carriage, plus the solver's posed-rest fallbacks); empty map =
+			// legacy all-absolute direction matching.
 			TransferModes = _naturalCarriage
 				? null
 				: new Dictionary<HumanoidRetargeter.Mapping.BoneRole, HumanoidRetargeter.Solve.RoleTransferMode>(),
