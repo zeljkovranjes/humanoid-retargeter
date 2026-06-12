@@ -20,8 +20,9 @@
 //      against that vmdl. The fixture vmdl references meshes a scratch project cannot
 //      resolve, so a missing-mesh compile failure is acceptable - the assertions are:
 //      augmented vmdl + .bak written, asset registered, compile poll COMPLETES, no
-//      "quiet inputs ... abandoning recompile" for our vmdl, the install-path guard
-//      rejects the shipped citizen vmdl, and the editor survives.
+//      "quiet inputs ... abandoning recompile" for our vmdl, a PLANTED stale .vmdl_c is
+//      never reported as a compile success (timestamp-verified compile), the install-path
+//      guard rejects the shipped citizen vmdl, and the editor survives.
 //  10. writes a JSON result to HR_UI_SMOKE and quits the editor
 //
 // Safety: refuses to do anything when the open project is not the hr-editor-rig scratch
@@ -80,7 +81,8 @@ public static class UiSmokeGate
 		}
 
 		Result.completed = true;
-		Result.passed = Result.dmxVmdlCompiled && Result.sequenceVisible
+		Result.passed = Result.dmxVmdlCompiled && Result.compiledFileFresh
+			&& Result.sequenceVisible
 			&& Result.previewWidgetOk && Result.userPresetRoundTrip
 			&& Result.dlSolverOk && Result.citizenTargetOk
 			&& (!Result.augmentMode || Result.augmentOk);
@@ -353,6 +355,7 @@ public static class UiSmokeGate
 		Flush();
 
 		// ---- 7. write + register + compile (the window's convert path) ---------
+		var compileStartUtc = DateTime.UtcNow;
 		var write = await EditorPipeline.WriteAndCompileAsync(
 			batch, OutputFolder, augmentVmdlPath: null, standaloneVmdlName: "ui_smoke_retargeted" );
 		Result.dmxFilesWritten = write.DmxFilesWritten;
@@ -361,8 +364,17 @@ public static class UiSmokeGate
 		Result.dmxVmdlCompiled = write.Compiled;
 		Result.compiledFile = write.CompiledFile;
 		Result.writeErrors = write.Errors.ToArray();
+
+		// A reported compile success must be backed by a compiled file written by THIS run
+		// (a stale .vmdl_c from an earlier run must never count - EditorPipeline verifies
+		// by timestamp; this asserts that verification end to end).
+		Result.compiledFileFresh = write.Compiled
+			&& write.CompiledFile is not null && File.Exists( write.CompiledFile )
+			&& File.GetLastWriteTimeUtc( write.CompiledFile )
+				>= compileStartUtc - TimeSpan.FromSeconds( 10 );
 		Note( $"WriteAndCompile: dmx={write.DmxFilesWritten} vmdl={write.VmdlPath} "
-			+ $"compiled={write.Compiled} compiledFile={write.CompiledFile} errors={write.Errors.Count}" );
+			+ $"compiled={write.Compiled} compiledFile={write.CompiledFile} "
+			+ $"fresh={Result.compiledFileFresh} errors={write.Errors.Count}" );
 		Flush();
 
 		if ( !write.Compiled || write.VmdlAsset is null )
@@ -431,6 +443,25 @@ public static class UiSmokeGate
 				AugmentVmdlText = File.ReadAllText( augmentVmdlPath ),
 			};
 
+			// Stale-compile probe (CompileAndWaitAsync timestamp verification): augment
+			// targets always carry a pre-existing .vmdl_c in real use. Plant one, backdated,
+			// BEFORE the run - its mere existence must never turn into a reported compile
+			// success; if a success IS reported, the compiled file must be NEWER than this.
+			var staleCompiledPath = augmentVmdlPath + "_c";
+			DateTime? staleStampUtc = null;
+			try
+			{
+				if ( !File.Exists( staleCompiledPath ) )
+					File.WriteAllBytes( staleCompiledPath, new byte[] { 0 } );
+				File.SetLastWriteTimeUtc( staleCompiledPath, DateTime.UtcNow.AddMinutes( -10 ) );
+				staleStampUtc = File.GetLastWriteTimeUtc( staleCompiledPath );
+				Note( $"planted stale compiled file {staleCompiledPath} @ {staleStampUtc:O}" );
+			}
+			catch ( Exception e )
+			{
+				Note( $"could not plant stale compiled file: {e.Message}" );
+			}
+
 			var logOffset = EditorPipeline.SboxLogLength();
 
 			// THE window path: same method Convert All invokes (Task.Run batch ->
@@ -450,6 +481,23 @@ public static class UiSmokeGate
 			Result.augmentCompilePollCompleted = write is not null;
 			Result.augmentQuietInputsAbandon = EditorPipeline.LogSliceShowsAbandonedRecompile(
 				logOffset, Path.GetFileName( augmentVmdlPath ) );
+
+			// Stale-compile probe verdict: either the compile honestly failed/was not
+			// reported (expected here - missing meshes), or it succeeded AND the compiled
+			// file's timestamp advanced past the planted stale stamp. The pre-fix poll
+			// returned success off the stale file's mere existence - this catches that.
+			if ( write?.Compiled is not true )
+			{
+				Result.augmentCompileVerified = true;
+			}
+			else
+			{
+				var compiledPath = write.CompiledFile ?? staleCompiledPath;
+				Result.augmentCompileVerified = File.Exists( compiledPath )
+					&& (staleStampUtc is not { } stamp
+						|| File.GetLastWriteTimeUtc( compiledPath ) > stamp);
+			}
+			Note( $"stale-compile probe: compiled={write?.Compiled} verified={Result.augmentCompileVerified}" );
 
 			// The augmenter must really have added our clips to the vmdl on disk.
 			try
@@ -487,12 +535,14 @@ public static class UiSmokeGate
 			Result.augmentOk = Result.augmentedVmdlProduced && Result.augmentVmdlWritten
 				&& Result.augmentRegistered && Result.augmentCompilePollCompleted
 				&& !Result.augmentQuietInputsAbandon && Result.augmentVmdlContainsClips
+				&& Result.augmentCompileVerified
 				&& Result.installGuardRejected;
 
 			Note( $"augment: produced={Result.augmentedVmdlProduced} written={Result.augmentVmdlWritten} "
 				+ $"registered={Result.augmentRegistered} pollCompleted={Result.augmentCompilePollCompleted} "
 				+ $"compiled={Result.augmentCompiled} quietInputsAbandon={Result.augmentQuietInputsAbandon} "
-				+ $"containsClips={Result.augmentVmdlContainsClips} guardRejected={Result.installGuardRejected} "
+				+ $"containsClips={Result.augmentVmdlContainsClips} compileVerified={Result.augmentCompileVerified} "
+				+ $"guardRejected={Result.installGuardRejected} "
 				+ $"mainThreadAfter={Result.augmentOnMainThreadAfter} => augmentOk={Result.augmentOk}" );
 		}
 		catch ( Exception e )
@@ -568,6 +618,7 @@ public static class UiSmokeGate
 		public string vmdlPath { get; set; }
 		public bool assetRegistered { get; set; }
 		public bool dmxVmdlCompiled { get; set; }
+		public bool compiledFileFresh { get; set; }
 		public string compiledFile { get; set; }
 		public string[] writeErrors { get; set; } = Array.Empty<string>();
 		public bool modelLoads { get; set; }
@@ -588,6 +639,7 @@ public static class UiSmokeGate
 		public bool augmentCompilePollCompleted { get; set; }
 		public bool augmentCompiled { get; set; }
 		public bool augmentQuietInputsAbandon { get; set; }
+		public bool augmentCompileVerified { get; set; }
 		public bool augmentVmdlContainsClips { get; set; }
 		public bool installGuardRejected { get; set; }
 		public bool augmentOnMainThreadAfter { get; set; }

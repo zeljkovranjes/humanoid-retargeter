@@ -50,6 +50,11 @@ public static class GltfImporter
     /// <summary>Meters → centimeters.</summary>
     private const float UnitScale = 100f;
 
+    /// <summary>Maximum key-time span (seconds) a single animation may cover — one hour is
+    /// far beyond any real clip; larger spans are treated as malformed data (the resampled
+    /// frame count is span × fps, so an unbounded span is an allocation bomb).</summary>
+    private const double MaxClipDurationSeconds = 3600;
+
     /// <summary>Parses glTF/GLB bytes and builds the source scene.</summary>
     /// <exception cref="FormatException">Malformed/truncated file, external buffer URIs, or
     /// no skeleton-like nodes (no skin joints and no animated nodes).</exception>
@@ -109,6 +114,8 @@ public static class GltfImporter
                 kept.Add(channel.NodeIndex);
 
         // Close over ancestors so disjoint subtrees stay connected to their roots.
+        // (Cycle-safe: kept doubles as the walk's visited set — a malformed parent cycle
+        // revisits a kept node and breaks instead of looping forever.)
         foreach (var index in new List<int>(kept))
         {
             for (int parent = nodes[index].Parent; parent >= 0; parent = nodes[parent].Parent)
@@ -118,25 +125,29 @@ public static class GltfImporter
             }
         }
 
+        // Iterative DFS with a visited set over ALL nodes (kept or not): a malformed node
+        // graph whose children lists form a cycle would otherwise recurse unboundedly
+        // (StackOverflow takes the host process down uncatchably). Per spec each node has at
+        // most one parent, so ANY revisit means the graph is cyclic/malformed — fail cleanly.
         var result = new List<int>(kept.Count);
         var visited = new HashSet<int>();
+        var stack = new Stack<int>();
 
-        void Visit(int index)
-        {
-            if (kept.Contains(index))
-            {
-                if (!visited.Add(index))
-                    return;
-                result.Add(index);
-            }
-            foreach (var child in nodes[index].Children)
-                Visit(child);
-        }
-
-        for (int i = 0; i < nodes.Count; i++)
+        for (int i = nodes.Count - 1; i >= 0; i--)
         {
             if (nodes[i].Parent < 0)
-                Visit(i);
+                stack.Push(i);
+        }
+        while (stack.Count > 0)
+        {
+            int index = stack.Pop();
+            if (!visited.Add(index))
+                throw new FormatException("glTF: node graph contains a cycle.");
+            if (kept.Contains(index))
+                result.Add(index);
+            var children = nodes[index].Children;
+            for (int c = children.Length - 1; c >= 0; c--)
+                stack.Push(children[c]); // reversed: document order among siblings
         }
         return result;
     }
@@ -171,9 +182,15 @@ public static class GltfImporter
 
                 // Nearest KEPT ancestor: the kept set can be non-contiguous (e.g. an
                 // animated node under a mesh-only node) — re-parent across the gap.
+                // Visited-guarded: a malformed parent cycle among non-bone nodes (possible
+                // even when the bone itself is reachable acyclically) would otherwise walk
+                // forever — fail with the same clean cycle error as the node DFS.
                 ParentIndex[i] = -1;
+                var walked = new HashSet<int>();
                 for (int parent = node.Parent; parent >= 0; parent = document.Nodes[parent].Parent)
                 {
+                    if (!walked.Add(parent))
+                        throw new FormatException("glTF: node graph contains a cycle.");
                     if (BoneIndexByNode.TryGetValue(parent, out var boneIndex))
                     {
                         ParentIndex[i] = boneIndex;
@@ -273,8 +290,23 @@ public static class GltfImporter
         if (start > stop)
             return null;
 
-        double duration = stop - start;
-        int frameCount = Math.Max(1, (int)Math.Round(duration * fps) + 1);
+        // The frame count is derived from the file's key-time span: a malicious/corrupt span
+        // (two keys [0, 1e7] → 300M frames at 30 fps) would OOM-allocate, and an unchecked
+        // double→int conversion can wrap negative and get masked to 1 frame. Cap the clip
+        // duration and convert under an explicit overflow guard — FormatException keeps the
+        // importer's malformed-file contract.
+        double duration = (double)stop - start;
+        if (double.IsNaN(duration) || duration > MaxClipDurationSeconds)
+            throw new FormatException(
+                $"glTF: animation key-time span {duration:0.###} s (keys {start:0.###}..{stop:0.###} s) "
+                + $"exceeds the supported maximum of {MaxClipDurationSeconds} s.");
+
+        double frameEstimate = Math.Round(duration * fps) + 1;
+        if (!(frameEstimate < int.MaxValue))
+            throw new FormatException(
+                $"glTF: animation key-time span {duration:0.###} s at {fps} fps yields an "
+                + "unrepresentable frame count.");
+        int frameCount = Math.Max(1, (int)frameEstimate);
 
         // Skeleton bone order may differ from context bone order (topological sort) — map.
         var boneToSkeleton = new int[ctx.Bones.Count];
