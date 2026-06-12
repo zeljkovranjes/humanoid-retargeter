@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using Editor;
 using Sandbox;
@@ -15,8 +16,90 @@ namespace HumanoidRetargeter.Editor;
 /// project's Assets folder, registers them with the asset system and compiles, surfacing
 /// compiler state. All file IO of the pipeline lives here - the facade itself is pure.
 /// </summary>
+/// <remarks>
+/// Threading: <see cref="AssetSystem"/> / <see cref="Asset"/> calls are engine state and are
+/// only safe on the editor main thread. Our async flows hop threads (<c>Task.Run</c> for the
+/// pure conversion math, <c>Task.Delay</c> in poll loops), so every engine call below is
+/// preceded by <see cref="SwitchToMainThread"/> - the awaitable queues its continuation via
+/// the sanctioned <see cref="MainThread.Queue"/> dispatcher (the same pattern the official
+/// tools use, e.g. AssetBrowser). Touching engine objects from a pool thread is a native
+/// crash, not a managed exception - it must be prevented structurally.
+/// </remarks>
 public static class EditorPipeline
 {
+	// ============================================================== threading
+
+	/// <summary>
+	/// Awaitable hop to the editor main thread. Completes synchronously when already
+	/// there; otherwise the continuation is queued via <see cref="MainThread.Queue"/>.
+	/// Await this before touching engine objects (AssetSystem, Asset, widgets) in any
+	/// flow that has been on a background task or resumed from <c>Task.Delay</c>.
+	/// </summary>
+	public static MainThreadAwaitable SwitchToMainThread() => default;
+
+	/// <summary>Awaiter behind <see cref="SwitchToMainThread"/>.</summary>
+	public readonly struct MainThreadAwaitable : INotifyCompletion
+	{
+		public MainThreadAwaitable GetAwaiter() => this;
+		public bool IsCompleted => ThreadSafe.IsMainThread;
+		public void OnCompleted( Action continuation ) => MainThread.Queue( continuation );
+		public void GetResult() { }
+	}
+
+	// ====================================================== install-path guard
+
+	/// <summary>Root folder of the s&amp;box installation (directory of the running
+	/// sbox-dev.exe), or null when it cannot be determined.</summary>
+	internal static string EngineRootPath
+	{
+		get
+		{
+			try
+			{
+				var exeDir = Path.GetDirectoryName( Environment.ProcessPath );
+				return exeDir is null ? null : Path.GetFullPath( exeDir );
+			}
+			catch
+			{
+				return null;
+			}
+		}
+	}
+
+	/// <summary>
+	/// True when <paramref name="path"/> resolves to somewhere inside the s&amp;box
+	/// installation (the running editor's exe directory, with a literal
+	/// <c>steamapps\common\sbox</c> fallback). Writing/compiling assets there has the
+	/// engine's own content watcher fighting our writes and has crashed the editor
+	/// natively - conversion outputs and augment targets must live in a user project.
+	/// </summary>
+	public static bool IsUnderEngineInstall( string path )
+	{
+		if ( string.IsNullOrWhiteSpace( path ) )
+			return false;
+
+		try
+		{
+			var full = Path.GetFullPath( path );
+
+			var root = EngineRootPath;
+			if ( root is not null )
+			{
+				var prefix = root.TrimEnd( Path.DirectorySeparatorChar ) + Path.DirectorySeparatorChar;
+				if ( full.StartsWith( prefix, StringComparison.OrdinalIgnoreCase ) )
+					return true;
+			}
+
+			// Fallback: a Steam-installed s&box that is not the running process (or the
+			// process path was unavailable).
+			return full.Replace( '/', '\\' ).IndexOf(
+				@"steamapps\common\sbox\", StringComparison.OrdinalIgnoreCase ) >= 0;
+		}
+		catch
+		{
+			return false;
+		}
+	}
 	/// <summary>Assets-relative path of the committed s&amp;box target rig definition.</summary>
 	public const string TargetRigJsonRelative = "humanoid_retargeter/target_rig_sbox.json";
 
@@ -83,6 +166,12 @@ public static class EditorPipeline
 		public List<string> Errors { get; } = new();
 	}
 
+	/// <summary>Delay between the last output write and triggering the vmdl compile. The
+	/// engine refuses to compile while an asset's input files keep changing ("Waited too
+	/// long (1270ms) for quiet inputs ... abandoning recompile!"); waiting longer than that
+	/// watcher window after our final write guarantees a quiet compile.</summary>
+	const int InputSettleDelayMs = 2000;
+
 	/// <summary>
 	/// Writes a batch result to disk and compiles it. DMX files go to
 	/// <c>Assets/&lt;dmxFolderRelative&gt;/</c> (must match the
@@ -92,6 +181,10 @@ public static class EditorPipeline
 	/// non-null and the batch produced <see cref="RetargetBatchResult.AugmentedVmdl"/>) the
 	/// ORIGINAL vmdl is overwritten non-destructively: a <c>.vmdl.bak</c> backup is written
 	/// next to it first (design §9).
+	/// Sequencing: ALL files are written first, then registered once, then - after
+	/// <see cref="InputSettleDelayMs"/> so the engine's input watcher goes quiet - the vmdl
+	/// is compiled once (with a single retry if the engine still abandoned the recompile).
+	/// Safe to call from any thread; engine calls are marshalled to the main thread.
 	/// </summary>
 	public static async Task<WriteResult> WriteAndCompileAsync(
 		RetargetBatchResult batch, string dmxFolderRelative, string augmentVmdlPath = null,
@@ -102,6 +195,24 @@ public static class EditorPipeline
 		if ( assetsPath is null )
 		{
 			result.Errors.Add( "No project is open." );
+			return result;
+		}
+
+		// ---- 0. never write into the s&box installation ---------------------------------
+		// The engine owns and watches that content; compiling our writes there fought the
+		// watcher ("quiet inputs" abandons) and ended in a native editor crash.
+		if ( augmentVmdlPath is not null && IsUnderEngineInstall( augmentVmdlPath ) )
+		{
+			result.Errors.Add(
+				$"Cannot modify models inside the s&box installation ({augmentVmdlPath}). "
+				+ "Copy the model into your project's Assets folder and pick that copy instead." );
+			return result;
+		}
+		if ( IsUnderEngineInstall( assetsPath ) )
+		{
+			result.Errors.Add(
+				$"Cannot write conversion outputs inside the s&box installation ({assetsPath}). "
+				+ "Open a project that lives outside the s&box install folder." );
 			return result;
 		}
 
@@ -126,18 +237,22 @@ public static class EditorPipeline
 			return result;
 		}
 
-		// ---- 1. DMX files -------------------------------------------------------------
+		// ---- 1. write ALL files first (DMX, then .bak, then the vmdl LAST) -------------
+		// Nothing may touch the asset system until every input file is final - the engine
+		// abandons recompiles whose inputs keep changing.
+		var dmxPaths = new List<string>();
 		try
 		{
 			var dmxDir = Path.Combine( assetsPath, dmxFolderRelative.Replace( '/', Path.DirectorySeparatorChar ) );
 			Directory.CreateDirectory( dmxDir );
 			foreach ( var clip in successful )
 			{
-				File.WriteAllText( Path.Combine( dmxDir, clip.DmxFileName ), clip.DmxContent );
+				var dmxPath = Path.Combine( dmxDir, clip.DmxFileName );
+				File.WriteAllText( dmxPath, clip.DmxContent );
+				dmxPaths.Add( dmxPath );
 				result.DmxFilesWritten++;
 			}
 
-			// ---- 2. vmdl ---------------------------------------------------------------
 			if ( augmentVmdlPath is not null )
 			{
 				File.Copy( augmentVmdlPath, augmentVmdlPath + ".bak", overwrite: true );
@@ -156,7 +271,12 @@ public static class EditorPipeline
 			return result;
 		}
 
-		// ---- 3. register + compile ----------------------------------------------------
+		// ---- 2. register each new file once (engine state - main thread only) ----------
+		await SwitchToMainThread();
+
+		foreach ( var dmxPath in dmxPaths )
+			Try( () => AssetSystem.RegisterFile( dmxPath ) );
+
 		result.VmdlAsset = AssetSystem.RegisterFile( result.VmdlPath );
 		if ( result.VmdlAsset is null )
 		{
@@ -164,14 +284,29 @@ public static class EditorPipeline
 			return result;
 		}
 
+		// ---- 3. settle, then compile ONCE (single retry on abandoned recompile) --------
+		await Task.Delay( InputSettleDelayMs );
+
+		var vmdlFileName = Path.GetFileName( result.VmdlPath );
 		var logOffset = SboxLogLength();
 		result.Compiled = await CompileAndWaitAsync( result.VmdlAsset );
+
+		if ( !result.Compiled && LogSliceShowsAbandonedRecompile( logOffset, vmdlFileName ) )
+		{
+			Log.Warning( $"[humanoid-retargeter] engine abandoned the recompile of {vmdlFileName} "
+				+ "(inputs not quiet) - retrying once after a settle delay" );
+			await Task.Delay( InputSettleDelayMs );
+			logOffset = SboxLogLength();
+			result.Compiled = await CompileAndWaitAsync( result.VmdlAsset );
+		}
+
+		await SwitchToMainThread();
 		result.CompiledFile = Try( () => result.VmdlAsset.GetCompiledFile( true ) );
 		if ( !result.Compiled )
 		{
 			var detail = TryReadCompileErrors( logOffset,
 				successful.Select( c => c.DmxFileName )
-					.Append( Path.GetFileName( result.VmdlPath ) ).ToList() );
+					.Append( vmdlFileName ).ToList() );
 			result.Errors.Add( detail is null
 				? $"vmdl did not compile: {result.VmdlAsset.Path} (see console for resourcecompiler output)."
 				: $"vmdl did not compile: {result.VmdlAsset.Path}\n{detail}" );
@@ -207,7 +342,7 @@ public static class EditorPipeline
 		}
 	}
 
-	static long SboxLogLength()
+	internal static long SboxLogLength()
 	{
 		try
 		{
@@ -220,9 +355,9 @@ public static class EditorPipeline
 		}
 	}
 
-	/// <summary>Reads the log slice written since <paramref name="fromOffset"/> and returns
-	/// the lines that look like compiler errors for our files, or null when none found.</summary>
-	static string TryReadCompileErrors( long fromOffset, IReadOnlyList<string> fileNames )
+	/// <summary>Reads the raw log slice written since <paramref name="fromOffset"/>, or null
+	/// when the log is unreachable.</summary>
+	internal static string ReadLogSlice( long fromOffset )
 	{
 		try
 		{
@@ -235,7 +370,38 @@ public static class EditorPipeline
 				fromOffset = 0; // log was truncated/recreated
 			fs.Seek( fromOffset, SeekOrigin.Begin );
 			using var reader = new StreamReader( fs );
-			var slice = reader.ReadToEnd().Split( '\n' );
+			return reader.ReadToEnd();
+		}
+		catch
+		{
+			return null;
+		}
+	}
+
+	/// <summary>True when the per-run log slice since <paramref name="fromOffset"/> shows
+	/// the engine abandoning the recompile of <paramref name="vmdlFileName"/> because its
+	/// inputs would not go quiet.</summary>
+	internal static bool LogSliceShowsAbandonedRecompile( long fromOffset, string vmdlFileName )
+	{
+		var slice = ReadLogSlice( fromOffset );
+		if ( slice is null )
+			return false;
+
+		return slice.Split( '\n' ).Any( l =>
+			l.Contains( "abandoning recompile", StringComparison.OrdinalIgnoreCase )
+			&& l.Contains( vmdlFileName, StringComparison.OrdinalIgnoreCase ) );
+	}
+
+	/// <summary>Reads the log slice written since <paramref name="fromOffset"/> and returns
+	/// the lines that look like compiler errors for our files, or null when none found.</summary>
+	static string TryReadCompileErrors( long fromOffset, IReadOnlyList<string> fileNames )
+	{
+		try
+		{
+			var raw = ReadLogSlice( fromOffset );
+			if ( raw is null )
+				return null;
+			var slice = raw.Split( '\n' );
 
 			var interesting = slice
 				.Select( l => l.TrimEnd( '\r' ) )
@@ -259,9 +425,13 @@ public static class EditorPipeline
 
 	/// <summary>Kicks a full compile and polls until the compiled file exists or the asset
 	/// reports failure (same strategy as the M0 gate - the most honest signal is the
-	/// .vmdl_c on disk).</summary>
+	/// .vmdl_c on disk). Safe to call from any thread: the compile trigger and every
+	/// <see cref="Asset"/> state query are marshalled to the editor main thread
+	/// (<see cref="SwitchToMainThread"/>) because <c>Task.Delay</c> continuations may
+	/// resume on a pool thread, and engine objects must never be touched there.</summary>
 	public static async Task<bool> CompileAndWaitAsync( Asset asset, float timeoutSeconds = 120 )
 	{
+		await SwitchToMainThread();
 		try
 		{
 			asset.Compile( full: true );
@@ -276,6 +446,7 @@ public static class EditorPipeline
 		var sw = Stopwatch.StartNew();
 		while ( sw.Elapsed.TotalSeconds < timeoutSeconds )
 		{
+			await SwitchToMainThread();
 			if ( Try( () => asset.IsCompileFailed ) )
 				return false;
 			if ( Try( () => asset.IsCompiled && asset.HasCompiledFile ) )

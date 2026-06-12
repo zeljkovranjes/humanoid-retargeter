@@ -63,6 +63,10 @@ public static class M0Gate
 		Flush();
 		Note( $"M0 gate finished, passed={Result.passed}" );
 
+		// A leaked env var in a real session must never quit the user's editor.
+		if ( Result.refusedWrongProject )
+			return;
+
 		// Give the driver a moment to see the completed file, then exit cleanly.
 		await Task.Delay( 1000 );
 		try
@@ -94,6 +98,20 @@ public static class M0Gate
 
 		var project = Project.Current;
 		Result.projectPath = project.GetRootPath();
+
+		// Never touch a real session: only the hr-editor-rig scratch project is fair game.
+		// (Observed failure mode: gate env vars leaking into a user-launched editor wrote
+		// m0/ outputs into whatever project happened to be open - including the citizen
+		// addon inside the s&box install.)
+		if ( (Result.projectPath ?? "").IndexOf( "hr-editor-rig", StringComparison.OrdinalIgnoreCase ) < 0 )
+		{
+			Result.refusedWrongProject = true;
+			Note( $"REFUSING to run: open project '{Result.projectPath}' is not the hr-editor-rig "
+				+ "scratch (leaked HR_M0_RESULT env var?) - aborting without touching the project" );
+			Flush();
+			return;
+		}
+
 		var assetsPath = project.GetAssetsPath();
 		Note( $"project={Result.projectPath} assets={assetsPath}" );
 
@@ -331,6 +349,7 @@ public static class M0Gate
 		public int animationCount { get; set; }
 		public string[] animationNames { get; set; } = Array.Empty<string>();
 		public bool sequenceVisible { get; set; }
+		public bool refusedWrongProject { get; set; }
 		public bool completed { get; set; }
 		public bool passed { get; set; }
 		public System.Collections.Generic.List<string> log { get; set; } = new();

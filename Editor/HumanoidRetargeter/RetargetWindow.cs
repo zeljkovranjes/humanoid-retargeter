@@ -312,9 +312,10 @@ public sealed class RetargetWindow : Widget
 
 			SetStatus( $"Loading {System.IO.Path.GetFileName( path )}…", Theme.Blue );
 
-			// Parse off the UI thread; the await resumes on the editor main thread (the same
-			// dispatch pattern the convert/preview paths use), where the UI is updated.
+			// Parse off the UI thread; Task.Run continuations are not guaranteed to resume
+			// on the editor main thread, so hop back explicitly before touching the UI.
 			var entry = await Task.Run( () => SourceFileEntry.Load( path, assetsPath ) );
+			await EditorPipeline.SwitchToMainThread();
 
 			if ( !this.IsValid() )
 				return; // window closed while loading
@@ -392,9 +393,11 @@ public sealed class RetargetWindow : Widget
 		try
 		{
 			result = await Task.Run( () => Retargeter.Convert( request, target.Spec ) );
+			await EditorPipeline.SwitchToMainThread();
 		}
 		catch ( Exception e )
 		{
+			await EditorPipeline.SwitchToMainThread();
 			entry.Status = EntryStatus.Failed;
 			entry.StatusDetail = e.Message;
 			RefreshAll();
@@ -471,6 +474,43 @@ public sealed class RetargetWindow : Widget
 			System.Globalization.CultureInfo.InvariantCulture, out var v ) && v > 0f
 			? v : null;
 
+	/// <summary>
+	/// The convert pipeline shared by the Convert All button and the UI smoke gate
+	/// (HR_UI_SMOKE_AUGMENT drives this exact path headlessly): the heavy pure-C# batch
+	/// conversion runs on a background task, everything that touches engine state
+	/// (asset registration, compiling) is marshalled to the editor main thread inside
+	/// <see cref="EditorPipeline.WriteAndCompileAsync"/>. <paramref name="batchReady"/>
+	/// fires on the main thread between the two stages (progress/status updates).
+	/// Returns a null Write when augmenting was requested but the batch produced no
+	/// augmented vmdl - nothing is written then (no silent standalone fallback).
+	/// The returned task completes on the editor main thread.
+	/// </summary>
+	internal static async Task<(HumanoidRetargeter.RetargetBatchResult Batch, EditorPipeline.WriteResult Write)>
+		ConvertAndWriteAsync(
+			IReadOnlyList<HumanoidRetargeter.RetargetRequest> requests,
+			TargetPickers.ResolvedTarget target,
+			HumanoidRetargeter.BatchOptions options,
+			string augmentVmdlPath,
+			Action<HumanoidRetargeter.RetargetBatchResult> batchReady = null )
+	{
+		// Heavy, engine-free math: off the main thread so the editor stays responsive.
+		var batch = await Task.Run( () => Retargeter.ConvertBatch( requests, target.Spec, options ) );
+
+		// Task.Run continuations are not guaranteed to resume on the editor main thread;
+		// everything from here on may touch widgets/assets, so hop explicitly.
+		await EditorPipeline.SwitchToMainThread();
+		batchReady?.Invoke( batch );
+
+		// Augment requested but no augmented vmdl produced: fail before anything is written.
+		if ( options.AugmentVmdlText is not null && batch.AugmentedVmdl is null )
+			return (batch, null);
+
+		var write = await EditorPipeline.WriteAndCompileAsync(
+			batch, options.DmxFolderRelative, augmentVmdlPath );
+		await EditorPipeline.SwitchToMainThread();
+		return (batch, write);
+	}
+
 	async Task ConvertEntriesAsync( IReadOnlyList<SourceFileEntry> only )
 	{
 		if ( _converting )
@@ -498,6 +538,12 @@ public sealed class RetargetWindow : Widget
 				return;
 			}
 			augmentPath = _augmentAsset.AbsolutePath;
+			if ( EditorPipeline.IsUnderEngineInstall( augmentPath ) )
+			{
+				SetStatus( "Cannot modify models inside the s&box installation - "
+					+ "copy the model into your project first.", Theme.Red );
+				return;
+			}
 			try
 			{
 				augmentText = File.ReadAllText( augmentPath );
@@ -528,21 +574,26 @@ public sealed class RetargetWindow : Widget
 			};
 			var target = _target;
 
-			var batch = await Task.Run( () => Retargeter.ConvertBatch( requests, target.Spec, options ) );
-			_progress = 0.55f;
-			_progressBar.Update();
+			var (batch, write) = await ConvertAndWriteAsync( requests, target, options, augmentPath,
+				batchReady: b =>
+				{
+					_progress = 0.55f;
+					_progressBar.Update();
 
-			ApplyClipResults( list, batch.Clips );
-			RefreshAll();
+					ApplyClipResults( list, b.Clips );
+					RefreshAll();
 
-			// Batch-level problems (clip failures, augmentation failures) go to the log in
-			// full; the status strip shows the first one.
-			foreach ( var error in batch.Errors )
-				Log.Warning( $"[humanoid-retargeter] {error}" );
+					// Batch-level problems (clip failures, augmentation failures) go to the
+					// log in full; the status strip shows the first one.
+					foreach ( var error in b.Errors )
+						Log.Warning( $"[humanoid-retargeter] {error}" );
+
+					SetStatus( "Compiling…", Theme.Blue );
+				} );
 
 			// Augment requested but no augmented vmdl produced: the operation FAILS - never
 			// silently write a standalone vmdl the user did not ask for.
-			if ( augmentText is not null && batch.AugmentedVmdl is null )
+			if ( write is null )
 			{
 				var detail = batch.Errors.FirstOrDefault(
 					e => e.Contains( "augment", StringComparison.OrdinalIgnoreCase ) )
@@ -557,9 +608,6 @@ public sealed class RetargetWindow : Widget
 				return;
 			}
 
-			SetStatus( "Compiling…", Theme.Blue );
-
-			var write = await EditorPipeline.WriteAndCompileAsync( batch, outputFolder, augmentPath );
 			_progress = 1f;
 
 			// The heavy payloads (DMX text + solved frames) are on disk now; previews
@@ -591,6 +639,8 @@ public sealed class RetargetWindow : Widget
 		}
 		catch ( Exception e )
 		{
+			// The exception may surface on a pool thread - back to main before touching UI.
+			await EditorPipeline.SwitchToMainThread();
 			foreach ( var entry in list.Where( x => x.Status == EntryStatus.Converting ) )
 			{
 				entry.Status = EntryStatus.Failed;
