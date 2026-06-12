@@ -107,6 +107,7 @@ public sealed class RetargetWindow : Widget
 		top.Add( new Label( this ) { Text = "Target:" } );
 		var targetCombo = top.Add( new ComboBox( this ) { MinimumWidth = 190 } );
 		targetCombo.AddItem( "s&box Human (default)", "person", TrySelectSboxTarget, selected: true );
+		targetCombo.AddItem( "s&box Citizen (classic)", "person_outline", TrySelectSboxCitizenTarget );
 		targetCombo.AddItem( "Custom model (.vmdl)…", "view_in_ar", PickCustomModelTarget );
 		targetCombo.AddItem( "Custom FBX…", "category", PickCustomFbxTarget );
 
@@ -212,6 +213,21 @@ public sealed class RetargetWindow : Widget
 		try
 		{
 			_target = TargetPickers.SboxDefault();
+			_targetError = null;
+		}
+		catch ( Exception e )
+		{
+			_target = null;
+			_targetError = e.Message;
+		}
+		RefreshStatus();
+	}
+
+	void TrySelectSboxCitizenTarget()
+	{
+		try
+		{
+			_target = TargetPickers.SboxCitizen();
 			_targetError = null;
 		}
 		catch ( Exception e )

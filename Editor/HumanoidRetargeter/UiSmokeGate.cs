@@ -82,7 +82,7 @@ public static class UiSmokeGate
 		Result.completed = true;
 		Result.passed = Result.dmxVmdlCompiled && Result.sequenceVisible
 			&& Result.previewWidgetOk && Result.userPresetRoundTrip
-			&& Result.dlSolverOk
+			&& Result.dlSolverOk && Result.citizenTargetOk
 			&& (!Result.augmentMode || Result.augmentOk);
 		Flush();
 		Note( $"UI smoke gate finished, passed={Result.passed}" );
@@ -328,6 +328,30 @@ public static class UiSmokeGate
 			Note( "DL solver smoke skipped: weight asset not found" );
 		}
 
+		// ---- 6.6 classic citizen target: picker path + in-memory conversion ------
+		// (Built-in 4-finger target. Kept cheap and disk-free: resolve via the window's
+		// picker path and convert once in memory - the compile cycle below stays on the
+		// default target so this step cannot disturb it.)
+		try
+		{
+			var citizen = TargetPickers.SboxCitizen();
+			var citizenBatch = await Task.Run( () => Retargeter.ConvertBatch(
+				new[] { request }, citizen.Spec,
+				new BatchOptions { DmxFolderRelative = OutputFolder } ) );
+			var citizenClip = citizenBatch.Clips.FirstOrDefault( c => c.Success );
+			Result.citizenTargetOk = citizenClip is not null
+				&& citizenClip.DmxContent.Contains( "spine_0_p" )      // citizen channel pair present
+				&& !citizenClip.DmxContent.Contains( "finger_pinky" ); // no pinky bones on this rig
+			Note( $"citizen target: '{citizen.Description}' clips={citizenBatch.Clips.Count} "
+				+ $"errors={citizenBatch.Errors.Count} ok={Result.citizenTargetOk}" );
+		}
+		catch ( Exception e )
+		{
+			Result.citizenTargetOk = false;
+			Note( $"citizen target FAILED: {e}" );
+		}
+		Flush();
+
 		// ---- 7. write + register + compile (the window's convert path) ---------
 		var write = await EditorPipeline.WriteAndCompileAsync(
 			batch, OutputFolder, augmentVmdlPath: null, standaloneVmdlName: "ui_smoke_retargeted" );
@@ -539,6 +563,7 @@ public static class UiSmokeGate
 		public string previewPelvisRest { get; set; }
 		public bool userPresetRoundTrip { get; set; }
 		public bool dlSolverOk { get; set; }
+		public bool citizenTargetOk { get; set; }
 		public int dmxFilesWritten { get; set; }
 		public string vmdlPath { get; set; }
 		public bool assetRegistered { get; set; }

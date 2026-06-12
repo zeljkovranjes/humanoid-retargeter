@@ -29,12 +29,19 @@ public static partial class SboxBoneClassifier
     private static readonly Regex AimMatrixPrefixRegex = new(@"^aim_matrix_");
     private static Regex AimMatrixPrefix() => AimMatrixPrefixRegex;
 
+    // Face bones on the classic citizen rig (eye_L/R, ear_L/R, face_lid_*): the engine
+    // drives them at runtime (eye look-at, blinking) — the retargeter must not write
+    // channels for them, exactly like the twist/helper bones.
+    private static readonly Regex FacePrefixRegex = new(@"^(eye|ear|face)_");
+    private static Regex FacePrefix() => FacePrefixRegex;
+
     /// <summary>Classifies an s&amp;box rig bone by name.</summary>
     public static BoneClass Classify(string name)
     {
         ArgumentNullException.ThrowIfNull(name);
 
-        if (TwistSuffix().IsMatch(name) || ConstraintHelper().IsMatch(name) || name == "neck_clothing")
+        if (TwistSuffix().IsMatch(name) || ConstraintHelper().IsMatch(name) || name == "neck_clothing"
+            || FacePrefix().IsMatch(name))
             return BoneClass.ConstraintDriven;
 
         if (name == "root_IK" || name == "hold_L" || name == "hold_R"

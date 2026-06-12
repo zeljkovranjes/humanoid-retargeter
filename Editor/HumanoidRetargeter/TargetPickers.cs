@@ -65,6 +65,20 @@ public static class TargetPickers
 		};
 	}
 
+	/// <summary>The classic (4-finger) s&amp;box citizen target. Throws when the rig JSON is
+	/// missing. Pinky roles stay unassigned on this rig (it has no pinky bones).</summary>
+	public static ResolvedTarget SboxCitizen()
+	{
+		var spec = EditorPipeline.LoadSboxCitizenTarget();
+		return new ResolvedTarget
+		{
+			Spec = spec,
+			Description = "s&box Citizen (classic)",
+			PreviewModelPath = RetargetTargetSpec.SboxCitizenPath,
+			PreviewPositionScale = RetargetTargetSpec.SboxSourceScale,
+		};
+	}
+
 	/// <summary>
 	/// Builds a target from a compiled model asset (vmdl): skeleton from
 	/// <c>Model.Bones</c> (engine units → VmdlScale 1.0), roles from preset detection /

@@ -65,13 +65,19 @@ public sealed class BoneClassRules
     private static readonly Regex IkRegex = new(
         @"_ik_|_ik$|^ik_|ik_target|ikrule|aim_matrix|^hold_", RegexOptions.IgnoreCase);
 
+    // Face bones (classic citizen eye_L/R, ear_L/R, face_lid_*): no BoneRole exists for
+    // them and the engine drives them procedurally at runtime (eye look-at, blinking) —
+    // the retargeter must not pin them with rest channels (SboxBoneClassifier agrees).
+    private static readonly Regex FaceRegex = new(@"^(eye|ear|face)_", RegexOptions.IgnoreCase);
+
     /// <summary>Classifies a bone of an arbitrary humanoid rig by name.</summary>
     public BoneClass Classify(string boneName)
     {
         ArgumentNullException.ThrowIfNull(boneName);
 
         if (ConstraintDrivenLiterals.Contains(boneName)
-            || HasTwistOrRollToken(boneName) || HelperRegex.IsMatch(boneName))
+            || HasTwistOrRollToken(boneName) || HelperRegex.IsMatch(boneName)
+            || FaceRegex.IsMatch(boneName))
             return BoneClass.ConstraintDriven;
 
         if (IkRegex.IsMatch(boneName))

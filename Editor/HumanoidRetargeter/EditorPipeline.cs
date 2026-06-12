@@ -116,6 +116,9 @@ public static class EditorPipeline
 	/// <summary>Assets-relative path of the committed s&amp;box target rig definition.</summary>
 	public const string TargetRigJsonRelative = "humanoid_retargeter/target_rig_sbox.json";
 
+	/// <summary>Assets-relative path of the committed classic (4-finger) citizen target rig definition.</summary>
+	public const string CitizenTargetRigJsonRelative = "humanoid_retargeter/target_rig_sbox_citizen.json";
+
 	/// <summary>
 	/// Finds a file shipped in this library's Assets folder. Works both when the library
 	/// is the open project and when it is installed under <c>Libraries/</c> of a game
@@ -156,6 +159,20 @@ public static class EditorPipeline
 		// DL weights ride along when the committed model asset exists (enables the
 		// deep-learning fallback solver; null keeps everything else working without it).
 		return RetargetTargetSpec.SboxDefault( File.ReadAllText( path ), DlAssets.TryLoadWeights() );
+	}
+
+	/// <summary>
+	/// Loads the classic (4-finger) s&amp;box citizen target
+	/// (rig JSON → <see cref="RetargetTargetSpec.SboxCitizen"/>). Throws
+	/// <see cref="FileNotFoundException"/> when the rig JSON is not reachable from
+	/// the current project.
+	/// </summary>
+	public static RetargetTargetSpec LoadSboxCitizenTarget()
+	{
+		var path = FindLibraryAssetFile( CitizenTargetRigJsonRelative )
+			?? throw new FileNotFoundException(
+				$"Citizen target rig definition not found ({CitizenTargetRigJsonRelative}). Is the humanoid_retargeter library installed?" );
+		return RetargetTargetSpec.SboxCitizen( File.ReadAllText( path ), DlAssets.TryLoadWeights() );
 	}
 
 	/// <summary>Disk + asset-system outcome of one conversion run.</summary>

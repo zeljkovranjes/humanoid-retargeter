@@ -140,6 +140,9 @@ public sealed class RetargetTargetSpec
     /// <summary>The committed asset path of the s&amp;box human male model.</summary>
     public const string SboxHumanMalePath = "models/citizen_human/citizen_human_male.vmdl";
 
+    /// <summary>The committed asset path of the classic (4-finger) s&amp;box citizen model.</summary>
+    public const string SboxCitizenPath = "models/citizen/citizen.vmdl";
+
     /// <summary>Target rig (skeleton + bone classes + roles).</summary>
     public required TargetRig Rig { get; init; }
 
@@ -184,6 +187,24 @@ public sealed class RetargetTargetSpec
         VmdlScale = SboxSourceScale,
         BaseModelPath = SboxHumanMalePath,
         DefaultRootBone = "pelvis",
+        DlWeights = dlWeights,
+    };
+
+    /// <summary>
+    /// The classic (4-finger) s&amp;box citizen target: rig parsed from the committed
+    /// <c>Assets/humanoid_retargeter/target_rig_sbox_citizen.json</c> text (callers do the
+    /// file IO), 0.3937 vmdl scale, citizen base model, pelvis root, Y-up cm. The rig has no
+    /// pinky bones, so pinky roles stay unassigned — the engine's own constraints handle the
+    /// pinky at runtime for models that have one. Pass the committed SAME weight bytes as
+    /// <paramref name="dlWeights"/> to enable the deep-learning solver.
+    /// </summary>
+    public static RetargetTargetSpec SboxCitizen(string targetRigJson, byte[]? dlWeights = null) => new()
+    {
+        Rig = TargetRig.Load(targetRigJson),
+        VmdlScale = SboxSourceScale,
+        BaseModelPath = SboxCitizenPath,
+        DefaultRootBone = "pelvis",
+        UpAxis = TargetUpAxis.YUpCm,
         DlWeights = dlWeights,
     };
 }
