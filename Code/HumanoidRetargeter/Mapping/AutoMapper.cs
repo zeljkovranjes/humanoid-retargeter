@@ -54,6 +54,14 @@ public static class AutoMapper
     private static readonly string[] ExcludedTokens =
         { "twist", "roll", "share", "helper", "ik", "end", "nub", "tip", "dummy", "null" };
 
+    /// <summary>
+    /// Tokens dropped while building the core (the bone is still considered): Auto-Rig Pro
+    /// exports center bones with an <c>.x</c> suffix (<c>spine_01.x</c>, <c>neck.x</c>) and
+    /// names the deform limb bones <c>*_stretch</c> (<c>thigh_stretch.l</c>,
+    /// <c>arm_stretch.l</c>) — both are naming decoration, not identity.
+    /// </summary>
+    private static readonly string[] IgnoredCoreTokens = { "x", "stretch" };
+
     private static readonly string[] HipsCores = { "hips", "hip", "pelvis" };
     private static readonly string[] SpineCores = { "spine", "chest", "torso", "waist" };
     private static readonly string[] ClavicleCores = { "shoulder", "clavicle", "collar", "collarbone" };
@@ -82,6 +90,7 @@ public static class AutoMapper
             ["Foot"] = NewSided(), ["Toe"] = NewSided(),
         };
         var bareLeg = NewSided();
+        var rootCandidates = new List<NameInfo>();
         var fingers = new Dictionary<(string Finger, SideTag Side), List<NameInfo>>();
 
         for (var i = 0; i < skeleton.Count; i++)
@@ -103,6 +112,8 @@ public static class AutoMapper
                 }
                 if (LeftTokens.Contains(token) || RightTokens.Contains(token))
                     continue;
+                if (IgnoredCoreTokens.Contains(token))
+                    continue;
                 coreBuilder.Append(token);
             }
             var core = coreBuilder.ToString();
@@ -113,6 +124,7 @@ public static class AutoMapper
             var info = new NameInfo(i, resolvedSide, core, digit);
 
             if (HipsCores.Contains(core)) { hips.Add(info); continue; }
+            if (core == "root") { rootCandidates.Add(info); continue; }
             if (SpineCores.Contains(core)) { spine.Add(info); continue; }
             if (core == "neck") { neck.Add(info); continue; }
             if (core == "head") { head.Add(info); continue; }
@@ -192,6 +204,36 @@ public static class AutoMapper
                     continue;
                 var role = Enum.Parse<BoneRole>(family + side);
                 map[role] = ResolvePreferAncestor(skeleton, bucket, result, role.ToString());
+            }
+        }
+
+        // -------- hips fallback for rigs without a hips/pelvis name: Auto-Rig Pro calls the
+        // pelvis "root.x" (under a ground bone "root"). Only when the primary cores found
+        // nothing, pick the DEEPEST "root"-named bone that is still an ancestor of every
+        // mapped upper leg / spine start — that is the actual pelvis, not the ground root.
+        if (!map.ContainsKey(BoneRole.Hips) && rootCandidates.Count > 0)
+        {
+            var anchors = new List<int>();
+            if (map.TryGetValue(BoneRole.UpperLegL, out var legL)) anchors.Add(legL);
+            if (map.TryGetValue(BoneRole.UpperLegR, out var legR)) anchors.Add(legR);
+            if (map.TryGetValue(BoneRole.Spine0, out var spine0)) anchors.Add(spine0);
+            if (anchors.Count > 0)
+            {
+                NameInfo? pick = null;
+                foreach (var candidate in rootCandidates)
+                {
+                    if (!anchors.All(a => IsAncestor(skeleton, candidate.Index, a)))
+                        continue;
+                    if (pick is null || Depth(skeleton, candidate.Index) > Depth(skeleton, pick.Value.Index))
+                        pick = candidate;
+                }
+                if (pick is { } hipsPick)
+                {
+                    map[BoneRole.Hips] = hipsPick.Index;
+                    result.Notes.Add(
+                        $"Hips mapped to '{skeleton[hipsPick.Index].Name}': no hips/pelvis-named bone "
+                        + "found; used the deepest 'root' bone above the mapped legs/spine.");
+                }
             }
         }
 
