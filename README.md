@@ -52,11 +52,11 @@ No NuGet packages, no native DLLs, no Python, no external tools.
   (immune to bone-roll conventions), A/T-pose rest normalization on both rigs, exact
   identity on same-rig round-trips (≤ 0.00025°), spine chain interpolation (3–5 source
   spine bones → target), finger curl/splay transfer, hip-height-scaled root translation.
-- **Natural shoulder/neck carriage** (option, on by default): clavicles and neck keep the
-  target body's own posture and receive only the source's motion — fixes the slumped
-  shoulders / hunched neck look that exact direction-copying produces on
-  differently-proportioned rigs. Toe-less sources automatically get the same treatment
-  for feet (no more heel-standing).
+- **Natural shoulder/neck/foot carriage** (option, on by default): clavicles, neck and
+  feet keep the target body's own posture/ankle anatomy and receive only the source's
+  motion — fixes the slumped shoulders / hunched neck / bent-up planted feet look that
+  exact direction-copying produces on differently-proportioned rigs. Toe-less sources
+  automatically get the same treatment (no more heel-standing).
 - **Deep-learning solver** (experimental): a pure-C# implementation of SAME
   (skeleton-agnostic motion embedding) running the pretrained checkpoint — no mapping
   needed at all. Offered in the no-profile dialog; after previewing, it can derive and
@@ -64,7 +64,8 @@ No NuGet packages, no native DLLs, no Python, no external tools.
   geometric path. *(Weights ship in `Assets/humanoid_retargeter/dl/`; see ATTRIBUTION —
   CC BY-NC 4.0, non-commercial.)*
 - **Cleanup passes**: Kovar foot-plant correction (anti foot-skate with plant detection,
-  blending, and knee-pop-free stretch), optional arm effector IK, root motion
+  blending, and knee-pop-free stretch), grounded-foot stance recalibration (levels planted
+  soles when a source ships a non-stance rest pose), optional arm effector IK, root motion
   keep / strip-in-place / extract-to-root.
 - **s&box-exact IK helper bones**: `root_IK`, hand/foot IK targets, and `ikrule` bones are
   baked with the exact relationships Facepunch's own clips use (reverse-engineered to

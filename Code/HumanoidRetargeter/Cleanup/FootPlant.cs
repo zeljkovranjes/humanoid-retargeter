@@ -161,6 +161,41 @@ public static class FootPlant
         return report;
     }
 
+    /// <summary>
+    /// Detection-only entry point — steps (a)+(b) of <see cref="Apply"/> (robust ground
+    /// estimate, then per-foot hysteresis detection) without modifying anything. Used by
+    /// callers that need plant intervals from a DIFFERENT clip than the one they correct:
+    /// the grounded-foot stance alignment (<see cref="FootGroundAlign"/>) detects plants on
+    /// the SOURCE clip (ground truth; the target-side trajectories may sit outside the
+    /// cm-tuned thresholds after hip-height scaling) and applies them to the 1:1 solved
+    /// target frames.
+    /// </summary>
+    public static (List<FrameRange> Left, List<FrameRange> Right) DetectPlantIntervals(
+        List<XForm[]> frames,
+        SkeletonModel skeleton,
+        FootChain left,
+        FootChain right,
+        Vector3 up,
+        float fps,
+        FootPlantOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(frames);
+        ArgumentNullException.ThrowIfNull(skeleton);
+        ArgumentNullException.ThrowIfNull(left);
+        ArgumentNullException.ThrowIfNull(right);
+
+        options ??= new FootPlantOptions();
+        if (frames.Count == 0 || up.LengthSquared() < 1e-12f || fps <= 0f)
+            return (new List<FrameRange>(), new List<FrameRange>());
+        up = Vector3.Normalize(up);
+
+        var ankleL = AnkleWorldPositions(frames, skeleton, left.Ankle);
+        var ankleR = AnkleWorldPositions(frames, skeleton, right.Ankle);
+        var ground = EstimateGround(ankleL, ankleR, up);
+        return (DetectPlants(ankleL, up, ground, fps, options),
+                DetectPlants(ankleR, up, ground, fps, options));
+    }
+
     private static void ProcessFoot(
         List<XForm[]> frames, SkeletonModel skeleton, FootChain chain, Vector3[] ankle,
         Vector3 up, float fps, float ground, FootPlantOptions options, FootPlantFootReport report,

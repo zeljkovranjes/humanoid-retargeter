@@ -505,6 +505,15 @@ public static class Retargeter
         {
             if (context.Up is { } up && context.FootChains is { } feet)
             {
+                // Grounded stance alignment first: levels planted soles against the ground
+                // (removes the stance offset a non-stance source rest leaves in the solver's
+                // rest-relative foot transfer). Plants are detected on the SOURCE clip —
+                // ground truth; hip-height rescaling can push the solved target trajectories
+                // outside the cm-tuned Kovar thresholds. Composes with the position pinning
+                // below (this rotates feet about their own joints; the pinning preserves
+                // foot world rotations).
+                GroundAlignFeet(frames, scene, map, target.Rig.Skeleton, feet, up, solved.Fps, take);
+
                 // Default plant thresholds are cm-tuned; engine-space rigs are in inches, so
                 // scale them by the cm→inch factor to keep the same physical sensitivity.
                 var footPlantOptions = new FootPlantOptions();
@@ -571,6 +580,94 @@ public static class Retargeter
             "Deep-learning solver (SAME, experimental): skeleton-agnostic — per-role mapping "
             + "is not used (hips/alignment heuristics only); finger bones stay at rest.");
         return context.GetDlSolver(target.DlWeights);
+    }
+
+    /// <summary>
+    /// Normalized-rest foot pitch beyond which (toe approaching/above ankle level) the rest
+    /// cannot be a flat stance — measured stance rests sit at −11°…−51°; the repro artifact
+    /// rig measured +2.7° on one foot.
+    /// </summary>
+    private const float StancePitchMaxDeg = -5f;
+
+    /// <summary>Left/right normalized-rest foot pitch asymmetry beyond which the rest is not
+    /// a (symmetric) stance — measured stance rests differ ≤ 2.4°; the repro artifact rig
+    /// 13.8°.</summary>
+    private const float StancePitchAsymmetryDeg = 6f;
+
+    /// <summary>
+    /// The grounded-foot stance recalibration step (<see cref="FootGroundAlign"/>). Runs ONLY
+    /// when the source's NORMALIZED rest — the solver's delta reference — is implausible as a
+    /// flat stance (a foot's toe at/above ankle level, or the two feet resting asymmetrically;
+    /// both measured on the repro rig, where T-pose normalization of a bent-leg rest swings
+    /// the feet 14–26° away from the rig's true stance). On plausible stance rests the solver's
+    /// rest-relative foot transfer is already faithful, and planted-sole deviations are
+    /// genuine articulation (boxing stances, heel rolls) that must NOT be flattened. Plant
+    /// intervals are detected on the SOURCE clip (cm space, default Kovar thresholds).
+    /// Best-effort — silently skipped when the source maps no complete leg chains + toes or a
+    /// character frame is not computable (the foot transfer is then simply left as solved).
+    /// </summary>
+    private static void GroundAlignFeet(
+        List<XForm[]> frames, SourceScene scene, MappingResult map, SkeletonModel targetSkeleton,
+        (FootChain Left, FootChain Right) targetFeet, Vector3 targetUp, float fps, int take)
+    {
+        FootChain? SourceChain(BoneRole upper, BoneRole lower, BoneRole foot, BoneRole toe)
+            => map.RoleToBone.TryGetValue(upper, out var hip)
+               && map.RoleToBone.TryGetValue(lower, out var knee)
+               && map.RoleToBone.TryGetValue(foot, out var ankle)
+                ? new FootChain
+                {
+                    Hip = hip,
+                    Knee = knee,
+                    Ankle = ankle,
+                    Toe = map.RoleToBone.TryGetValue(toe, out var t) ? t : null,
+                }
+                : null;
+
+        var srcLeft = SourceChain(BoneRole.UpperLegL, BoneRole.LowerLegL, BoneRole.FootL, BoneRole.ToeL);
+        var srcRight = SourceChain(BoneRole.UpperLegR, BoneRole.LowerLegR, BoneRole.FootR, BoneRole.ToeR);
+        if (srcLeft?.Toe is not int srcToeL || srcRight?.Toe is not int srcToeR)
+            return; // toe-less sources take the solver's virtual-foot fallback instead
+
+        // ---- rest-stance plausibility (normalized rest, the solver's delta reference) ----
+        float pitchL, pitchR;
+        Vector3 srcUp;
+        try
+        {
+            var (srcNorm, _) = RestNormalizer.Normalize(scene.Skeleton, map);
+            var srcCanon = CanonicalFrames.Build(scene.Skeleton, map, srcNorm.WorldRest);
+            srcUp = Vector3.Normalize(srcCanon.CharacterUp);
+
+            float RestPitchDeg(int foot, int toe)
+            {
+                var dir = srcNorm.WorldRest[toe].Pos - srcNorm.WorldRest[foot].Pos;
+                if (dir.LengthSquared() < 1e-8f)
+                    return 0f;
+                var s = Vector3.Dot(Vector3.Normalize(dir), srcUp);
+                return MathF.Asin(Math.Clamp(s, -1f, 1f)) * (180f / MathF.PI);
+            }
+
+            pitchL = RestPitchDeg(srcLeft.Ankle, srcToeL);
+            pitchR = RestPitchDeg(srcRight.Ankle, srcToeR);
+        }
+        catch (ArgumentException)
+        {
+            return;
+        }
+
+        var restIsStance = pitchL < StancePitchMaxDeg && pitchR < StancePitchMaxDeg
+            && MathF.Abs(pitchL - pitchR) <= StancePitchAsymmetryDeg;
+        if (restIsStance)
+            return;
+
+        var srcFrames = scene.Clips[take].Frames;
+        var (plantsL, plantsR) = FootPlant.DetectPlantIntervals(
+            srcFrames, scene.Skeleton, srcLeft, srcRight, srcUp, fps);
+        if (plantsL.Count == 0 && plantsR.Count == 0)
+            return;
+
+        FootGroundAlign.Apply(
+            frames, targetSkeleton, targetFeet.Left, targetFeet.Right, targetUp,
+            plantsL, plantsR);
     }
 
     private static void ApplyRootMotion(
