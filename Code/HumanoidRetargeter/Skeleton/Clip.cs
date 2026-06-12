@@ -17,6 +17,15 @@ public sealed class Clip
     /// <summary>Sample rate in frames per second.</summary>
     public float Fps { get; }
 
+    /// <summary>
+    /// Native frame rate of the take in the SOURCE file (FBX GlobalSettings
+    /// TimeMode/CustomFrameRate, BVH 1/FrameTime). External frame ranges — Unity
+    /// <c>.fbx.meta</c> <c>clipAnimations</c> definitions — are expressed in THIS rate, so
+    /// they must be rescaled by <c>Fps / NativeFps</c> to index the resampled
+    /// <see cref="Frames"/>. Equals <see cref="Fps"/> when the importer records no native rate.
+    /// </summary>
+    public float NativeFps { get; }
+
     /// <summary>Whether the clip is authored to loop.</summary>
     public bool Looping { get; }
 
@@ -42,16 +51,22 @@ public sealed class Clip
     }
 
     /// <summary>Creates a clip wrapping an existing frame list (not copied).</summary>
-    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="fps"/> is not positive.</exception>
-    public Clip(string name, float fps, bool looping, List<XForm[]> frames)
+    /// <param name="nativeFps">Source-file native frame rate (<see cref="NativeFps"/>);
+    /// null = same as <paramref name="fps"/>.</param>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="fps"/> (or a
+    /// provided <paramref name="nativeFps"/>) is not positive.</exception>
+    public Clip(string name, float fps, bool looping, List<XForm[]> frames, float? nativeFps = null)
     {
         ArgumentNullException.ThrowIfNull(name);
         ArgumentNullException.ThrowIfNull(frames);
         if (!(fps > 0f) || !float.IsFinite(fps))
             throw new ArgumentOutOfRangeException(nameof(fps), fps, "Fps must be a positive finite number.");
+        if (nativeFps is { } native && (!(native > 0f) || !float.IsFinite(native)))
+            throw new ArgumentOutOfRangeException(nameof(nativeFps), native, "NativeFps must be a positive finite number.");
 
         Name = name;
         Fps = fps;
+        NativeFps = nativeFps ?? fps;
         Looping = looping;
         Frames = frames;
     }

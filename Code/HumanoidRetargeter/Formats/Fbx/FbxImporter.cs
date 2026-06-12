@@ -576,6 +576,8 @@ public static class FbxImporter
         QuaternionContinuity.AlignFrames(frames);
 
         string name = string.IsNullOrEmpty(stack.Object.Name) ? "clip" : stack.Object.Name;
-        return new Clip(name, fps, looping: false, frames);
+        // NativeFps records the file's authored frame rate (GlobalSettings TimeMode):
+        // external frame ranges (Unity .meta clipAnimations) are expressed in it.
+        return new Clip(name, fps, looping: false, frames, (float)ctx.Scene.FrameRate);
     }
 }

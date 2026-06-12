@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using HumanoidRetargeter.Cleanup;
+using HumanoidRetargeter.Formats;
 using HumanoidRetargeter.Mapping;
 using HumanoidRetargeter.Solve;
 using HumanoidRetargeter.Target;
@@ -63,8 +65,24 @@ public sealed class RetargetRequest
     /// imported scene's clips). Null = convert all takes. Out of range fails the request's
     /// clip result with a clear error (the batch continues). UI listings that expand a
     /// multi-take file into one entry per take submit one request per selected take.
+    /// When <see cref="ClipDefinitions"/> is set this index addresses the DEFINITIONS
+    /// instead (each definition is what a UI row represents then).
     /// </summary>
     public int? TakeIndex { get; init; }
+
+    /// <summary>
+    /// Optional external clip definitions, parsed from a Unity <c>&lt;file&gt;.fbx.meta</c>
+    /// sidecar (<see cref="UnityMeta.ParseClipAnimations"/>): Unity animation packs ship FBX
+    /// files whose clips are sub-ranges of ONE source timeline. When set (non-empty), the
+    /// conversion produces one output clip per definition instead of one per take: the
+    /// definition's take (matched by <see cref="ExternalClipDef.TakeName"/>, falling back to
+    /// the file's first take) is sliced to the definition's native-frame range
+    /// (<see cref="UnityMeta.Slice"/>), named <see cref="ExternalClipDef.Name"/> (sanitized
+    /// like take names, collision-suffixed across the batch) and looped per
+    /// <see cref="ExternalClipDef.Loop"/> unless <see cref="LoopingOverride"/> is set.
+    /// <see cref="TakeIndex"/> then indexes INTO this list. Null = no definitions.
+    /// </summary>
+    public IReadOnlyList<ExternalClipDef>? ClipDefinitions { get; init; }
 
     /// <summary>
     /// UI-supplied mapping (manual mapping table or a user preset loaded Editor-side).

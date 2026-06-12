@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using HumanoidRetargeter.Formats;
 using HumanoidRetargeter.Mapping;
 using HumanoidRetargeter.Skeleton;
 
@@ -78,11 +79,23 @@ public sealed class SourceFileEntry
 	/// unreadable or has no animation). The window shows one row per take: a multi-take file
 	/// unpacks into individual entries that share THIS file's bytes/skeleton/mapping but are
 	/// previewed, converted and removed independently (one facade request per take).
+	/// When <see cref="ClipDefinitions"/> is set the rows are one per DEFINITION instead.
 	/// </summary>
 	public List<SourceTakeEntry> Takes { get; } = new();
 
-	/// <summary>Number of animation takes in the file (0 when unreadable).</summary>
-	public int ClipCount => Scene?.Clips.Count ?? 0;
+	/// <summary>
+	/// External clip definitions parsed from a Unity <c>&lt;FilePath&gt;.meta</c> sidecar
+	/// (ModelImporter → clipAnimations); null when the file has no parseable sidecar. Unity
+	/// animation packs ship FBX files whose clips are sub-ranges of ONE timeline — with
+	/// definitions present the file unpacks into one row per definition (like multi-take
+	/// files do per take), and each row's facade request carries the definitions plus its
+	/// index so conversion AND preview slice the resampled take to the definition's range.
+	/// </summary>
+	public IReadOnlyList<ExternalClipDef> ClipDefinitions { get; private set; }
+
+	/// <summary>Number of convertible clips in the file: Unity sidecar definitions when
+	/// present, else the animation takes (0 when unreadable).</summary>
+	public int ClipCount => Scene is null ? 0 : ClipDefinitions?.Count ?? Scene.Clips.Count;
 
 	SourceFileEntry() { }
 
@@ -103,6 +116,7 @@ public sealed class SourceFileEntry
 			entry.Signature = SkeletonSignature.Compute( entry.Scene.Skeleton );
 			for ( var i = 0; i < entry.Scene.Clips.Count; i++ )
 				entry.Takes.Add( new SourceTakeEntry( entry, i, entry.Scene.Clips[i].Name ) );
+			LoadUnityClipDefinitions( entry );
 		}
 		catch ( Exception e )
 		{
@@ -122,6 +136,37 @@ public sealed class SourceFileEntry
 
 		ResolveMapping( entry, assetsPath );
 		return entry;
+	}
+
+	/// <summary>
+	/// Unity-sidecar support: animation packs ship FBX files whose clips are sub-ranges of
+	/// ONE timeline, defined in <c>&lt;FilePath&gt;.meta</c> (ModelImporter → clipAnimations).
+	/// When such a sidecar parses to at least one definition, the take rows are replaced by
+	/// one row per DEFINITION (named like in Unity); <see cref="RetargetWindow"/> then passes
+	/// the definitions + the row index on every facade request, which slices the resampled
+	/// take accordingly (preview included — it re-solves through the same request). Never
+	/// fails the entry: a missing/unreadable/garbage sidecar keeps the plain take rows.
+	/// </summary>
+	static void LoadUnityClipDefinitions( SourceFileEntry entry )
+	{
+		try
+		{
+			var metaPath = entry.FilePath + ".meta";
+			if ( !File.Exists( metaPath ) )
+				return;
+			var defs = UnityMeta.ParseClipAnimations( File.ReadAllText( metaPath ) );
+			if ( defs.Count == 0 )
+				return;
+
+			entry.ClipDefinitions = defs;
+			entry.Takes.Clear();
+			for ( var i = 0; i < defs.Count; i++ )
+				entry.Takes.Add( new SourceTakeEntry( entry, i, defs[i].Name ) );
+		}
+		catch ( Exception )
+		{
+			// Optional enhancement only - reading the sidecar must never break the file row.
+		}
 	}
 
 	/// <summary>The facade's single mapping cascade with the Editor-side user-preset lookup

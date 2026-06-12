@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Numerics;
 using System.Text;
 using HumanoidRetargeter.Cleanup;
+using HumanoidRetargeter.Formats;
 using HumanoidRetargeter.Formats.Bvh;
 using HumanoidRetargeter.Formats.Dmx;
 using HumanoidRetargeter.Formats.Fbx;
@@ -278,6 +279,16 @@ public static class Retargeter
                 + "verify the compiled sequence on engine-space targets).");
         }
 
+        // External clip definitions (Unity .fbx.meta clipAnimations): one output clip per
+        // DEFINITION, sliced out of its take; TakeIndex addresses the definitions then
+        // (see RetargetRequest.ClipDefinitions).
+        if (request.ClipDefinitions is { Count: > 0 } clipDefs)
+        {
+            return ProcessClipDefinitions(
+                request, target, context, options, usedNames, clips, entries,
+                scene, map, report, sourceId, mapsPinky, clipDefs);
+        }
+
         // TakeIndex narrows the conversion to a single take (UI per-take entries submit one
         // request per selected take); null keeps the historical convert-all-takes behavior.
         var takeStart = 0;
@@ -308,59 +319,157 @@ public static class Retargeter
             var clipName = UniqueClipName(
                 SanitizeClipName(RequestedClipName(request, scene, take)),
                 usedNames, options.AutoSuffixCollisions);
-            try
-            {
-                var clip = SolveAndClean(request, target, context, scene, map, report, take, clipName);
-                var dmxFileName = SanitizeFileName(clipName) + ".dmx";
-                var dmx = DmxWriter.Write(target.Rig.Skeleton, clip, new DmxWriteOptions
-                {
-                    Name = clipName,
-                    SourceNote = request.SourceFileName,
-                    // Design §3: ConstraintDriven (twist/helper) bones keep their joints +
-                    // bind in the DMX but get NO channels — the engine drives them.
-                    ChannelExcludedBones = context.ConstraintDrivenBones,
-                    UpAxisY = target.UpAxis == TargetUpAxis.YUpCm,
-                });
+            anyPinkySuccess |= ConvertOne(
+                request, target, context, options, clips, entries,
+                scene, map, report, sourceId, mapsPinky, take, clipName);
+        }
 
-                var extractMotion = request.RootMotion == RootMotionMode.Extract;
-                clips.Add(new ClipResult
-                {
-                    ClipName = clipName,
-                    SourceFileName = request.SourceFileName,
-                    SourceId = sourceId,
-                    DmxFileName = dmxFileName,
-                    DmxContent = dmx,
-                    Mapping = report,
-                    Success = true,
-                    SolvedFrames = clip.Frames,
-                    Fps = clip.Fps,
-                    Looping = clip.Looping,
-                    ExtractMotion = extractMotion,
-                });
-                entries.Add(new AnimEntry
-                {
-                    Name = clipName,
-                    SourceFilename = JoinAssetPath(options.DmxFolderRelative, dmxFileName),
-                    Looping = clip.Looping,
-                    ExtractMotion = extractMotion,
-                });
-                anyPinkySuccess |= mapsPinky;
-            }
-            catch (Exception e)
+        return anyPinkySuccess;
+    }
+
+    /// <summary>
+    /// The definitions variant of the take loop: each <see cref="ExternalClipDef"/> becomes
+    /// its own clip result — the definition's take is located by
+    /// <see cref="ExternalClipDef.TakeName"/> (falling back to the file's first take), sliced
+    /// to the definition's native-frame range via <see cref="UnityMeta.Slice"/> and solved as
+    /// a single-clip scene. Returns true when at least one clip converted successfully with a
+    /// pinky-driving mapping.
+    /// </summary>
+    private static bool ProcessClipDefinitions(
+        RetargetRequest request, RetargetTargetSpec target, TargetContext context,
+        BatchOptions options, HashSet<string> usedNames,
+        List<ClipResult> clips, List<AnimEntry> entries,
+        SourceScene scene, MappingResult map, MappingReportInfo report,
+        string sourceId, bool mapsPinky, IReadOnlyList<ExternalClipDef> clipDefs)
+    {
+        var defStart = 0;
+        var defEnd = clipDefs.Count;
+        if (request.TakeIndex is { } defIndex)
+        {
+            if (defIndex < 0 || defIndex >= clipDefs.Count)
             {
                 clips.Add(new ClipResult
                 {
-                    ClipName = clipName,
+                    ClipName = FileStem(request.SourceFileName),
                     SourceFileName = request.SourceFileName,
                     SourceId = sourceId,
                     Mapping = report,
                     Success = false,
-                    Error = e.Message,
+                    Error = $"Clip-definition index {defIndex} is out of range: the request "
+                        + $"carries {clipDefs.Count} clip definition(s).",
                 });
+                return false;
             }
+            defStart = defIndex;
+            defEnd = defIndex + 1;
+        }
+
+        var anyPinkySuccess = false;
+        for (var d = defStart; d < defEnd; d++)
+        {
+            var def = clipDefs[d];
+            var requestedName = !string.IsNullOrWhiteSpace(def.Name)
+                ? def.Name
+                : clipDefs.Count > 1 ? $"{FileStem(request.SourceFileName)}_{d + 1}" : FileStem(request.SourceFileName);
+            var clipName = UniqueClipName(
+                SanitizeClipName(requestedName), usedNames, options.AutoSuffixCollisions);
+
+            var take = TakeForDefinition(scene, def);
+            var sliced = UnityMeta.Slice(scene.Clips[take], def, clipName);
+
+            // Same skeleton/axes, ONE clip: the regular pipeline then solves "take 0" of it.
+            var defScene = new SourceScene(
+                scene.Skeleton, new[] { sliced }, scene.UnitScaleCm,
+                scene.UpAxis, scene.UpAxisSign,
+                scene.FrontAxis, scene.FrontAxisSign,
+                scene.CoordAxis, scene.CoordAxisSign,
+                scene.OriginalUpAxis, scene.Notes);
+
+            anyPinkySuccess |= ConvertOne(
+                request, target, context, options, clips, entries,
+                defScene, map, report, sourceId, mapsPinky, take: 0, clipName);
         }
 
         return anyPinkySuccess;
+    }
+
+    /// <summary>The take a definition's frame range refers to: matched by take name when the
+    /// definition records one (Unity's <c>takeName</c>, e.g. <c>root|Animation</c>), else —
+    /// and when nothing matches — the file's first take.</summary>
+    private static int TakeForDefinition(SourceScene scene, ExternalClipDef def)
+    {
+        if (!string.IsNullOrWhiteSpace(def.TakeName))
+        {
+            for (var i = 0; i < scene.Clips.Count; i++)
+            {
+                if (string.Equals(scene.Clips[i].Name, def.TakeName, StringComparison.Ordinal))
+                    return i;
+            }
+        }
+        return 0;
+    }
+
+    /// <summary>Solves ONE clip (take <paramref name="take"/> of <paramref name="scene"/>)
+    /// end to end — solve + cleanup + DMX — appending a success or failure
+    /// <see cref="ClipResult"/> (failures never abort the batch). Returns true on success
+    /// with a pinky-driving mapping.</summary>
+    private static bool ConvertOne(
+        RetargetRequest request, RetargetTargetSpec target, TargetContext context,
+        BatchOptions options, List<ClipResult> clips, List<AnimEntry> entries,
+        SourceScene scene, MappingResult map, MappingReportInfo report,
+        string sourceId, bool mapsPinky, int take, string clipName)
+    {
+        try
+        {
+            var clip = SolveAndClean(request, target, context, scene, map, report, take, clipName);
+            var dmxFileName = SanitizeFileName(clipName) + ".dmx";
+            var dmx = DmxWriter.Write(target.Rig.Skeleton, clip, new DmxWriteOptions
+            {
+                Name = clipName,
+                SourceNote = request.SourceFileName,
+                // Design §3: ConstraintDriven (twist/helper) bones keep their joints +
+                // bind in the DMX but get NO channels — the engine drives them.
+                ChannelExcludedBones = context.ConstraintDrivenBones,
+                UpAxisY = target.UpAxis == TargetUpAxis.YUpCm,
+            });
+
+            var extractMotion = request.RootMotion == RootMotionMode.Extract;
+            clips.Add(new ClipResult
+            {
+                ClipName = clipName,
+                SourceFileName = request.SourceFileName,
+                SourceId = sourceId,
+                DmxFileName = dmxFileName,
+                DmxContent = dmx,
+                Mapping = report,
+                Success = true,
+                SolvedFrames = clip.Frames,
+                Fps = clip.Fps,
+                Looping = clip.Looping,
+                ExtractMotion = extractMotion,
+            });
+            entries.Add(new AnimEntry
+            {
+                Name = clipName,
+                SourceFilename = JoinAssetPath(options.DmxFolderRelative, dmxFileName),
+                Looping = clip.Looping,
+                ExtractMotion = extractMotion,
+            });
+            return mapsPinky;
+        }
+        catch (Exception e)
+        {
+            clips.Add(new ClipResult
+            {
+                ClipName = clipName,
+                SourceFileName = request.SourceFileName,
+                SourceId = sourceId,
+                Mapping = report,
+                Success = false,
+                Error = e.Message,
+            });
+            return false;
+        }
     }
 
     private static bool MapsPinkyRole(MappingResult map)

@@ -574,13 +574,20 @@ public sealed class RetargetWindow : Widget
 	/// IMPORTANT: the decision keys on <see cref="SourceFileEntry.ClipCount"/> (the imported
 	/// scene's immutable clip count), NOT on the live UI take list — RemoveTake mutates
 	/// <c>File.Takes</c>, so a multi-take file reduced to one visible row must still convert
-	/// only that row's take, not every take in the file.</summary>
+	/// only that row's take, not every take in the file.
+	/// Unity-sidecar files (<see cref="SourceFileEntry.ClipDefinitions"/>) pass the
+	/// definitions through and ALWAYS set the row index — TakeIndex then addresses the
+	/// definition the row represents, and the facade slices the take to its frame range
+	/// (preview re-solves via this same request, so it previews the sliced range too).</summary>
 	HumanoidRetargeter.RetargetRequest BuildRequest( SourceTakeEntry take ) => new()
 	{
 		SourceData = take.File.Bytes,
 		SourceFileName = take.File.FileName,
 		SourceId = take.SourceId, // full path + take index: rows must join results unambiguously
-		TakeIndex = take.File.ClipCount > 1 ? take.TakeIndex : null,
+		ClipDefinitions = take.File.ClipDefinitions,
+		TakeIndex = take.File.ClipDefinitions is not null
+			? take.TakeIndex
+			: take.File.ClipCount > 1 ? take.TakeIndex : null,
 		MappingOverride = take.File.Mapping,
 		Solver = take.File.UseDlSolver
 			? HumanoidRetargeter.SolverKind.DeepLearning

@@ -219,6 +219,44 @@ public sealed class FbxScene
     /// <summary>GlobalSettings OriginalUpAxis (-1 when not recorded).</summary>
     public int OriginalUpAxis { get; private set; } = -1;
 
+    /// <summary>GlobalSettings TimeMode (FbxTime::EMode enum value; 0 = default mode).</summary>
+    public int TimeMode { get; private set; }
+
+    /// <summary>GlobalSettings CustomFrameRate (-1 when not recorded).</summary>
+    public double CustomFrameRate { get; private set; } = -1.0;
+
+    /// <summary>
+    /// Native frame rate (fps) implied by <see cref="TimeMode"/> /
+    /// <see cref="CustomFrameRate"/>. This is the rate the source timeline was authored at —
+    /// external frame ranges (e.g. Unity <c>.meta</c> clipAnimations) are expressed in it.
+    /// The default mode (0) and unknown values map to 30 fps (this importer's resample default).
+    /// </summary>
+    public double FrameRate => TimeModeFrameRate(TimeMode, CustomFrameRate);
+
+    /// <summary>FbxTime::EMode → frames per second (eCustom uses the custom rate).</summary>
+    internal static double TimeModeFrameRate(int timeMode, double customFrameRate) => timeMode switch
+    {
+        1 => 120.0,            // eFrames120
+        2 => 100.0,            // eFrames100
+        3 => 60.0,             // eFrames60
+        4 => 50.0,             // eFrames50
+        5 => 48.0,             // eFrames48
+        6 => 30.0,             // eFrames30
+        7 => 30.0,             // eFrames30Drop
+        8 => 30.0 / 1.001,     // eNTSCDropFrame (29.97)
+        9 => 30.0 / 1.001,     // eNTSCFullFrame (29.97)
+        10 => 25.0,            // ePAL
+        11 => 24.0,            // eFrames24
+        12 => 1000.0,          // eFrames1000
+        13 => 24.0 / 1.001,    // eFilmFullFrame (23.976)
+        14 => customFrameRate > 0 ? customFrameRate : 30.0, // eCustom
+        15 => 96.0,            // eFrames96
+        16 => 72.0,            // eFrames72
+        17 => 60.0 / 1.001,    // eFrames59dot94
+        18 => 120.0 / 1.001,   // eFrames119dot88
+        _ => 30.0,             // eDefaultMode / unknown
+    };
+
     private readonly Dictionary<long, FbxObject> _objectsById = new();
     private readonly List<FbxObject> _models = new();
     private readonly List<FbxAnimStack> _stacks = new();
@@ -406,6 +444,8 @@ public sealed class FbxScene
         CoordAxis = I("CoordAxis", 0);
         CoordAxisSign = I("CoordAxisSign", 1);
         OriginalUpAxis = I("OriginalUpAxis", -1);
+        TimeMode = I("TimeMode", 0);
+        CustomFrameRate = D("CustomFrameRate", -1.0);
     }
 
     // ------------------------------------------------------------------ connections

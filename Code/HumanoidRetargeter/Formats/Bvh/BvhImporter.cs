@@ -331,7 +331,10 @@ public static class BvhImporter
             frames.Add(frame);
         }
 
-        return new Clip("motion", fps, looping: false, frames);
+        // NativeFps records the file's authored frame rate (1 / FrameTime): external frame
+        // ranges (Unity .meta clipAnimations) are expressed in it.
+        float nativeFps = frameTime > 0f ? (float)(1.0 / frameTime) : fps;
+        return new Clip("motion", fps, looping: false, frames, nativeFps);
     }
 
     /// <summary>One joint's local transform from one motion row (see class remarks).</summary>
