@@ -1,0 +1,854 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using System.Numerics;
+using System.Text;
+using SkeletonModel = HumanoidRetargeter.Skeleton.Skeleton;
+
+namespace HumanoidRetargeter.Mapping;
+
+/// <summary>
+/// Maps unknown rigs to canonical <see cref="BoneRole"/>s (design §6, steps 2–3).
+/// Stage A tokenizes bone names (namespace stripping, camel/snake/digit splitting, side
+/// classification, per-role alias token sets) and validates candidates against the
+/// hierarchy. When name evidence is too weak (confidence &lt; 0.5) stage B falls back to
+/// pure topology: it finds the two mirror-symmetric branch points of the bone graph
+/// (pelvis → legs, chest → arms), takes their lowest common ancestor as the hips, walks
+/// the limb chains, and disambiguates left/right by the rest-pose lateral sign.
+/// </summary>
+public static class AutoMapper
+{
+    /// <summary>Below this stage-A confidence the topology fallback is attempted.</summary>
+    private const float TopologyFallbackThreshold = 0.5f;
+
+    /// <summary>Confidence ceiling of the nameless topology fallback (&lt; 1 by design —
+    /// without names some assignments are educated guesses).</summary>
+    private const float TopologyConfidenceScale = 0.85f;
+
+    /// <summary>Maps a skeleton: name tokens first, topology fallback when names fail.</summary>
+    public static MappingResult Map(SkeletonModel skeleton)
+    {
+        ArgumentNullException.ThrowIfNull(skeleton);
+
+        var byName = MapByNames(skeleton);
+        if (byName.Confidence >= TopologyFallbackThreshold)
+            return byName;
+
+        var byTopology = MapByTopology(skeleton);
+        return byTopology.Confidence >= byName.Confidence ? byTopology : byName;
+    }
+
+    // ================================================================ stage A: name tokens
+
+    private enum SideTag { None, L, R }
+
+    private readonly record struct NameInfo(int Index, SideTag Side, string Core, int Digit);
+
+    private static readonly string[] LeftTokens = { "l", "left", "lft" };
+    private static readonly string[] RightTokens = { "r", "right", "rgt" };
+
+    /// <summary>Tokens marking helper bones that must never receive a role.</summary>
+    private static readonly string[] ExcludedTokens =
+        { "twist", "roll", "share", "helper", "ik", "end", "nub", "tip", "dummy", "null" };
+
+    private static readonly string[] HipsCores = { "hips", "hip", "pelvis" };
+    private static readonly string[] SpineCores = { "spine", "chest", "torso", "waist" };
+    private static readonly string[] ClavicleCores = { "shoulder", "clavicle", "collar", "collarbone" };
+    private static readonly string[] UpperArmCores = { "upperarm", "uparm", "arm", "bicep" };
+    private static readonly string[] LowerArmCores = { "forearm", "lowerarm", "lowarm", "elbow" };
+    private static readonly string[] HandCores = { "hand", "wrist" };
+    private static readonly string[] UpperLegCores = { "upleg", "upperleg", "thigh" };
+    private static readonly string[] LowerLegCores = { "lowerleg", "lowleg", "calf", "shin", "knee" };
+    private static readonly string[] FootCores = { "foot", "ankle" };
+    private static readonly string[] ToeCores = { "toe", "toebase", "toes", "ball" };
+
+    private static MappingResult MapByNames(SkeletonModel skeleton)
+    {
+        var result = new MappingResult("auto", MappingSource.AutoName);
+        var stripped = StripCommonNamespace(skeleton);
+
+        // -------- classify every bone into role-family candidate buckets
+        var hips = new List<NameInfo>();
+        var spine = new List<NameInfo>();
+        var neck = new List<NameInfo>();
+        var head = new List<NameInfo>();
+        var sided = new Dictionary<string, List<NameInfo>[]>
+        {
+            ["Clavicle"] = NewSided(), ["UpperArm"] = NewSided(), ["LowerArm"] = NewSided(),
+            ["Hand"] = NewSided(), ["UpperLeg"] = NewSided(), ["LowerLeg"] = NewSided(),
+            ["Foot"] = NewSided(), ["Toe"] = NewSided(),
+        };
+        var bareLeg = NewSided();
+        var fingers = new Dictionary<(string Finger, SideTag Side), List<NameInfo>>();
+
+        for (var i = 0; i < skeleton.Count; i++)
+        {
+            var tokens = Tokenize(stripped[i]);
+            if (tokens.Count == 0 || tokens.Any(t => ExcludedTokens.Contains(t)))
+                continue;
+
+            var side = ClassifySide(tokens);
+            var digit = -1;
+            var coreBuilder = new StringBuilder();
+            foreach (var token in tokens)
+            {
+                if (token.All(char.IsDigit))
+                {
+                    if (digit < 0)
+                        digit = int.Parse(token, CultureInfo.InvariantCulture);
+                    continue;
+                }
+                if (LeftTokens.Contains(token) || RightTokens.Contains(token))
+                    continue;
+                coreBuilder.Append(token);
+            }
+            var core = coreBuilder.ToString();
+            if (core.Length == 0)
+                continue;
+
+            var resolvedSide = side != SideTag.None ? side : SideFromWorldX(skeleton, i);
+            var info = new NameInfo(i, resolvedSide, core, digit);
+
+            if (HipsCores.Contains(core)) { hips.Add(info); continue; }
+            if (SpineCores.Contains(core)) { spine.Add(info); continue; }
+            if (core == "neck") { neck.Add(info); continue; }
+            if (core == "head") { head.Add(info); continue; }
+            if (ClavicleCores.Contains(core)) { AddSided(sided["Clavicle"], info, result); continue; }
+            if (UpperArmCores.Contains(core)) { AddSided(sided["UpperArm"], info, result); continue; }
+            if (LowerArmCores.Contains(core)) { AddSided(sided["LowerArm"], info, result); continue; }
+            if (HandCores.Contains(core)) { AddSided(sided["Hand"], info, result); continue; }
+            if (UpperLegCores.Contains(core)) { AddSided(sided["UpperLeg"], info, result); continue; }
+            if (LowerLegCores.Contains(core)) { AddSided(sided["LowerLeg"], info, result); continue; }
+            if (core == "leg") { AddSided(bareLeg, info, result); continue; }
+            if (FootCores.Contains(core)) { AddSided(sided["Foot"], info, result); continue; }
+            if (ToeCores.Contains(core)) { AddSided(sided["Toe"], info, result); continue; }
+
+            if (TryClassifyFinger(info, out var finger))
+            {
+                var key = (finger, info.Side);
+                if (info.Side == SideTag.None)
+                {
+                    result.Notes.Add($"Finger bone '{skeleton[i].Name}' has no resolvable side; ignored.");
+                    continue;
+                }
+                if (!fingers.TryGetValue(key, out var list))
+                    fingers[key] = list = new List<NameInfo>();
+                list.Add(info);
+            }
+        }
+
+        // -------- bare "leg" bones: lower leg when an upper-leg candidate exists on that side
+        foreach (var side in new[] { SideTag.L, SideTag.R })
+        {
+            var legs = bareLeg[(int)side - 1];
+            if (legs.Count == 0)
+                continue;
+            var upper = sided["UpperLeg"][(int)side - 1];
+            var lower = sided["LowerLeg"][(int)side - 1];
+            var ordered = legs.OrderBy(l => Depth(skeleton, l.Index)).ToList();
+            if (upper.Count == 0)
+            {
+                upper.Add(ordered[0]);
+                if (ordered.Count > 1 && lower.Count == 0)
+                    lower.Add(ordered[1]);
+            }
+            else if (lower.Count == 0)
+            {
+                lower.Add(ordered[0]);
+            }
+        }
+
+        // -------- resolve buckets to roles
+        var map = result.RoleToBone;
+
+        if (hips.Count > 0)
+            map[BoneRole.Hips] = ResolvePreferAncestor(skeleton, hips, result, "Hips");
+
+        var orderedSpine = spine.OrderBy(s => Depth(skeleton, s.Index)).ToList();
+        for (var i = 0; i < orderedSpine.Count && i < 5; i++)
+            map[BoneRole.Spine0 + i] = orderedSpine[i].Index;
+        if (orderedSpine.Count > 5)
+            result.Notes.Add($"Source spine chain has {orderedSpine.Count} bones; only 5 mapped.");
+
+        if (neck.Count > 0)
+        {
+            var orderedNeck = neck.OrderBy(n => Depth(skeleton, n.Index)).ToList();
+            map[BoneRole.Neck] = orderedNeck[0].Index;
+            for (var i = 1; i < orderedNeck.Count; i++)
+                result.Notes.Add($"Extra neck bone '{skeleton[orderedNeck[i].Index].Name}' left unmapped.");
+        }
+        if (head.Count > 0)
+            map[BoneRole.Head] = head.OrderBy(h => Depth(skeleton, h.Index)).First().Index;
+
+        foreach (var (family, buckets) in sided)
+        {
+            foreach (var side in new[] { SideTag.L, SideTag.R })
+            {
+                var bucket = buckets[(int)side - 1];
+                if (bucket.Count == 0)
+                    continue;
+                var role = Enum.Parse<BoneRole>(family + side);
+                map[role] = ResolvePreferAncestor(skeleton, bucket, result, role.ToString());
+            }
+        }
+
+        foreach (var ((finger, side), candidates) in fingers)
+        {
+            foreach (var info in candidates)
+            {
+                var segment = SegmentOf(info);
+                if (segment is null)
+                {
+                    result.Notes.Add($"Finger bone '{skeleton[info.Index].Name}' has no phalanx digit; ignored.");
+                    continue;
+                }
+                var role = Enum.Parse<BoneRole>(finger + segment + side);
+                if (!map.TryAdd(role, info.Index))
+                    result.Notes.Add($"Ambiguous {role}: kept '{map[role]}', ignored '{skeleton[info.Index].Name}'.");
+            }
+        }
+
+        ValidateChains(skeleton, result);
+
+        result.Confidence = MappingConfidence.Compute(map.Keys, Enum.GetValues<BoneRole>());
+        return result;
+    }
+
+    private static List<NameInfo>[] NewSided() => new[] { new List<NameInfo>(), new List<NameInfo>() };
+
+    private static void AddSided(List<NameInfo>[] buckets, NameInfo info, MappingResult result)
+    {
+        if (info.Side == SideTag.None)
+            return; // no name side and centered rest position — cannot attribute
+        buckets[(int)info.Side - 1].Add(info);
+    }
+
+    private static SideTag ClassifySide(List<string> tokens)
+    {
+        var left = tokens.Any(t => LeftTokens.Contains(t));
+        var right = tokens.Any(t => RightTokens.Contains(t));
+        if (left == right)
+            return SideTag.None;
+        return left ? SideTag.L : SideTag.R;
+    }
+
+    /// <summary>Side tie-break by rest world lateral sign (left = +X in both fixture
+    /// conventions: Mixamo Y-up and ActorCore/UE Z-up rigs keep X lateral).</summary>
+    private static SideTag SideFromWorldX(SkeletonModel skeleton, int boneIndex)
+    {
+        var x = skeleton.RestWorld[boneIndex].Pos.X;
+        const float tolerance = 0.5f; // cm
+        if (x > tolerance) return SideTag.L;
+        if (x < -tolerance) return SideTag.R;
+        return SideTag.None;
+    }
+
+    private static bool TryClassifyFinger(NameInfo info, out string finger)
+    {
+        finger = string.Empty;
+        var core = info.Core;
+        if (core.Contains("toe"))
+            return false; // BigToe1 / RingToe1 style toe bones are not fingers
+        if (core.Contains("thumb")) finger = "Thumb";
+        else if (core.Contains("index")) finger = "Index";
+        else if (core.Contains("middle")) finger = "Middle";
+        else if (core.Contains("pinky") || core.Contains("little")) finger = "Pinky";
+        else if (core.Contains("ring")) finger = "Ring";
+        else if (core == "mid" || core == "handmid") finger = "Middle";
+        else return false;
+        return info.Digit >= 0 || core.Contains("meta");
+    }
+
+    private static string? SegmentOf(NameInfo info) => info switch
+    {
+        _ when info.Core.Contains("meta") => "Meta",
+        { Digit: 0 } => "Meta",
+        { Digit: 1 } => "Prox",
+        { Digit: 2 } => "Mid",
+        { Digit: 3 } => "Dist",
+        _ => null, // 4+ are fingertip end markers
+    };
+
+    /// <summary>Resolves multiple candidates for one role: prefer the candidate that is an
+    /// ancestor of all others (e.g. CC_Base_Hip over CC_Base_Pelvis), else the first.</summary>
+    private static int ResolvePreferAncestor(
+        SkeletonModel skeleton, List<NameInfo> candidates, MappingResult result, string roleName)
+    {
+        if (candidates.Count == 1)
+            return candidates[0].Index;
+
+        var pick = candidates.FirstOrDefault(
+            c => candidates.All(o => o.Index == c.Index || IsAncestor(skeleton, c.Index, o.Index)),
+            candidates[0]);
+        result.Notes.Add(
+            $"Ambiguous {roleName}: chose '{skeleton[pick.Index].Name}' among " +
+            string.Join(", ", candidates.Select(c => $"'{skeleton[c.Index].Name}'")));
+        return pick.Index;
+    }
+
+    // -------- namespace stripping
+
+    /// <summary>
+    /// Removes the per-bone FBX namespace (everything up to the last ':') and then the
+    /// longest common '_'-terminated prefix shared by &gt;70% of bones (e.g.
+    /// <c>CC_Base_</c>, <c>Bip01_</c>, <c>bone_</c>).
+    /// </summary>
+    private static string[] StripCommonNamespace(SkeletonModel skeleton)
+    {
+        var names = new string[skeleton.Count];
+        for (var i = 0; i < skeleton.Count; i++)
+        {
+            var name = skeleton[i].Name;
+            var colon = name.LastIndexOf(':');
+            names[i] = colon >= 0 ? name[(colon + 1)..] : name;
+        }
+
+        var prefixCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var name in names)
+        {
+            var underscores = 0;
+            for (var i = 0; i < name.Length && underscores < 3; i++)
+            {
+                if (name[i] != '_')
+                    continue;
+                underscores++;
+                var prefix = name[..(i + 1)];
+                prefixCounts[prefix] = prefixCounts.GetValueOrDefault(prefix) + 1;
+            }
+        }
+
+        var threshold = (int)Math.Ceiling(skeleton.Count * 0.7);
+        var best = prefixCounts
+            .Where(kv => kv.Value >= threshold && kv.Key.Length >= 3)
+            .OrderByDescending(kv => kv.Key.Length)
+            .Select(kv => kv.Key)
+            .FirstOrDefault();
+        if (best is null)
+            return names;
+
+        for (var i = 0; i < names.Length; i++)
+        {
+            if (names[i].Length > best.Length && names[i].StartsWith(best, StringComparison.Ordinal))
+                names[i] = names[i][best.Length..];
+        }
+        return names;
+    }
+
+    // -------- tokenization
+
+    /// <summary>Splits a bone name on separators, camel-case boundaries and letter/digit
+    /// boundaries; returns lower-case tokens ("LeftForeArm" → left, fore, arm; "spine03" →
+    /// spine, 03).</summary>
+    private static List<string> Tokenize(string name)
+    {
+        var tokens = new List<string>();
+        var current = new StringBuilder();
+        char previous = '\0';
+        foreach (var c in name)
+        {
+            if (!char.IsLetterOrDigit(c))
+            {
+                Flush();
+                previous = '\0';
+                continue;
+            }
+            if (current.Length > 0)
+            {
+                var boundary = char.IsDigit(c) != char.IsDigit(previous)
+                    || (char.IsUpper(c) && char.IsLower(previous));
+                if (boundary)
+                    Flush();
+            }
+            current.Append(char.ToLowerInvariant(c));
+            previous = c;
+        }
+        Flush();
+        return tokens;
+
+        void Flush()
+        {
+            if (current.Length > 0)
+            {
+                tokens.Add(current.ToString());
+                current.Clear();
+            }
+        }
+    }
+
+    // -------- topology validation of name-derived candidates
+
+    private static readonly BoneRole[][] ValidationChains = BuildValidationChains();
+
+    private static BoneRole[][] BuildValidationChains()
+    {
+        var chains = new List<BoneRole[]>
+        {
+            new[]
+            {
+                BoneRole.Hips, BoneRole.Spine0, BoneRole.Spine1, BoneRole.Spine2,
+                BoneRole.Spine3, BoneRole.Spine4, BoneRole.Neck, BoneRole.Head,
+            },
+        };
+        foreach (var side in new[] { "L", "R" })
+        {
+            chains.Add(new[]
+            {
+                BoneRole.Hips,
+                Enum.Parse<BoneRole>("UpperLeg" + side), Enum.Parse<BoneRole>("LowerLeg" + side),
+                Enum.Parse<BoneRole>("Foot" + side), Enum.Parse<BoneRole>("Toe" + side),
+            });
+            chains.Add(new[]
+            {
+                BoneRole.Hips,
+                Enum.Parse<BoneRole>("Clavicle" + side), Enum.Parse<BoneRole>("UpperArm" + side),
+                Enum.Parse<BoneRole>("LowerArm" + side), Enum.Parse<BoneRole>("Hand" + side),
+            });
+            foreach (var finger in new[] { "Thumb", "Index", "Middle", "Ring", "Pinky" })
+            {
+                chains.Add(new[]
+                {
+                    Enum.Parse<BoneRole>("Hand" + side),
+                    Enum.Parse<BoneRole>(finger + "Meta" + side), Enum.Parse<BoneRole>(finger + "Prox" + side),
+                    Enum.Parse<BoneRole>(finger + "Mid" + side), Enum.Parse<BoneRole>(finger + "Dist" + side),
+                });
+            }
+        }
+        return chains.ToArray();
+    }
+
+    /// <summary>
+    /// Hierarchy consistency: along each anatomical chain every mapped role must descend
+    /// from the previously mapped one (hips above legs and spine, chest branch to arms,
+    /// fingers below the hand). Violating assignments are dropped with a note.
+    /// </summary>
+    private static void ValidateChains(SkeletonModel skeleton, MappingResult result)
+    {
+        foreach (var chain in ValidationChains)
+        {
+            var previous = -1;
+            foreach (var role in chain)
+            {
+                if (!result.RoleToBone.TryGetValue(role, out var bone))
+                    continue;
+                if (previous >= 0 && !IsAncestor(skeleton, previous, bone))
+                {
+                    result.RoleToBone.Remove(role);
+                    result.Notes.Add(
+                        $"Dropped {role} ('{skeleton[bone].Name}'): not a descendant of " +
+                        $"'{skeleton[previous].Name}'.");
+                    continue;
+                }
+                previous = bone;
+            }
+        }
+    }
+
+    // ================================================================ stage B: topology fallback
+
+    private static MappingResult MapByTopology(SkeletonModel skeleton)
+    {
+        var result = new MappingResult("topology", MappingSource.AutoTopology);
+        result.Notes.Add("Bone names unusable; mapped by hierarchy/geometry only.");
+        if (skeleton.Count < 10)
+        {
+            result.Notes.Add("Too few bones for topology matching.");
+            return result;
+        }
+
+        var children = BuildChildren(skeleton);
+        var depth = new int[skeleton.Count];
+        for (var i = 0; i < skeleton.Count; i++)
+            depth[i] = skeleton[i].ParentIndex < 0 ? 0 : depth[skeleton[i].ParentIndex] + 1;
+        var subtreeDepth = BuildSubtreeDepth(skeleton, children);
+        var positions = skeleton.RestWorld.Select(x => x.Pos).ToArray();
+
+        var (lateralAxis, tolerance) = DetectLateralAxis(positions);
+
+        var pairs = FindSymmetricPairs(skeleton, children, subtreeDepth, positions, lateralAxis, tolerance);
+        if (pairs.Count < 2)
+        {
+            result.Notes.Add($"Found {pairs.Count} symmetric limb pair(s); need legs and arms.");
+            return result;
+        }
+
+        // The two deepest pairs are the limb attachments (legs at the pelvis region, arms
+        // at the chest). The pair closer to their common ancestor is the leg pair (the
+        // pelvis sits next to the hips; the chest is several spine bones away).
+        var primary = pairs
+            .OrderByDescending(p => Math.Min(subtreeDepth[p.Left], subtreeDepth[p.Right]))
+            .Take(2)
+            .ToArray();
+        var lca = LowestCommonAncestor(skeleton, depth, primary[0].Node, primary[1].Node);
+        var legsPair = depth[primary[0].Node] - depth[lca] <= depth[primary[1].Node] - depth[lca]
+            ? primary[0] : primary[1];
+        var armsPair = legsPair == primary[0] ? primary[1] : primary[0];
+
+        var map = result.RoleToBone;
+        map[BoneRole.Hips] = lca;
+
+        // Spine: path from the hips down to the chest (arms attachment), Spine0 first.
+        var chest = armsPair.Node;
+        var spinePath = PathBetween(skeleton, lca, chest);
+        for (var i = 0; i < spinePath.Count && i < 5; i++)
+            map[BoneRole.Spine0 + i] = spinePath[i];
+        if (spinePath.Count > 5)
+            result.Notes.Add($"Spine path has {spinePath.Count} bones; only 5 mapped.");
+
+        // Neck/head: the most lateral-centered chest child that is not an arm root.
+        var neckStart = children[chest]
+            .Where(c => c != armsPair.Left && c != armsPair.Right)
+            .OrderBy(c => Math.Abs(SubtreeMeanLateral(children, positions, lateralAxis, c)))
+            .Cast<int?>()
+            .FirstOrDefault();
+        if (neckStart is { } neckRoot)
+        {
+            var neckChain = PrimaryChain(children, subtreeDepth, neckRoot);
+            if (neckChain.Count >= 2)
+            {
+                map[BoneRole.Neck] = neckChain[0];
+                map[BoneRole.Head] = neckChain[1];
+            }
+            else
+            {
+                map[BoneRole.Head] = neckChain[0];
+            }
+        }
+        else
+        {
+            result.Notes.Add("No neck/head chain found at the chest branch.");
+        }
+
+        // Legs: walk each leg chain — upper leg, lower leg, foot, toe.
+        foreach (var (root, side) in SidedRoots(legsPair))
+        {
+            var chain = PrimaryChain(children, subtreeDepth, root);
+            var roles = new[] { "UpperLeg", "LowerLeg", "Foot", "Toe" };
+            for (var i = 0; i < roles.Length && i < chain.Count; i++)
+                map[Enum.Parse<BoneRole>(roles[i] + side)] = chain[i];
+        }
+
+        // Arms: locate the hand (first chain node with ≥2 non-trivial child chains —
+        // fingers), then assign backwards: lower arm, upper arm, clavicle.
+        foreach (var (root, side) in SidedRoots(armsPair))
+        {
+            var chain = PrimaryChain(children, subtreeDepth, root);
+            var handIndex = -1;
+            for (var i = 0; i < chain.Count; i++)
+            {
+                if (children[chain[i]].Count(c => subtreeDepth[c] >= 2) >= 2)
+                {
+                    handIndex = i;
+                    break;
+                }
+            }
+            if (handIndex < 0 && chain.Count >= 3)
+                handIndex = chain.Count - 1;
+            if (handIndex < 2)
+            {
+                result.Notes.Add($"Arm chain on side {side} too short to resolve.");
+                continue;
+            }
+
+            map[Enum.Parse<BoneRole>("Hand" + side)] = chain[handIndex];
+            map[Enum.Parse<BoneRole>("LowerArm" + side)] = chain[handIndex - 1];
+            map[Enum.Parse<BoneRole>("UpperArm" + side)] = chain[handIndex - 2];
+            if (handIndex >= 3)
+                map[Enum.Parse<BoneRole>("Clavicle" + side)] = chain[handIndex - 3];
+
+            MapFingersByTopology(result, children, subtreeDepth, positions, chain[handIndex], side);
+        }
+
+        result.Confidence =
+            TopologyConfidenceScale * MappingConfidence.Compute(map.Keys, Enum.GetValues<BoneRole>());
+        return result;
+    }
+
+    private readonly record struct SymmetricPair(int Node, int Left, int Right);
+
+    private static IEnumerable<(int Root, string Side)> SidedRoots(SymmetricPair pair)
+    {
+        yield return (pair.Left, "L");
+        yield return (pair.Right, "R");
+    }
+
+    /// <summary>
+    /// Lateral axis = the coordinate axis across which the rest pose is most mirror
+    /// symmetric. The tolerance scales with skeleton size.
+    /// </summary>
+    private static (int Axis, float Tolerance) DetectLateralAxis(Vector3[] positions)
+    {
+        var min = positions.Aggregate(Vector3.Min);
+        var max = positions.Aggregate(Vector3.Max);
+        var tolerance = MathF.Max(1f, 0.02f * (max - min).Length());
+
+        var bestAxis = 0;
+        var bestScore = -1f;
+        for (var axis = 0; axis < 3; axis++)
+        {
+            var considered = 0;
+            var matched = 0;
+            foreach (var p in positions)
+            {
+                if (MathF.Abs(Component(p, axis)) <= tolerance)
+                    continue;
+                considered++;
+                var mirrored = Mirror(p, axis);
+                if (positions.Any(q => (q - mirrored).Length() < tolerance))
+                    matched++;
+            }
+            var score = considered == 0 ? 0f : matched / (float)considered;
+            if (score > bestScore)
+            {
+                bestScore = score;
+                bestAxis = axis;
+            }
+        }
+        return (bestAxis, tolerance);
+    }
+
+    /// <summary>
+    /// Finds nodes with two children whose subtrees are mirror images of each other across
+    /// the lateral axis and at least 3 bones deep (limb chains): the pelvis region (legs)
+    /// and the chest (arms). Shallow symmetric decorations (eyes, breast helpers) are
+    /// filtered by the depth requirement. Left = greater mean lateral coordinate.
+    /// </summary>
+    private static List<SymmetricPair> FindSymmetricPairs(
+        SkeletonModel skeleton, List<int>[] children, int[] subtreeDepth,
+        Vector3[] positions, int lateralAxis, float tolerance)
+    {
+        var pairs = new List<SymmetricPair>();
+        for (var node = 0; node < skeleton.Count; node++)
+        {
+            var kids = children[node];
+            for (var a = 0; a < kids.Count; a++)
+            {
+                for (var b = a + 1; b < kids.Count; b++)
+                {
+                    var ca = kids[a];
+                    var cb = kids[b];
+                    if (subtreeDepth[ca] < 3 || subtreeDepth[cb] < 3)
+                        continue;
+                    var subtreeA = CollectSubtree(children, ca);
+                    var subtreeB = CollectSubtree(children, cb);
+                    if (subtreeA.Count != subtreeB.Count)
+                        continue;
+                    if (!MirrorsOnto(subtreeA, subtreeB, positions, lateralAxis, tolerance)
+                        || !MirrorsOnto(subtreeB, subtreeA, positions, lateralAxis, tolerance))
+                        continue;
+
+                    var meanA = SubtreeMeanLateral(children, positions, lateralAxis, ca);
+                    var meanB = SubtreeMeanLateral(children, positions, lateralAxis, cb);
+                    pairs.Add(meanA >= meanB
+                        ? new SymmetricPair(node, ca, cb)
+                        : new SymmetricPair(node, cb, ca));
+                }
+            }
+        }
+        return pairs;
+    }
+
+    private static bool MirrorsOnto(
+        List<int> from, List<int> to, Vector3[] positions, int lateralAxis, float tolerance)
+    {
+        foreach (var a in from)
+        {
+            var mirrored = Mirror(positions[a], lateralAxis);
+            var matched = false;
+            foreach (var b in to)
+            {
+                if ((positions[b] - mirrored).Length() < tolerance)
+                {
+                    matched = true;
+                    break;
+                }
+            }
+            if (!matched)
+                return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Finger assignment without names: the thumb is the child chain rooted closest to the
+    /// hand; the remaining chains are ordered along the splay axis (the line through the
+    /// two most-separated finger roots, starting at the thumb end) as index, middle, ring,
+    /// pinky.
+    /// </summary>
+    private static void MapFingersByTopology(
+        MappingResult result, List<int>[] children, int[] subtreeDepth,
+        Vector3[] positions, int hand, string side)
+    {
+        var chains = children[hand]
+            .Where(c => subtreeDepth[c] >= 2)
+            .Select(c => PrimaryChain(children, subtreeDepth, c))
+            .ToList();
+        if (chains.Count < 2 || chains.Count > 5)
+        {
+            result.Notes.Add($"Hand {side}: {chains.Count} finger chains; fingers not mapped.");
+            return;
+        }
+
+        var thumbChain = chains.OrderBy(c => (positions[c[0]] - positions[hand]).Length()).First();
+        var others = chains.Where(c => c != thumbChain).ToList();
+
+        if (others.Count > 1)
+        {
+            // Splay line through the two farthest finger roots, oriented thumb-first.
+            var (u, v) = others
+                .SelectMany(x => others.Select(y => (x, y)))
+                .OrderByDescending(p => (positions[p.x[0]] - positions[p.y[0]]).Length())
+                .First();
+            var start = (positions[u[0]] - positions[thumbChain[0]]).Length()
+                <= (positions[v[0]] - positions[thumbChain[0]]).Length() ? u : v;
+            var direction = positions[(start == u ? v : u)[0]] - positions[start[0]];
+            others = others
+                .OrderBy(c => Vector3.Dot(positions[c[0]] - positions[start[0]], direction))
+                .ToList();
+        }
+
+        AssignFingerChain(result, thumbChain, "Thumb", side);
+        var fingerNames = new[] { "Index", "Middle", "Ring", "Pinky" };
+        for (var i = 0; i < others.Count && i < fingerNames.Length; i++)
+            AssignFingerChain(result, others[i], fingerNames[i], side);
+    }
+
+    private static void AssignFingerChain(MappingResult result, List<int> chain, string finger, string side)
+    {
+        // 4+ joints include an exported fingertip end marker — use the first three.
+        var segments = new[] { "Prox", "Mid", "Dist" };
+        var count = Math.Min(segments.Length, chain.Count);
+        for (var i = 0; i < count; i++)
+            result.RoleToBone[Enum.Parse<BoneRole>(finger + segments[i] + side)] = chain[i];
+    }
+
+    // ================================================================ topology helpers
+
+    private static List<int>[] BuildChildren(SkeletonModel skeleton)
+    {
+        var children = new List<int>[skeleton.Count];
+        for (var i = 0; i < skeleton.Count; i++)
+            children[i] = new List<int>();
+        for (var i = 0; i < skeleton.Count; i++)
+        {
+            var parent = skeleton[i].ParentIndex;
+            if (parent >= 0)
+                children[parent].Add(i);
+        }
+        return children;
+    }
+
+    /// <summary>Max chain length downward including the node itself (leaves = 1).</summary>
+    private static int[] BuildSubtreeDepth(SkeletonModel skeleton, List<int>[] children)
+    {
+        var depth = new int[skeleton.Count];
+        for (var i = skeleton.Count - 1; i >= 0; i--) // children have larger indices
+            depth[i] = 1 + (children[i].Count == 0 ? 0 : children[i].Max(c => depth[c]));
+        return depth;
+    }
+
+    private static List<int> CollectSubtree(List<int>[] children, int root)
+    {
+        var nodes = new List<int>();
+        var stack = new Stack<int>();
+        stack.Push(root);
+        while (stack.Count > 0)
+        {
+            var node = stack.Pop();
+            nodes.Add(node);
+            foreach (var child in children[node])
+                stack.Push(child);
+        }
+        return nodes;
+    }
+
+    /// <summary>Greedy deepest-descent chain from a node (the anatomical limb continues
+    /// along the deepest subtree; short decorations branch off).</summary>
+    private static List<int> PrimaryChain(List<int>[] children, int[] subtreeDepth, int start)
+    {
+        var chain = new List<int>();
+        var current = start;
+        while (true)
+        {
+            chain.Add(current);
+            var kids = children[current];
+            if (kids.Count == 0)
+                break;
+            current = kids.OrderByDescending(c => subtreeDepth[c]).First();
+        }
+        return chain;
+    }
+
+    private static float SubtreeMeanLateral(List<int>[] children, Vector3[] positions, int lateralAxis, int root)
+    {
+        var nodes = CollectSubtree(children, root);
+        return nodes.Average(n => Component(positions[n], lateralAxis));
+    }
+
+    private static int LowestCommonAncestor(SkeletonModel skeleton, int[] depth, int a, int b)
+    {
+        while (a != b)
+        {
+            if (depth[a] >= depth[b])
+                a = skeleton[a].ParentIndex;
+            else
+                b = skeleton[b].ParentIndex;
+            if (a < 0 || b < 0)
+                throw new InvalidOperationException("Bones share no common ancestor.");
+        }
+        return a;
+    }
+
+    /// <summary>Path from (exclusive) <paramref name="ancestor"/> down to (inclusive)
+    /// <paramref name="descendant"/>, top-first; empty when equal.</summary>
+    private static List<int> PathBetween(SkeletonModel skeleton, int ancestor, int descendant)
+    {
+        var path = new List<int>();
+        var current = descendant;
+        while (current != ancestor && current >= 0)
+        {
+            path.Add(current);
+            current = skeleton[current].ParentIndex;
+        }
+        path.Reverse();
+        return path;
+    }
+
+    private static bool IsAncestor(SkeletonModel skeleton, int ancestor, int node)
+    {
+        var current = skeleton[node].ParentIndex;
+        while (current >= 0)
+        {
+            if (current == ancestor)
+                return true;
+            current = skeleton[current].ParentIndex;
+        }
+        return false;
+    }
+
+    private static int Depth(SkeletonModel skeleton, int node)
+    {
+        var depth = 0;
+        var current = skeleton[node].ParentIndex;
+        while (current >= 0)
+        {
+            depth++;
+            current = skeleton[current].ParentIndex;
+        }
+        return depth;
+    }
+
+    private static float Component(Vector3 v, int axis) => axis switch
+    {
+        0 => v.X,
+        1 => v.Y,
+        _ => v.Z,
+    };
+
+    private static Vector3 Mirror(Vector3 v, int axis) => axis switch
+    {
+        0 => new Vector3(-v.X, v.Y, v.Z),
+        1 => new Vector3(v.X, -v.Y, v.Z),
+        _ => new Vector3(v.X, v.Y, -v.Z),
+    };
+}
