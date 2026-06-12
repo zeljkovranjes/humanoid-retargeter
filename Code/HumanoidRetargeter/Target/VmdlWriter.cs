@@ -74,6 +74,37 @@ public sealed class AnimEntry
 }
 
 /// <summary>
+/// One detected locomotion family to emit as a directional 2D blend: a <c>Folder</c> named by
+/// the family stem grouping the member AnimFile entries plus one <c>2DBlend</c> node wired to
+/// the citizen pose parameters (<c>move_x</c>/<c>move_y</c>). Produced by
+/// <see cref="LocomotionSetDetector"/>; consumed by <see cref="VmdlWriter"/> and
+/// <see cref="VmdlAugmenter"/>.
+/// </summary>
+public sealed class LocomotionSetSpec
+{
+    /// <summary>Name of the Folder node grouping the family (the stem, collision-suffixed).</summary>
+    public required string FolderName { get; init; }
+
+    /// <summary>Name of the 2DBlend node (<c>&lt;stem&gt;_2D</c>, collision-suffixed).</summary>
+    public required string BlendName { get; init; }
+
+    /// <summary>Looping flag of the 2DBlend node (true when every member loops; the shipped
+    /// locomotion blends are all looping).</summary>
+    public required bool Looping { get; init; }
+
+    /// <summary>
+    /// The 3×3 <c>blend_anim_list</c> grid, <c>[row][col]</c> with rows indexed by
+    /// <c>move_x</c> (−1, 0, +1) and columns by <c>move_y</c> (−1, 0, +1) — the exact shipped
+    /// citizen layout: row 0 = [SW, S, SE], row 1 = [W, center, E], row 2 = [NW, N, NE].
+    /// </summary>
+    public required string[][] BlendGrid { get; init; }
+
+    /// <summary>Names of the batch AnimFile entries grouped under the Folder, in canonical
+    /// direction order (N, NE, E, SE, S, SW, W, NW; absent diagonals skipped).</summary>
+    public required IReadOnlyList<string> MemberNames { get; init; }
+}
+
+/// <summary>
 /// Generates standalone Base-Model vmdl files (KV3 text) that reference an existing model and
 /// register retargeted animation DMX files, following the shipped citizen vmdl conventions
 /// (field set proven to compile in M0 via <c>m0_test.vmdl</c>).
@@ -89,10 +120,14 @@ public static class VmdlWriter
     /// <paramref name="baseModelPath"/>, an optional ModelModifierList/ScaleAndMirror node
     /// (omitted entirely when <paramref name="scale"/> is 1.0 — engine-unit sources need no
     /// rescale; 0.3937 converts cm sources like the citizen rig), and an AnimationList with
-    /// one AnimFile per entry.
+    /// one AnimFile per entry. When <paramref name="locomotionSets"/> is non-empty, each
+    /// set's member entries are grouped under a Folder node (appended after the loose
+    /// entries) together with the set's 2DBlend node, replicating the shipped citizen
+    /// locomotion layout.
     /// </summary>
     public static string GenerateStandalone(string baseModelPath, IEnumerable<AnimEntry> anims,
-        float scale, string defaultRootBone)
+        float scale, string defaultRootBone,
+        IReadOnlyList<LocomotionSetSpec>? locomotionSets = null)
     {
         ArgumentNullException.ThrowIfNull(baseModelPath);
         ArgumentNullException.ThrowIfNull(anims);
@@ -123,9 +158,23 @@ public static class VmdlWriter
             });
         }
 
+        var sets = locomotionSets ?? Array.Empty<LocomotionSetSpec>();
+        var grouped = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var set in sets)
+        {
+            foreach (var member in set.MemberNames)
+                grouped.Add(member);
+        }
+
+        var animList = anims as IReadOnlyList<AnimEntry> ?? new List<AnimEntry>(anims);
         var animChildren = new KvArray();
-        foreach (var anim in anims)
-            animChildren.Items.Add(BuildAnimFileNode(anim, defaultRootBone));
+        foreach (var anim in animList)
+        {
+            if (!grouped.Contains(anim.Name))
+                animChildren.Items.Add(BuildAnimFileNode(anim, defaultRootBone));
+        }
+        foreach (var set in sets)
+            animChildren.Items.Add(BuildLocomotionFolderNode(set, animList, defaultRootBone));
         children.Items.Add(new KvObject
         {
             ["_class"] = new KvString("AnimationList"),
@@ -247,5 +296,106 @@ public static class VmdlWriter
             node["event_keys"] = keys;
 
         return node;
+    }
+
+    /// <summary>
+    /// Builds a locomotion Folder node in the shipped citizen shape (<c>_class</c>,
+    /// <c>name</c>, <c>children</c>): the set's 2DBlend node first, then the member AnimFile
+    /// nodes (in <see cref="LocomotionSetSpec.MemberNames"/> order) — mirroring how the
+    /// shipped <c>CrouchWalk</c>/<c>Walk</c>/<c>Run</c> folders lead with their blend nodes.
+    /// </summary>
+    internal static KvObject BuildLocomotionFolderNode(
+        LocomotionSetSpec set, IReadOnlyList<AnimEntry> allEntries, string motionRootBone)
+    {
+        ArgumentNullException.ThrowIfNull(set);
+        ArgumentNullException.ThrowIfNull(allEntries);
+
+        var folderChildren = new KvArray();
+        folderChildren.Items.Add(Build2DBlendNode(set));
+        foreach (var member in set.MemberNames)
+        {
+            AnimEntry? entry = null;
+            foreach (var candidate in allEntries)
+            {
+                if (string.Equals(candidate.Name, member, StringComparison.Ordinal))
+                {
+                    entry = candidate;
+                    break;
+                }
+            }
+            if (entry is null)
+                throw new ArgumentException(
+                    $"Locomotion set '{set.FolderName}' references unknown entry '{member}'.");
+            folderChildren.Items.Add(BuildAnimFileNode(entry, motionRootBone));
+        }
+
+        return new KvObject
+        {
+            ["_class"] = new KvString("Folder"),
+            ["name"] = new KvString(set.FolderName),
+            ["children"] = folderChildren,
+        };
+    }
+
+    /// <summary>
+    /// Builds one 2DBlend KV3 node replicating the shipped citizen locomotion blends
+    /// (<c>CrouchWalk_Default_2D</c>, <c>Run_Default_2D</c>, …) EXACTLY: the common sequence
+    /// attribute set (with <c>activity_name</c> left empty — the shipped activity wiring is
+    /// model-specific), then <c>row_pose_param_name = "move_x"</c>,
+    /// <c>col_pose_param_name = "move_y"</c>, <c>row_weight_list</c>/<c>col_weight_list</c>
+    /// of <c>[-1.0, 0.0, 1.0]</c> and the 3×3 <c>blend_anim_list</c> grid. The pose
+    /// parameters are NOT declared here: the citizen base models pull them in via their
+    /// PoseParamList prefab (<c>citizen_poseparamlist.vmdl_prefab</c>), which Base-Model
+    /// children inherit — custom (non-citizen) targets must declare <c>move_x</c>/<c>move_y</c>
+    /// on their base model for the blend to be drivable.
+    /// </summary>
+    internal static KvObject Build2DBlendNode(LocomotionSetSpec set)
+    {
+        ArgumentNullException.ThrowIfNull(set);
+        if (set.BlendGrid.Length != 3 || Array.Exists(set.BlendGrid, row => row.Length != 3))
+            throw new ArgumentException("Locomotion blend grid must be 3x3.", nameof(set));
+
+        var node = new KvObject
+        {
+            ["_class"] = new KvString("2DBlend"),
+            ["name"] = new KvString(set.BlendName),
+            ["activity_name"] = new KvString(""),
+            ["activity_weight"] = new KvLong(1),
+            ["weight_list_name"] = new KvString(""),
+            ["fade_in_time"] = new KvDouble(0.2),
+            ["fade_out_time"] = new KvDouble(0.2),
+            ["looping"] = new KvBool(set.Looping),
+            ["delta"] = new KvBool(false),
+            ["worldSpace"] = new KvBool(false),
+            ["hidden"] = new KvBool(false),
+            ["anim_markup_ordered"] = new KvBool(false),
+            ["disable_compression"] = new KvBool(false),
+            ["disable_interpolation"] = new KvBool(false),
+            ["enable_scale"] = new KvBool(false),
+            ["row_pose_param_name"] = new KvString("move_x"),
+            ["col_pose_param_name"] = new KvString("move_y"),
+            ["row_weight_list"] = AxisWeights(),
+            ["col_weight_list"] = AxisWeights(),
+        };
+
+        var grid = new KvArray();
+        foreach (var row in set.BlendGrid)
+        {
+            var rowArray = new KvArray();
+            foreach (var cell in row)
+                rowArray.Items.Add(new KvString(cell));
+            grid.Items.Add(rowArray);
+        }
+        node["blend_anim_list"] = grid;
+        return node;
+
+        static KvArray AxisWeights()
+        {
+            var weights = new KvArray();
+            weights.Items.Add(new KvDouble(-1.0));
+            weights.Items.Add(new KvDouble(0.0));
+            weights.Items.Add(new KvDouble(1.0));
+            return weights;
+        }
     }
 }

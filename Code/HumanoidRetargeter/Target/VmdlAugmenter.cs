@@ -42,6 +42,17 @@ public sealed class AugmentOptions
     /// the document is untouched.
     /// </summary>
     public bool NeutralizePinkyConstraints { get; init; }
+
+    /// <summary>
+    /// Detected locomotion families to splice as Folder + 2DBlend groups (see
+    /// <see cref="LocomotionSetDetector"/>). Each set's member entries are grouped under a
+    /// Folder named <see cref="LocomotionSetSpec.FolderName"/> instead of being spliced at
+    /// the AnimationList top level; a previous run's same-named folder is replaced in place
+    /// (idempotent) — but only when ALL of its AnimFiles belong to this batch, so a
+    /// hand-edited or foreign folder is never destroyed (it throws
+    /// <see cref="VmdlAugmentException"/> instead). Null/empty = no grouping.
+    /// </summary>
+    public IReadOnlyList<LocomotionSetSpec>? LocomotionSets { get; init; }
 }
 
 /// <summary>
@@ -109,7 +120,16 @@ public static class VmdlAugmenter
         if (motionRootBone.Length == 0)
             motionRootBone = options.DefaultRootBone;
 
-        // Validate all entries first so a collision throws before any mutation.
+        var sets = options.LocomotionSets ?? Array.Empty<LocomotionSetSpec>();
+        var groupedNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var set in sets)
+        {
+            foreach (var member in set.MemberNames)
+                groupedNames.Add(member);
+        }
+        var entryNames = new HashSet<string>(entries.Select(e => e.Name), StringComparer.Ordinal);
+
+        // Validate all entries and set names first so a collision throws before any mutation.
         var collisions = new List<string>();
         foreach (var entry in entries)
         {
@@ -120,23 +140,124 @@ public static class VmdlAugmenter
                     $"'{entry.Name}' already exists as {existing.GetString("_class") ?? "<unknown class>"}");
             }
         }
+        foreach (var set in sets)
+        {
+            if (FindByName(listChildren, set.FolderName) is { } folderNode
+                && !IsReplaceableLocomotionFolder(folderNode, entryNames))
+            {
+                collisions.Add(
+                    $"'{set.FolderName}' already exists as "
+                    + $"{folderNode.GetString("_class") ?? "<unknown class>"} whose content was "
+                    + "not produced by this batch");
+            }
+            if (FindByName(listChildren, set.BlendName) is { } blendNode
+                && blendNode.GetString("_class") != "2DBlend")
+            {
+                collisions.Add(
+                    $"'{set.BlendName}' already exists as {blendNode.GetString("_class") ?? "<unknown class>"}");
+            }
+        }
         if (collisions.Count > 0)
             throw new VmdlAugmentException(collisions);
 
+        // Loose entries (not grouped into a locomotion folder): replace in place wherever
+        // they live — top level or inside a previously spliced folder — or append.
         foreach (var entry in entries)
         {
+            if (groupedNames.Contains(entry.Name))
+                continue;
             var node = VmdlWriter.BuildAnimFileNode(entry, motionRootBone);
-            var index = IndexByName(listChildren, entry.Name);
-            if (index >= 0)
-                listChildren.Items[index] = node; // idempotent re-run: replace same-named AnimFile
+            var (parent, index) = LocateByName(listChildren, entry.Name);
+            if (parent is not null)
+                parent.Items[index] = node; // idempotent re-run: replace same-named AnimFile
             else
                 listChildren.Items.Add(node);
+        }
+
+        // Locomotion sets: rebuild each family's folder (replacing a previous run's folder
+        // in place) and remove superseded loose copies of the members and blend node.
+        foreach (var set in sets)
+        {
+            var insertAt = RemoveFolder(listChildren, set.FolderName);
+            foreach (var member in set.MemberNames)
+                RemoveEverywhere(listChildren, member, "AnimFile");
+            RemoveEverywhere(listChildren, set.BlendName, "2DBlend");
+
+            var folder = VmdlWriter.BuildLocomotionFolderNode(set, entries, motionRootBone);
+            if (insertAt >= 0 && insertAt <= listChildren.Items.Count)
+                listChildren.Items.Insert(insertAt, folder);
+            else
+                listChildren.Items.Add(folder);
         }
 
         if (options.NeutralizePinkyConstraints)
             NeutralizePinky(rootNode);
 
         return Kv3.Serialize(doc);
+    }
+
+    // ---------------------------------------------------------------- locomotion folders
+
+    /// <summary>
+    /// Whether an existing node may be replaced by a locomotion folder splice: it must be a
+    /// Folder and every AnimFile anywhere inside it must carry a name this batch produced —
+    /// i.e. the folder holds nothing of the user's own.
+    /// </summary>
+    private static bool IsReplaceableLocomotionFolder(KvObject node, IReadOnlySet<string> entryNames)
+    {
+        if (node.GetString("_class") != "Folder")
+            return false;
+        return AllAnimFilesKnown(node);
+
+        bool AllAnimFilesKnown(KvObject current)
+        {
+            if (current.GetString("_class") == "AnimFile"
+                && !entryNames.Contains(current.GetString("name") ?? ""))
+            {
+                return false;
+            }
+            if (current.GetOrNull("children") is KvArray children)
+            {
+                foreach (var child in children.Items.OfType<KvObject>())
+                {
+                    if (!AllAnimFilesKnown(child))
+                        return false;
+                }
+            }
+            return true;
+        }
+    }
+
+    /// <summary>Removes the Folder named <paramref name="name"/>; returns its top-level
+    /// index (the position the rebuilt folder is re-inserted at) or −1 when it was absent
+    /// or nested.</summary>
+    private static int RemoveFolder(KvArray listChildren, string name)
+    {
+        var (parent, index) = LocateByName(listChildren, name);
+        if (parent is null || ((KvObject)parent.Items[index]).GetString("_class") != "Folder")
+            return -1;
+        parent.Items.RemoveAt(index);
+        return ReferenceEquals(parent, listChildren) ? index : -1;
+    }
+
+    /// <summary>Removes every node of class <paramref name="className"/> named
+    /// <paramref name="name"/>, anywhere in the AnimationList tree (top level or inside
+    /// Folder nodes) — superseded copies from previous runs with different grouping.</summary>
+    private static void RemoveEverywhere(KvArray items, string name, string className)
+    {
+        for (var i = items.Items.Count - 1; i >= 0; i--)
+        {
+            if (items.Items[i] is not KvObject node)
+                continue;
+            if (node.GetString("_class") == className
+                && string.Equals(node.GetString("name"), name, StringComparison.Ordinal))
+            {
+                items.Items.RemoveAt(i);
+                continue;
+            }
+            if (node.GetString("_class") == "Folder" && node.GetOrNull("children") is KvArray nested)
+                RemoveEverywhere(nested, name, className);
+        }
     }
 
     // ---------------------------------------------------------------- CopyPinky neutralization
@@ -207,20 +328,28 @@ public static class VmdlAugmenter
 
     private static KvObject? FindByName(KvArray items, string name)
     {
-        var index = IndexByName(items, name);
-        return index >= 0 ? (KvObject)items.Items[index] : null;
+        var (parent, index) = LocateByName(items, name);
+        return parent is not null ? (KvObject)parent.Items[index] : null;
     }
 
-    private static int IndexByName(KvArray items, string name)
+    /// <summary>Locates a node by name at the AnimationList top level or inside Folder
+    /// nodes (recursively — previously spliced locomotion folders contain our AnimFiles):
+    /// the owning array + index, or (null, −1) when absent.</summary>
+    private static (KvArray? Parent, int Index) LocateByName(KvArray items, string name)
     {
         for (var i = 0; i < items.Items.Count; i++)
         {
-            if (items.Items[i] is KvObject o
-                && string.Equals(o.GetString("name"), name, StringComparison.Ordinal))
+            if (items.Items[i] is not KvObject o)
+                continue;
+            if (string.Equals(o.GetString("name"), name, StringComparison.Ordinal))
+                return (items, i);
+            if (o.GetString("_class") == "Folder" && o.GetOrNull("children") is KvArray nested)
             {
-                return i;
+                var found = LocateByName(nested, name);
+                if (found.Parent is not null)
+                    return found;
             }
         }
-        return -1;
+        return (null, -1);
     }
 }

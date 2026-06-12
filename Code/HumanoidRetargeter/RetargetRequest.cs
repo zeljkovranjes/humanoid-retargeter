@@ -277,4 +277,18 @@ public sealed class BatchOptions
     /// <summary>Auto-suffix colliding clip names (<c>_2</c>, <c>_3</c>, …) across the whole
     /// batch (default on). When off, duplicate names are kept as-is.</summary>
     public bool AutoSuffixCollisions { get; init; } = true;
+
+    /// <summary>
+    /// After conversion, scan the batch's successful clip names for directional locomotion
+    /// families (default OFF): <c>_N</c>/<c>_NE</c>/…/<c>_NW</c> compass suffixes and
+    /// <c>_Forward</c>/<c>_Backward</c>(/<c>_Back</c>)/<c>_Left</c>/<c>_Right</c> word forms
+    /// sharing a stem. Each complete family (all four cardinals) is grouped under a Folder
+    /// node with a <c>2DBlend</c> wired to the citizen <c>move_x</c>/<c>move_y</c> pose
+    /// parameters, replicating the shipped citizen locomotion layout (see
+    /// <see cref="Target.LocomotionSetDetector"/>); detection results land on
+    /// <see cref="RetargetBatchResult.LocomotionSets"/>. Custom (non-citizen) base models
+    /// must declare <c>move_x</c>/<c>move_y</c> pose parameters themselves for the blends to
+    /// be drivable.
+    /// </summary>
+    public bool DetectLocomotionSets { get; init; }
 }

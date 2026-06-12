@@ -119,8 +119,22 @@ public static class Retargeter
                 result.Errors.Add($"{clip.SourceFileName}: {clip.Error}");
         }
 
+        // Locomotion families are detected on the FINAL (collision-suffixed) clip names so
+        // the blend grids reference exactly what the vmdl registers; folder/blend names are
+        // made unique against the same name set the clips used.
+        IReadOnlyList<LocomotionSetSpec>? locomotionSets = null;
+        if (options.DetectLocomotionSets)
+        {
+            var (sets, reports) = LocomotionSetDetector.Detect(
+                entries, usedNames, options.AutoSuffixCollisions);
+            result.LocomotionSets.AddRange(reports);
+            if (sets.Count > 0)
+                locomotionSets = sets;
+        }
+
         result.StandaloneVmdl = VmdlWriter.GenerateStandalone(
-            target.BaseModelPath, entries, target.VmdlScale, target.DefaultRootBone);
+            target.BaseModelPath, entries, target.VmdlScale, target.DefaultRootBone,
+            locomotionSets);
 
         if (options.AugmentVmdlText is not null)
         {
@@ -136,6 +150,7 @@ public static class Retargeter
                         // augmented vmdl must neutralize them or the exported pinky
                         // channels get overridden at runtime.
                         NeutralizePinkyConstraints = mappedPinky,
+                        LocomotionSets = locomotionSets,
                     });
             }
             catch (Exception e)
@@ -171,24 +186,79 @@ public static class Retargeter
             return;
 
         var folder = dmxFolderRelative.Replace('\\', '/').TrimEnd('/');
+        SeedNames(items, folder, usedNames);
+    }
+
+    /// <summary>
+    /// Recursive seeding step: every named AnimationList node reserves its name EXCEPT our
+    /// own replaceable output — AnimFiles whose source lives in the batch's DMX folder, and
+    /// locomotion Folders consisting entirely of such AnimFiles (a re-run replaces the whole
+    /// folder, so neither its name nor its content may block the new batch's names). Foreign
+    /// folders are seeded by name and their content seeded recursively.
+    /// </summary>
+    private static void SeedNames(KvArray items, string dmxFolder, HashSet<string> usedNames)
+    {
         foreach (var node in items.Items.OfType<KvObject>())
         {
             var name = node.GetString("name");
-            if (string.IsNullOrEmpty(name))
-                continue;
+            var cls = node.GetString("_class");
 
-            // Our own AnimFiles (written into the batch's DMX folder) are replaceable.
-            if (node.GetString("_class") == "AnimFile")
+            if (cls == "AnimFile")
             {
-                var source = (node.GetString("source_filename") ?? "").Replace('\\', '/');
-                var ours = folder.Length == 0
-                    ? !source.Contains('/')
-                    : source.StartsWith(folder + "/", StringComparison.OrdinalIgnoreCase);
-                if (ours)
-                    continue;
+                if (!string.IsNullOrEmpty(name) && !IsOurAnimFile(node, dmxFolder))
+                    usedNames.Add(name);
+                continue;
             }
 
-            usedNames.Add(name);
+            if (cls == "Folder")
+            {
+                if (IsOurLocomotionFolder(node, dmxFolder))
+                    continue; // replaceable wholesale — nothing inside reserves a name
+                if (!string.IsNullOrEmpty(name))
+                    usedNames.Add(name);
+                if (node.GetOrNull("children") is KvArray nested)
+                    SeedNames(nested, dmxFolder, usedNames);
+                continue;
+            }
+
+            if (!string.IsNullOrEmpty(name))
+                usedNames.Add(name);
+        }
+    }
+
+    /// <summary>Whether an AnimFile was written by this pipeline: its source_filename sits
+    /// inside the batch's DMX folder.</summary>
+    private static bool IsOurAnimFile(KvObject node, string dmxFolder)
+    {
+        var source = (node.GetString("source_filename") ?? "").Replace('\\', '/');
+        return dmxFolder.Length == 0
+            ? !source.Contains('/')
+            : source.StartsWith(dmxFolder + "/", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Whether a Folder is a locomotion group this pipeline spliced: it contains at
+    /// least one AnimFile and every AnimFile inside it (recursively) is ours.</summary>
+    private static bool IsOurLocomotionFolder(KvObject folderNode, string dmxFolder)
+    {
+        var sawAnimFile = false;
+        return Walk(folderNode) && sawAnimFile;
+
+        bool Walk(KvObject node)
+        {
+            if (node.GetString("_class") == "AnimFile")
+            {
+                sawAnimFile = true;
+                return IsOurAnimFile(node, dmxFolder);
+            }
+            if (node.GetOrNull("children") is KvArray children)
+            {
+                foreach (var child in children.Items.OfType<KvObject>())
+                {
+                    if (!Walk(child))
+                        return false;
+                }
+            }
+            return true;
         }
     }
 

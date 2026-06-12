@@ -187,4 +187,12 @@ public sealed class RetargetBatchResult
     /// <summary>Aggregated error messages (per-clip failures, augmentation failures). The
     /// batch result stays usable regardless — one bad file never aborts the batch.</summary>
     public List<string> Errors { get; } = new();
+
+    /// <summary>
+    /// Directional locomotion families found among the batch's successful clips when
+    /// <see cref="BatchOptions.DetectLocomotionSets"/> was on — one report per family,
+    /// including incomplete ones (reported with <see cref="LocomotionSetReport.Emitted"/>
+    /// false and a note instead of a blend node). Empty when the option is off.
+    /// </summary>
+    public List<LocomotionSetReport> LocomotionSets { get; } = new();
 }
