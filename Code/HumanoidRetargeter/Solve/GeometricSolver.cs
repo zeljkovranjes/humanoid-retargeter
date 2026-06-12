@@ -45,10 +45,13 @@ using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global
 /// <c>ΔC(f) = C_src⁻¹·ΔR(f)·C_src</c>. Both modes share the postmultiplier
 /// <c>C_src·C_tgt⁻¹·R_tgtNormRest</c> and differ only in the premultiplier
 /// (<c>Q_tgt·Q_src⁻¹</c> vs <c>C_tgt·C_src⁻¹</c>); with source == target the two coincide,
-/// so the round-trip identity below holds for every mode. Feet additionally fall back to
-/// delta when the source foot direction is a <i>virtual</i> character-forward extension
-/// (no mapped toe) but the target's is real anatomy
-/// (<see cref="CanonicalFrames.HasVirtualPrimary"/>).</para>
+/// so the round-trip identity below holds for every mode. Under the DEFAULT modes
+/// (<see cref="SolveOptions.TransferModes"/> = null) feet additionally fall back to delta
+/// when the source foot direction is a <i>virtual</i> character-forward extension (no
+/// mapped toe) but the target's is real anatomy
+/// (<see cref="CanonicalFrames.HasVirtualPrimary"/>). An explicit (non-null) mode map
+/// disables that heuristic along with the defaults: the caller's entries are exact, roles
+/// absent from the map are absolute.</para>
 /// <para>Identity proof (citizen round-trip): with source == target, <c>Q_tgt = Q_src</c>,
 /// <c>C_tgt = C_src</c> and the normalized rests coincide, so
 /// <c>R_tgt(f) = ΔR(f)·R_normRest = R_src(f)</c> exactly.</para>
@@ -163,10 +166,16 @@ public sealed class GeometricSolver : IRetargetSolver
 
         private readonly IReadOnlyDictionary<BoneRole, RoleTransferMode> _modes;
 
+        /// <summary>True when the caller supplied an explicit <see cref="SolveOptions.TransferModes"/>
+        /// map: the map is then exact and every fallback heuristic (the virtual-foot delta
+        /// fallback below) is disabled — see <see cref="SolveOptions.TransferModes"/>.</summary>
+        private readonly bool _explicitModes;
+
         public Plan(SkeletonModel src, MappingResult srcMap, TargetRig rig, SolveOptions options)
         {
             _src = src;
             _tgt = rig.Skeleton;
+            _explicitModes = options.TransferModes is not null;
             _modes = options.TransferModes ?? SolveOptions.DefaultTransferModes;
 
             var tgtMap = rig.ToMappingResult();
@@ -251,7 +260,11 @@ public sealed class GeometricSolver : IRetargetSolver
             // on the toe-less makehuman/daz rig). With real anatomy on both sides feet stay
             // absolute — foot pitch carries ground-contact meaning. Same-rig round trips have
             // equal virtual flags on both sides, so this never fires there.
-            if (role is BoneRole.FootL or BoneRole.FootR
+            // HEURISTIC, defaults only: an explicit TransferModes map is a contract — the
+            // caller's entries (and absences = absolute) must win, so the fallback never
+            // overrides it (see SolveOptions.TransferModes).
+            if (!_explicitModes
+                && role is BoneRole.FootL or BoneRole.FootR
                 && _srcCanon.HasVirtualPrimary(role) && !_tgtCanon.HasVirtualPrimary(role))
             {
                 delta = true;

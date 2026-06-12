@@ -73,6 +73,20 @@ public static class EditorPipeline
 	/// engine's own content watcher fighting our writes and has crashed the editor
 	/// natively - conversion outputs and augment targets must live in a user project.
 	/// </summary>
+	/// <remarks>
+	/// EXEMPTION (deliberate, see also <see cref="WriteAndCompileAsync"/>): paths under the
+	/// CURRENT project are never reported as engine-install paths, even when the project
+	/// physically lives inside the install tree (the shipped sample projects under
+	/// <c>&lt;sbox&gt;/samples/...</c> - users do convert there, e.g. samples/sweeper). The
+	/// guard exists to protect ENGINE content (core/, addons/, citizen, ...), not the
+	/// project the user deliberately opened. This re-opens engine-watcher exposure for
+	/// install-resident projects - the original native-crash class - so the write/compile
+	/// path does NOT rely on this guard alone: when the project root itself is under the
+	/// install (<see cref="IsUnderEngineInstallIgnoringProject"/>), WriteAndCompileAsync
+	/// switches to a defensive profile (longer input settle + an extra verified-compile
+	/// retry). The crash itself was fixed by main-thread sequencing; this is defense in
+	/// depth, not user blocking.
+	/// </remarks>
 	public static bool IsUnderEngineInstall( string path )
 	{
 		if ( string.IsNullOrWhiteSpace( path ) )
@@ -82,10 +96,7 @@ public static class EditorPipeline
 		{
 			var full = Path.GetFullPath( path );
 
-			// The CURRENT PROJECT is always writable, even when it physically lives inside
-			// the install tree (e.g. the shipped sample projects under <sbox>/samples/...).
-			// The guard exists to protect ENGINE content (core/, addons/, citizen, ...),
-			// not the project the user deliberately opened.
+			// The CURRENT PROJECT is always writable (see remarks above).
 			var project = Sandbox.Project.Current?.GetRootPath();
 			if ( !string.IsNullOrWhiteSpace( project ) )
 			{
@@ -94,6 +105,30 @@ public static class EditorPipeline
 				if ( full.StartsWith( projPrefix, StringComparison.OrdinalIgnoreCase ) )
 					return false;
 			}
+
+			return IsUnderEngineInstallIgnoringProject( full );
+		}
+		catch
+		{
+			return false;
+		}
+	}
+
+	/// <summary>
+	/// The raw install-tree test behind <see cref="IsUnderEngineInstall"/>, WITHOUT the
+	/// current-project exemption. Used by <see cref="WriteAndCompileAsync"/> to detect
+	/// install-resident projects (samples/...) and harden the compile sequencing there -
+	/// such paths are allowed (the user opened that project) but the engine's content
+	/// watcher still watches them.
+	/// </summary>
+	internal static bool IsUnderEngineInstallIgnoringProject( string path )
+	{
+		if ( string.IsNullOrWhiteSpace( path ) )
+			return false;
+
+		try
+		{
+			var full = Path.GetFullPath( path );
 
 			var root = EngineRootPath;
 			if ( root is not null )
@@ -204,6 +239,13 @@ public static class EditorPipeline
 	/// watcher window after our final write guarantees a quiet compile.</summary>
 	const int InputSettleDelayMs = 2000;
 
+	/// <summary>Settle delay used when the open project physically lives inside the s&amp;box
+	/// installation (samples/...): the engine's own content watcher also watches those paths
+	/// (the current-project exemption in <see cref="IsUnderEngineInstall"/> deliberately lets
+	/// writes through there), so give the watcher extra room before compiling. Defense in
+	/// depth - see the exemption remarks on <see cref="IsUnderEngineInstall"/>.</summary>
+	const int DefensiveInputSettleDelayMs = 4000;
+
 	/// <summary>
 	/// Writes a batch result to disk and compiles it. DMX files go to
 	/// <c>Assets/&lt;dmxFolderRelative&gt;/</c> (must match the
@@ -240,13 +282,18 @@ public static class EditorPipeline
 				+ "Copy the model into your project's Assets folder and pick that copy instead." );
 			return result;
 		}
-		if ( IsUnderEngineInstall( assetsPath ) )
-		{
-			result.Errors.Add(
-				$"Cannot write conversion outputs inside the s&box installation ({assetsPath}). "
-				+ "Open a project that lives outside the s&box install folder." );
-			return result;
-		}
+
+		// POLICY (replaces a former hard reject of install-resident assetsPath, which the
+		// current-project exemption in IsUnderEngineInstall had made unreachable dead code):
+		// the open project's paths are always allowed - users genuinely work in the shipped
+		// sample projects under <sbox>/samples/ - but those paths are also watched by the
+		// engine's own content watcher, the original native-crash class. The crash was fixed
+		// by strict main-thread write→register→settle→compile sequencing; as defense in
+		// depth, install-resident projects get a LONGER settle and one EXTRA verified
+		// (timestamp-checked) compile retry instead of being blocked.
+		var installResident = IsUnderEngineInstallIgnoringProject( assetsPath )
+			|| (augmentVmdlPath is not null && IsUnderEngineInstallIgnoringProject( augmentVmdlPath ));
+		var settleDelayMs = installResident ? DefensiveInputSettleDelayMs : InputSettleDelayMs;
 
 		var successful = batch.Clips.Where( c => c.Success ).ToList();
 		if ( successful.Count == 0 )
@@ -316,20 +363,25 @@ public static class EditorPipeline
 			return result;
 		}
 
-		// ---- 3. settle, then compile ONCE (single retry on abandoned recompile) --------
-		await Task.Delay( InputSettleDelayMs );
+		// ---- 3. settle, then compile ONCE (retry on abandoned recompile: one normally,
+		// two for install-resident projects - see the policy comment above) ---------------
+		await Task.Delay( settleDelayMs );
 
 		var vmdlFileName = Path.GetFileName( result.VmdlPath );
+		var maxAbandonRetries = installResident ? 2 : 1;
 		var logOffset = SboxLogLength();
-		result.Compiled = await CompileAndWaitAsync( result.VmdlAsset );
+		result.Compiled = await CompileAndWaitAsync( result.VmdlAsset, logOffset: logOffset,
+			watchFileName: vmdlFileName );
 
-		if ( !result.Compiled && LogSliceShowsAbandonedRecompile( logOffset, vmdlFileName ) )
+		for ( var retry = 0; retry < maxAbandonRetries && !result.Compiled
+			&& LogSliceShowsAbandonedRecompile( logOffset, vmdlFileName ); retry++ )
 		{
 			Log.Warning( $"[humanoid-retargeter] engine abandoned the recompile of {vmdlFileName} "
-				+ "(inputs not quiet) - retrying once after a settle delay" );
-			await Task.Delay( InputSettleDelayMs );
+				+ $"(inputs not quiet) - retrying ({retry + 1}/{maxAbandonRetries}) after a settle delay" );
+			await Task.Delay( settleDelayMs );
 			logOffset = SboxLogLength();
-			result.Compiled = await CompileAndWaitAsync( result.VmdlAsset );
+			result.Compiled = await CompileAndWaitAsync( result.VmdlAsset, logOffset: logOffset,
+				watchFileName: vmdlFileName );
 		}
 
 		await SwitchToMainThread();
@@ -455,15 +507,55 @@ public static class EditorPipeline
 		}
 	}
 
-	/// <summary>Kicks a full compile and polls until the compiled file exists or the asset
-	/// reports failure (same strategy as the M0 gate - the most honest signal is the
-	/// .vmdl_c on disk). Safe to call from any thread: the compile trigger and every
-	/// <see cref="Asset"/> state query are marshalled to the editor main thread
-	/// (<see cref="SwitchToMainThread"/>) because <c>Task.Delay</c> continuations may
-	/// resume on a pool thread, and engine objects must never be touched there.</summary>
-	public static async Task<bool> CompileAndWaitAsync( Asset asset, float timeoutSeconds = 120 )
+	/// <summary>Kicks a full compile and polls until THIS compile demonstrably produced a
+	/// compiled file, or the asset reports failure. The most honest signal is the .vmdl_c
+	/// on disk - but its mere EXISTENCE proves nothing: augment targets always come with a
+	/// pre-existing .vmdl_c, which would satisfy a naive existence poll and report a stale
+	/// (possibly abandoned) compile as success. The pre-existing file's LastWriteTimeUtc is
+	/// therefore snapshotted BEFORE the compile is triggered, and success requires the
+	/// compiled file to be NEWER than that snapshot (or to newly exist). Safe to call from
+	/// any thread: the compile trigger and every <see cref="Asset"/> state query are
+	/// marshalled to the editor main thread (<see cref="SwitchToMainThread"/>) because
+	/// <c>Task.Delay</c> continuations may resume on a pool thread, and engine objects must
+	/// never be touched there.</summary>
+	/// <param name="asset">The vmdl asset to compile.</param>
+	/// <param name="timeoutSeconds">Poll timeout.</param>
+	/// <param name="logOffset">Optional <see cref="SboxLogLength"/> snapshot taken before
+	/// the compile run: with <paramref name="watchFileName"/>, the poll exits early when the
+	/// engine logs an abandoned recompile for that file (so the caller's retry path runs
+	/// without waiting out the full timeout).</param>
+	/// <param name="watchFileName">File name to watch for in abandoned-recompile log lines.</param>
+	public static async Task<bool> CompileAndWaitAsync(
+		Asset asset, float timeoutSeconds = 120, long logOffset = -1, string watchFileName = null )
 	{
 		await SwitchToMainThread();
+
+		// Resolves the compiled-file path: GetCompiledFile when the asset system can answer
+		// (it may resolve to null until a compile has run), else the engine's
+		// <source>_c sibling convention (file.vmdl -> file.vmdl_c) so a PRE-EXISTING
+		// compiled file is still seen and snapshotted before the compile is triggered.
+		string ResolveCompiledPath()
+		{
+			var path = Try( () => asset.GetCompiledFile( true ) );
+			if ( path is not null )
+				return path;
+			var source = Try( () => asset.AbsolutePath );
+			return string.IsNullOrEmpty( source ) ? null : source + "_c";
+		}
+
+		// Snapshot the pre-existing compiled file BEFORE triggering the compile.
+		var compiledAbs = ResolveCompiledPath();
+		DateTime? preexistingWriteUtc = null;
+		try
+		{
+			if ( compiledAbs is not null && File.Exists( compiledAbs ) )
+				preexistingWriteUtc = File.GetLastWriteTimeUtc( compiledAbs );
+		}
+		catch
+		{
+			// unreadable timestamp: treat as no pre-existing file (existence will satisfy)
+		}
+
 		try
 		{
 			asset.Compile( full: true );
@@ -473,7 +565,20 @@ public static class EditorPipeline
 			Log.Warning( $"[humanoid-retargeter] asset.Compile threw: {e.Message}" );
 		}
 
-		var compiledAbs = Try( () => asset.GetCompiledFile( true ) );
+		bool CompiledFileFresh()
+		{
+			try
+			{
+				if ( compiledAbs is null || !File.Exists( compiledAbs ) )
+					return false;
+				return preexistingWriteUtc is not { } stamp
+					|| File.GetLastWriteTimeUtc( compiledAbs ) > stamp;
+			}
+			catch
+			{
+				return false;
+			}
+		}
 
 		var sw = Stopwatch.StartNew();
 		while ( sw.Elapsed.TotalSeconds < timeoutSeconds )
@@ -481,15 +586,27 @@ public static class EditorPipeline
 			await SwitchToMainThread();
 			if ( Try( () => asset.IsCompileFailed ) )
 				return false;
-			if ( Try( () => asset.IsCompiled && asset.HasCompiledFile ) )
+			// GetCompiledFile may only become authoritative once the compile has run -
+			// prefer it over the convention fallback as soon as it resolves. The freshness
+			// snapshot stays valid either way (both spellings name the same sibling file).
+			compiledAbs = Try( () => asset.GetCompiledFile( true ) ) ?? compiledAbs;
+			if ( CompiledFileFresh() )
 				return true;
-			if ( compiledAbs is not null && File.Exists( compiledAbs ) )
+			// The asset's own compiled flags are trusted only when no stale .vmdl_c could
+			// be feeding them (no pre-existing file and no resolvable compiled path).
+			if ( compiledAbs is null && preexistingWriteUtc is null
+				&& Try( () => asset.IsCompiled && asset.HasCompiledFile ) )
 				return true;
+			// Abandoned recompile ("quiet inputs"): the file will never freshen this run -
+			// bail out so the caller's settle-and-retry path is actually reachable.
+			if ( logOffset >= 0 && watchFileName is not null
+				&& LogSliceShowsAbandonedRecompile( logOffset, watchFileName ) )
+				return false;
 
 			await Task.Delay( 250 );
 		}
 
-		return compiledAbs is not null && File.Exists( compiledAbs );
+		return CompiledFileFresh();
 	}
 
 	static T Try<T>( Func<T> getter )

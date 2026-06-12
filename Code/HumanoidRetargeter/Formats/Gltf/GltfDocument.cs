@@ -431,6 +431,12 @@ internal sealed class GltfDocument
         int componentType = RequiredInt(accessor, "componentType", "accessor");
         bool normalized = accessor.TryGetProperty("normalized", out var n) && n.GetBoolean();
 
+        // The count is attacker-controlled: validate it BEFORE any allocation sized by it.
+        // Negative would throw OverflowException from the array allocation (breaking the
+        // FormatException malformed-file contract); huge would OOM; count * comps can wrap.
+        if (count < 0)
+            throw new FormatException($"glTF: accessor {accessorIndex} has a negative count ({count}).");
+
         int compSize = componentType switch
         {
             5126 => 4,            // FLOAT
@@ -444,10 +450,26 @@ internal sealed class GltfDocument
                 $"glTF: accessor {accessorIndex} must be float (or a normalized integer "
                 + "rotation output).");
 
-        // Zero-filled when no bufferView (legal per spec).
-        var result = new float[count * comps];
+        int elementSize = comps * compSize;
+
         if (!accessor.TryGetProperty("bufferView", out var viewIndexProp))
-            return result;
+        {
+            // Zero-filled when no bufferView (legal per spec) — but then nothing backs the
+            // count, so cap it by the file's total decoded buffer bytes (a real file's
+            // accessors never outgrow its payload; a small floor keeps tiny legitimate
+            // zero-filled accessors working in buffer-less documents).
+            long totalBufferBytes = 0;
+            foreach (var b in buffers)
+                totalBufferBytes += b.Length;
+            long capacity = Math.Min(
+                Math.Max(totalBufferBytes / elementSize, 65536),
+                int.MaxValue / comps); // keeps count * comps int-representable
+            if (count > capacity)
+                throw new FormatException(
+                    $"glTF: accessor {accessorIndex} count {count} exceeds what the file's "
+                    + "buffers could back (malformed or hostile file).");
+            return new float[checked(count * comps)];
+        }
 
         int viewIndex = viewIndexProp.GetInt32();
         if (views.ValueKind != JsonValueKind.Array || viewIndex < 0 || viewIndex >= views.GetArrayLength())
@@ -461,17 +483,20 @@ internal sealed class GltfDocument
 
         int viewOffset = view.TryGetProperty("byteOffset", out var vo) ? vo.GetInt32() : 0;
         int accessorOffset = accessor.TryGetProperty("byteOffset", out var ao) ? ao.GetInt32() : 0;
-        int elementSize = comps * compSize;
         int stride = view.TryGetProperty("byteStride", out var st) ? st.GetInt32() : elementSize;
         if (stride < elementSize)
             throw new FormatException("glTF: bufferView byteStride is smaller than the element size.");
 
+        // Bounds check in long arithmetic BEFORE allocating: the backing range must fit the
+        // buffer, which also caps count at buffer.Length / stride (+1) — so the allocation
+        // below is bounded by the actual file size and checked() can no longer overflow.
         long start = (long)viewOffset + accessorOffset;
         long end = start + (long)(count - 1) * stride + elementSize;
         if (count > 0 && (start < 0 || end > buffer.Length))
             throw new FormatException(
                 $"glTF: accessor {accessorIndex} reads past the end of its buffer (truncated file?).");
 
+        var result = new float[checked(count * comps)];
         for (int element = 0; element < count; element++)
         {
             int offset = (int)(start + (long)element * stride);

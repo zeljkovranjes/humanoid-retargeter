@@ -473,7 +473,7 @@ public sealed class RetargetWindow : Widget
 					// (trajectory correlation) - the rig then takes the deterministic
 					// geometric path on every later conversion (design §6).
 					if ( entry.UseDlSolver )
-						TrySaveDerivedPreset( entry, result, target );
+						TrySaveDerivedPreset( take, result, target );
 					else
 						TrySaveUserPreset( entry );
 				}
@@ -508,10 +508,15 @@ public sealed class RetargetWindow : Widget
 	/// <summary>"Save as profile" on a confirmed DL preview: derives the role↔bone mapping
 	/// implied by the DL alignment (trajectory correlation over the previewed clip,
 	/// <see cref="HumanoidRetargeter.Dl.DlMappingDeriver"/>) and stores it as a user preset
-	/// named <c>user_dl_*</c> - below-threshold roles stay unmapped.</summary>
-	void TrySaveDerivedPreset( SourceFileEntry entry, HumanoidRetargeter.RetargetResult result,
+	/// named <c>user_dl_*</c> - below-threshold roles stay unmapped. The correlation runs
+	/// over the PREVIEWED take (not hardcoded take 0) and against the source resampled on
+	/// the same fps grid the DL clip used - the preview's request may carry a user Sample
+	/// fps while the entry's cached scene was imported at the default rate, and a frame-index
+	/// correlation across different grids is time-misaligned.</summary>
+	void TrySaveDerivedPreset( SourceTakeEntry take, HumanoidRetargeter.RetargetResult result,
 		TargetPickers.ResolvedTarget target )
 	{
+		var entry = take.File;
 		var assetsPath = Project.Current?.GetAssetsPath();
 		if ( assetsPath is null || entry.Scene is null )
 			return;
@@ -524,8 +529,20 @@ public sealed class RetargetWindow : Widget
 		{
 			var dlClip = new HumanoidRetargeter.Skeleton.Clip(
 				clip.ClipName, clip.Fps, clip.Looping, clip.SolvedFrames );
+
+			// The DL output's fps is the import sample rate the preview's request used
+			// (BuildRequest passes the Sample fps box through). Re-import the source on
+			// that grid when it differs from the entry's cached scene so source frame i
+			// and DL frame i are the same instant in time.
+			var scene = entry.Scene;
+			if ( take.TakeIndex >= scene.Clips.Count
+				|| MathF.Abs( scene.Clips[take.TakeIndex].Fps - clip.Fps ) > 0.01f )
+			{
+				scene = Retargeter.ImportSource( entry.Bytes, entry.FileName, clip.Fps );
+			}
+
 			var derived = HumanoidRetargeter.Dl.DlMappingDeriver.Derive(
-				entry.Scene, 0, dlClip, target.Spec.Rig );
+				scene, take.TakeIndex, dlClip, target.Spec.Rig );
 			derived.Notes.Add( "derived from DL" );
 
 			// Hips alone is structural, not evidence of an alignment - don't save that.
@@ -536,7 +553,10 @@ public sealed class RetargetWindow : Widget
 				return;
 			}
 
-			UserPresets.Save( assetsPath, entry.Signature, entry.Scene.Skeleton, derived, "user_dl" );
+			// scene.Skeleton == entry.Scene.Skeleton structurally (the sample fps only
+			// changes clip resampling, never the rig) - save with the skeleton the derived
+			// bone indices actually reference.
+			UserPresets.Save( assetsPath, entry.Signature, scene.Skeleton, derived, "user_dl" );
 			SetStatus( $"Saved DL-derived preset ({derived.RoleToBone.Count} roles, mean correlation "
 				+ $"{derived.Confidence:0.00}) for {entry.FileName}.", Theme.Green );
 		}
@@ -548,15 +568,19 @@ public sealed class RetargetWindow : Widget
 
 	// ============================================================================ convert
 
-	/// <summary>One facade request per take row. Multi-take files set
+	/// <summary>One facade request per take row. Files whose SCENE has multiple takes set
 	/// <see cref="HumanoidRetargeter.RetargetRequest.TakeIndex"/> so each row converts only
-	/// its own take; single-take files keep the all-takes default (equivalent).</summary>
+	/// its own take; single-take files keep the all-takes default (equivalent).
+	/// IMPORTANT: the decision keys on <see cref="SourceFileEntry.ClipCount"/> (the imported
+	/// scene's immutable clip count), NOT on the live UI take list — RemoveTake mutates
+	/// <c>File.Takes</c>, so a multi-take file reduced to one visible row must still convert
+	/// only that row's take, not every take in the file.</summary>
 	HumanoidRetargeter.RetargetRequest BuildRequest( SourceTakeEntry take ) => new()
 	{
 		SourceData = take.File.Bytes,
 		SourceFileName = take.File.FileName,
 		SourceId = take.SourceId, // full path + take index: rows must join results unambiguously
-		TakeIndex = take.File.Takes.Count > 1 ? take.TakeIndex : null,
+		TakeIndex = take.File.ClipCount > 1 ? take.TakeIndex : null,
 		MappingOverride = take.File.Mapping,
 		Solver = take.File.UseDlSolver
 			? HumanoidRetargeter.SolverKind.DeepLearning

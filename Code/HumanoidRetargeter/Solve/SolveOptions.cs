@@ -45,10 +45,16 @@ public sealed class SolveOptions
             [BoneRole.Neck] = RoleTransferMode.DeltaFromRest,
         };
 
-    /// <summary>Per-role transfer mode overrides; roles not present use
-    /// <see cref="DefaultTransferModes"/> (and roles absent there are
-    /// <see cref="RoleTransferMode.AbsoluteDirection"/>). Replaces the defaults entirely
-    /// when set — pass an empty dictionary for all-absolute (legacy) behavior.</summary>
+    /// <summary>
+    /// Per-role transfer modes. Null (default) = <see cref="DefaultTransferModes"/> plus the
+    /// solver's virtual-foot heuristic (a toe-less source's virtual foot direction falls back
+    /// to <see cref="RoleTransferMode.DeltaFromRest"/> — see the
+    /// <see cref="GeometricSolver"/> remarks). A non-null map REPLACES the defaults entirely
+    /// and disables every fallback heuristic: each role uses exactly the mode in the map, and
+    /// roles absent from it are <see cref="RoleTransferMode.AbsoluteDirection"/>. Pass an
+    /// empty dictionary for fully absolute (legacy) behavior — API callers supplying a map
+    /// opt out of all heuristics.
+    /// </summary>
     public IReadOnlyDictionary<BoneRole, RoleTransferMode>? TransferModes { get; init; }
 
     /// <summary>
