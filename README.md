@@ -1,3 +1,5 @@
+<p align="center"><img src="logo.png" width="160"></p>
+
 # Humanoid Retargeter
 
 An [s&box](https://sbox.game) library that retargets skeletal animations from **any
