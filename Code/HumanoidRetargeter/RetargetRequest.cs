@@ -13,13 +13,14 @@ namespace HumanoidRetargeter;
 /// </summary>
 public sealed class RetargetRequest
 {
-    /// <summary>Raw bytes of the source file (.fbx or .bvh).</summary>
+    /// <summary>Raw bytes of the source file (.fbx, .bvh, .glb or .gltf).</summary>
     public required byte[] SourceData { get; init; }
 
     /// <summary>
     /// Source file name (used for the report and DMX provenance). The extension drives the
-    /// format choice (<c>.fbx</c> / <c>.bvh</c>); when the extension is unknown the content
-    /// is sniffed (FBX binary magic / "FBXHeaderExtension" / BVH "HIERARCHY").
+    /// format choice (<c>.fbx</c> / <c>.bvh</c> / <c>.glb</c> / <c>.gltf</c>); when the
+    /// extension is unknown the content is sniffed (FBX binary magic /
+    /// "FBXHeaderExtension" / BVH "HIERARCHY" / GLB 'glTF' magic / glTF JSON).
     /// </summary>
     public required string SourceFileName { get; init; }
 
@@ -37,6 +38,14 @@ public sealed class RetargetRequest
     /// are evaluated on this grid). Null = the importer default (30 fps).
     /// </summary>
     public float? SampleFps { get; init; }
+
+    /// <summary>
+    /// Restricts the conversion to ONE take of the source file (0-based index into the
+    /// imported scene's clips). Null = convert all takes. Out of range fails the request's
+    /// clip result with a clear error (the batch continues). UI listings that expand a
+    /// multi-take file into one entry per take submit one request per selected take.
+    /// </summary>
+    public int? TakeIndex { get; init; }
 
     /// <summary>
     /// UI-supplied mapping (manual mapping table or a user preset loaded Editor-side).

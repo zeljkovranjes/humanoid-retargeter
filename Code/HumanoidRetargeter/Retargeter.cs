@@ -6,6 +6,7 @@ using HumanoidRetargeter.Cleanup;
 using HumanoidRetargeter.Formats.Bvh;
 using HumanoidRetargeter.Formats.Dmx;
 using HumanoidRetargeter.Formats.Fbx;
+using HumanoidRetargeter.Formats.Gltf;
 using HumanoidRetargeter.Mapping;
 using HumanoidRetargeter.Maths;
 using HumanoidRetargeter.Skeleton;
@@ -28,8 +29,8 @@ using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global
 /// <remarks>
 /// Pipeline per clip:
 /// <list type="number">
-/// <item><b>Import</b> — format by file extension (<c>.fbx</c>/<c>.bvh</c>), content sniff
-/// as fallback → <see cref="SourceScene"/> (cm, native axes).</item>
+/// <item><b>Import</b> — format by file extension (<c>.fbx</c>/<c>.bvh</c>/<c>.glb</c>/
+/// <c>.gltf</c>), content sniff as fallback → <see cref="SourceScene"/> (cm, native axes).</item>
 /// <item><b>Mapping</b> — per request: <see cref="RetargetRequest.MappingOverride"/> wins;
 /// else <see cref="ProfileDetector.Detect"/> over the preset library (user presets are
 /// loaded Editor-side and arrive as overrides); else <see cref="AutoMapper.Map"/> as best
@@ -63,7 +64,8 @@ using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global
 /// </remarks>
 public static class Retargeter
 {
-    /// <summary>Converts ALL takes of one source file. Equivalent to a one-request batch.</summary>
+    /// <summary>Converts one source file — all takes, or only
+    /// <see cref="RetargetRequest.TakeIndex"/> when set. Equivalent to a one-request batch.</summary>
     public static RetargetResult Convert(RetargetRequest request, RetargetTargetSpec target)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -191,15 +193,24 @@ public static class Retargeter
 
     /// <summary>
     /// Detection-only entry point for UI listings: imports the file and runs the same
-    /// preset-then-auto mapping as conversion, without solving anything. Throws
-    /// <see cref="FormatException"/> when the file is unreadable.
+    /// preset-then-auto mapping as conversion, without solving anything. Also reports the
+    /// file's take metadata (clip names, in take-index order) so listings can expand a
+    /// multi-take file into one entry per take. Throws <see cref="FormatException"/> when
+    /// the file is unreadable.
     /// </summary>
-    public static MappingReportInfo Inspect(byte[] sourceData, string fileName)
+    public static InspectResult Inspect(byte[] sourceData, string fileName)
     {
         ArgumentNullException.ThrowIfNull(sourceData);
         ArgumentNullException.ThrowIfNull(fileName);
         var scene = ImportSource(sourceData, fileName);
-        return ResolveMapping(scene.Skeleton).Report;
+        var takeNames = new List<string>(scene.Clips.Count);
+        foreach (var clip in scene.Clips)
+            takeNames.Add(clip.Name);
+        return new InspectResult
+        {
+            Mapping = ResolveMapping(scene.Skeleton).Report,
+            TakeNames = takeNames,
+        };
     }
 
     // ================================================================ per-request pipeline
@@ -267,8 +278,32 @@ public static class Retargeter
                 + "verify the compiled sequence on engine-space targets).");
         }
 
+        // TakeIndex narrows the conversion to a single take (UI per-take entries submit one
+        // request per selected take); null keeps the historical convert-all-takes behavior.
+        var takeStart = 0;
+        var takeEnd = scene.Clips.Count;
+        if (request.TakeIndex is { } takeIndex)
+        {
+            if (takeIndex < 0 || takeIndex >= scene.Clips.Count)
+            {
+                clips.Add(new ClipResult
+                {
+                    ClipName = FileStem(request.SourceFileName),
+                    SourceFileName = request.SourceFileName,
+                    SourceId = sourceId,
+                    Mapping = report,
+                    Success = false,
+                    Error = $"Take index {takeIndex} is out of range: the source file "
+                        + $"contains {scene.Clips.Count} take(s).",
+                });
+                return false;
+            }
+            takeStart = takeIndex;
+            takeEnd = takeIndex + 1;
+        }
+
         var anyPinkySuccess = false;
-        for (var take = 0; take < scene.Clips.Count; take++)
+        for (var take = takeStart; take < takeEnd; take++)
         {
             var clipName = UniqueClipName(
                 SanitizeClipName(RequestedClipName(request, scene, take)),
@@ -452,14 +487,16 @@ public static class Retargeter
     /// <summary>
     /// Imports source-file bytes exactly like conversion does: the extension picks the
     /// importer; unknown extensions fall back to content sniffing (FBX binary magic / ASCII
-    /// header token / BVH "HIERARCHY"). Public so UI listings inspect files through the SAME
-    /// import path the pipeline uses (no duplicate sniffing logic caller-side).
+    /// header token / BVH "HIERARCHY" / GLB 'glTF' magic / glTF JSON). Public so UI listings
+    /// inspect files through the SAME import path the pipeline uses (no duplicate sniffing
+    /// logic caller-side).
     /// </summary>
     /// <param name="data">Raw file bytes.</param>
     /// <param name="fileName">File name; only the extension is consulted.</param>
     /// <param name="sampleFps">Resample rate for the imported clips; null = importer default
     /// (30 fps).</param>
-    /// <exception cref="FormatException">Thrown when the bytes are not a readable FBX/BVH.</exception>
+    /// <exception cref="FormatException">Thrown when the bytes are not a readable
+    /// FBX/BVH/glTF.</exception>
     public static SourceScene ImportSource(byte[] data, string fileName, float? sampleFps = null)
     {
         ArgumentNullException.ThrowIfNull(data);
@@ -467,17 +504,20 @@ public static class Retargeter
 
         var fbxOptions = sampleFps is { } fbxFps ? new FbxImportOptions { SampleFps = fbxFps } : null;
         var bvhOptions = sampleFps is { } bvhFps ? new BvhImportOptions { SampleFps = bvhFps } : null;
+        var gltfOptions = sampleFps is { } gltfFps ? new GltfImportOptions { SampleFps = gltfFps } : null;
         var ext = ExtensionOf(fileName);
         return ext switch
         {
             "fbx" => FbxImporter.Import(data, fbxOptions),
             "bvh" => BvhImporter.Import(data, bvhOptions),
+            "glb" or "gltf" => GltfImporter.Import(data, gltfOptions),
             _ => SniffFormat(data) switch
             {
                 "fbx" => FbxImporter.Import(data, fbxOptions),
                 "bvh" => BvhImporter.Import(data, bvhOptions),
+                "gltf" => GltfImporter.Import(data, gltfOptions),
                 _ => throw new FormatException(
-                    $"Unrecognized source format for '{fileName}' (expected .fbx or .bvh)."),
+                    $"Unrecognized source format for '{fileName}' (expected .fbx, .bvh, .glb or .gltf)."),
             },
         };
     }
@@ -489,11 +529,19 @@ public static class Retargeter
         if (StartsWithAscii(data, fbxMagic))
             return "fbx";
 
+        // GLB magic: 'glTF' (0x46546C67 little-endian).
+        if (StartsWithAscii(data, "glTF"))
+            return "gltf";
+
         var head = Encoding.UTF8.GetString(data, 0, Math.Min(data.Length, 4096));
         if (head.Contains("FBXHeaderExtension", StringComparison.Ordinal))
             return "fbx"; // ASCII FBX
-        if (head.TrimStart().StartsWith("HIERARCHY", StringComparison.OrdinalIgnoreCase))
+        var trimmed = head.TrimStart();
+        if (trimmed.StartsWith("HIERARCHY", StringComparison.OrdinalIgnoreCase))
             return "bvh";
+        if (trimmed.StartsWith("{", StringComparison.Ordinal)
+            && head.Contains("\"asset\"", StringComparison.Ordinal))
+            return "gltf"; // plain-JSON glTF
         return null;
     }
 
