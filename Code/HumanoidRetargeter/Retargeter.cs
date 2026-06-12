@@ -119,8 +119,22 @@ public static class Retargeter
                 result.Errors.Add($"{clip.SourceFileName}: {clip.Error}");
         }
 
+        // Locomotion families are detected on the FINAL (collision-suffixed) clip names so
+        // the blend grids reference exactly what the vmdl registers; folder/blend names are
+        // made unique against the same name set the clips used.
+        IReadOnlyList<LocomotionSetSpec>? locomotionSets = null;
+        if (options.DetectLocomotionSets)
+        {
+            var (sets, reports) = LocomotionSetDetector.Detect(
+                entries, usedNames, options.AutoSuffixCollisions);
+            result.LocomotionSets.AddRange(reports);
+            if (sets.Count > 0)
+                locomotionSets = sets;
+        }
+
         result.StandaloneVmdl = VmdlWriter.GenerateStandalone(
-            target.BaseModelPath, entries, target.VmdlScale, target.DefaultRootBone);
+            target.BaseModelPath, entries, target.VmdlScale, target.DefaultRootBone,
+            locomotionSets);
 
         if (options.AugmentVmdlText is not null)
         {
@@ -136,6 +150,7 @@ public static class Retargeter
                         // augmented vmdl must neutralize them or the exported pinky
                         // channels get overridden at runtime.
                         NeutralizePinkyConstraints = mappedPinky,
+                        LocomotionSets = locomotionSets,
                     });
             }
             catch (Exception e)
@@ -171,24 +186,79 @@ public static class Retargeter
             return;
 
         var folder = dmxFolderRelative.Replace('\\', '/').TrimEnd('/');
+        SeedNames(items, folder, usedNames);
+    }
+
+    /// <summary>
+    /// Recursive seeding step: every named AnimationList node reserves its name EXCEPT our
+    /// own replaceable output — AnimFiles whose source lives in the batch's DMX folder, and
+    /// locomotion Folders consisting entirely of such AnimFiles (a re-run replaces the whole
+    /// folder, so neither its name nor its content may block the new batch's names). Foreign
+    /// folders are seeded by name and their content seeded recursively.
+    /// </summary>
+    private static void SeedNames(KvArray items, string dmxFolder, HashSet<string> usedNames)
+    {
         foreach (var node in items.Items.OfType<KvObject>())
         {
             var name = node.GetString("name");
-            if (string.IsNullOrEmpty(name))
-                continue;
+            var cls = node.GetString("_class");
 
-            // Our own AnimFiles (written into the batch's DMX folder) are replaceable.
-            if (node.GetString("_class") == "AnimFile")
+            if (cls == "AnimFile")
             {
-                var source = (node.GetString("source_filename") ?? "").Replace('\\', '/');
-                var ours = folder.Length == 0
-                    ? !source.Contains('/')
-                    : source.StartsWith(folder + "/", StringComparison.OrdinalIgnoreCase);
-                if (ours)
-                    continue;
+                if (!string.IsNullOrEmpty(name) && !IsOurAnimFile(node, dmxFolder))
+                    usedNames.Add(name);
+                continue;
             }
 
-            usedNames.Add(name);
+            if (cls == "Folder")
+            {
+                if (IsOurLocomotionFolder(node, dmxFolder))
+                    continue; // replaceable wholesale — nothing inside reserves a name
+                if (!string.IsNullOrEmpty(name))
+                    usedNames.Add(name);
+                if (node.GetOrNull("children") is KvArray nested)
+                    SeedNames(nested, dmxFolder, usedNames);
+                continue;
+            }
+
+            if (!string.IsNullOrEmpty(name))
+                usedNames.Add(name);
+        }
+    }
+
+    /// <summary>Whether an AnimFile was written by this pipeline: its source_filename sits
+    /// inside the batch's DMX folder.</summary>
+    private static bool IsOurAnimFile(KvObject node, string dmxFolder)
+    {
+        var source = (node.GetString("source_filename") ?? "").Replace('\\', '/');
+        return dmxFolder.Length == 0
+            ? !source.Contains('/')
+            : source.StartsWith(dmxFolder + "/", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Whether a Folder is a locomotion group this pipeline spliced: it contains at
+    /// least one AnimFile and every AnimFile inside it (recursively) is ours.</summary>
+    private static bool IsOurLocomotionFolder(KvObject folderNode, string dmxFolder)
+    {
+        var sawAnimFile = false;
+        return Walk(folderNode) && sawAnimFile;
+
+        bool Walk(KvObject node)
+        {
+            if (node.GetString("_class") == "AnimFile")
+            {
+                sawAnimFile = true;
+                return IsOurAnimFile(node, dmxFolder);
+            }
+            if (node.GetOrNull("children") is KvArray children)
+            {
+                foreach (var child in children.Items.OfType<KvObject>())
+                {
+                    if (!Walk(child))
+                        return false;
+                }
+            }
+            return true;
         }
     }
 
@@ -429,8 +499,8 @@ public static class Retargeter
         try
         {
             clip = SolveAndClean(request, target, context, scene, map, report, take, clipName);
-            EmitClip(request, target, context, options, clips, entries, report, sourceId,
-                clipName, clip.Frames, clip.Fps, clip.Looping, isMirrored: false);
+            EmitClip(request, target, context, options, usedNames, clips, entries, report,
+                sourceId, clipName, clip.Frames, clip.Fps, clip.Looping, isMirrored: false);
         }
         catch (Exception e)
         {
@@ -459,8 +529,8 @@ public static class Retargeter
                 // (their mirrored channels are placeholders the baker overwrites).
                 if (context.HasIkBakedBones)
                     IkBoneBaker.Bake(mirroredFrames, target.Rig);
-                EmitClip(request, target, context, options, clips, entries, report, sourceId,
-                    mirroredName, mirroredFrames, clip.Fps, clip.Looping, isMirrored: true);
+                EmitClip(request, target, context, options, usedNames, clips, entries, report,
+                    sourceId, mirroredName, mirroredFrames, clip.Fps, clip.Looping, isMirrored: true);
             }
             catch (Exception e)
             {
@@ -481,10 +551,14 @@ public static class Retargeter
 
     /// <summary>Shared tail of clip production (primary and mirrored twin): optional footstep
     /// events, DMX serialization, the <see cref="ClipResult"/> and the vmdl
-    /// <see cref="AnimEntry"/>.</summary>
+    /// <see cref="AnimEntry"/> — plus the additive (<c>_delta</c>) companion entry when
+    /// <see cref="RetargetRequest.CreateAdditiveVariant"/> is on (a second AnimFile REUSING
+    /// the clip's DMX with an AnimSubtract child, shipped-citizen shape; no separate
+    /// <see cref="ClipResult"/> since no separate DMX exists).</summary>
     private static void EmitClip(
         RetargetRequest request, RetargetTargetSpec target, TargetContext context,
-        BatchOptions options, List<ClipResult> clips, List<AnimEntry> entries,
+        BatchOptions options, HashSet<string> usedNames,
+        List<ClipResult> clips, List<AnimEntry> entries,
         MappingReportInfo report, string sourceId,
         string clipName, List<XForm[]> frames, float fps, bool looping, bool isMirrored)
     {
@@ -502,6 +576,15 @@ public static class Retargeter
             });
 
         var extractMotion = request.RootMotion == RootMotionMode.Extract;
+
+        // Additive variant: '<clip>_delta' (shipped naming), collision-suffixed like every
+        // other batch name. Only the NAME is produced here — the vmdl entry below reuses
+        // the base clip's DMX (resourcecompiler does the reference-frame subtraction).
+        var deltaName = request.CreateAdditiveVariant
+            ? UniqueClipName(
+                SanitizeClipName(clipName + "_delta"), usedNames, options.AutoSuffixCollisions)
+            : null;
+
         clips.Add(new ClipResult
         {
             ClipName = clipName,
@@ -517,15 +600,32 @@ public static class Retargeter
             ExtractMotion = extractMotion,
             FootstepEvents = events,
             IsMirroredVariant = isMirrored,
+            HasAdditiveVariant = deltaName is not null,
+            AdditiveVariantName = deltaName,
         });
+        var sourceFilename = JoinAssetPath(options.DmxFolderRelative, dmxFileName);
         entries.Add(new AnimEntry
         {
             Name = clipName,
-            SourceFilename = JoinAssetPath(options.DmxFolderRelative, dmxFileName),
+            SourceFilename = sourceFilename,
             Looping = looping,
             ExtractMotion = extractMotion,
             Events = events,
         });
+        if (deltaName is not null)
+        {
+            // The shipped _delta sequences carry the AnimSubtract child and nothing else
+            // (no motion extraction, no events) — an additive layer fires no footsteps and
+            // extracting root motion from a delta makes no sense.
+            entries.Add(new AnimEntry
+            {
+                Name = deltaName,
+                SourceFilename = sourceFilename,
+                Looping = looping,
+                SubtractAnimName = clipName,
+                SubtractFrame = 0,
+            });
+        }
     }
 
     /// <summary>

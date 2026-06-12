@@ -136,6 +136,19 @@ public sealed class RetargetRequest
     /// </summary>
     public bool CreateMirroredVariant { get; init; }
 
+    /// <summary>
+    /// Additionally register an additive (delta) twin of every converted clip in the
+    /// generated/augmented vmdl (default OFF), named <c>&lt;clip&gt;_delta</c> (the shipped
+    /// citizen naming; collision-suffixed across the batch as usual). The twin is a second
+    /// AnimFile entry REUSING the clip's DMX with an <c>AnimSubtract</c> child
+    /// (<c>anim_name</c> = the base sequence, <c>frame</c> = 0) — exactly the shipped
+    /// <c>IdleLayer_01</c>/<c>IdleLayer_01_delta</c> pattern, where resourcecompiler
+    /// subtracts the reference frame at compile time (no frame math happens here). The
+    /// resulting <c>_delta</c> sequence is what s&amp;box layered animation additively
+    /// blends on top of a base pose.
+    /// </summary>
+    public bool CreateAdditiveVariant { get; init; }
+
     /// <summary>Output clip name override; with multiple takes an index suffix is appended.
     /// Null = the source take name.</summary>
     public string? ClipNameOverride { get; init; }
@@ -264,4 +277,18 @@ public sealed class BatchOptions
     /// <summary>Auto-suffix colliding clip names (<c>_2</c>, <c>_3</c>, …) across the whole
     /// batch (default on). When off, duplicate names are kept as-is.</summary>
     public bool AutoSuffixCollisions { get; init; } = true;
+
+    /// <summary>
+    /// After conversion, scan the batch's successful clip names for directional locomotion
+    /// families (default OFF): <c>_N</c>/<c>_NE</c>/…/<c>_NW</c> compass suffixes and
+    /// <c>_Forward</c>/<c>_Backward</c>(/<c>_Back</c>)/<c>_Left</c>/<c>_Right</c> word forms
+    /// sharing a stem. Each complete family (all four cardinals) is grouped under a Folder
+    /// node with a <c>2DBlend</c> wired to the citizen <c>move_x</c>/<c>move_y</c> pose
+    /// parameters, replicating the shipped citizen locomotion layout (see
+    /// <see cref="Target.LocomotionSetDetector"/>); detection results land on
+    /// <see cref="RetargetBatchResult.LocomotionSets"/>. Custom (non-citizen) base models
+    /// must declare <c>move_x</c>/<c>move_y</c> pose parameters themselves for the blends to
+    /// be drivable.
+    /// </summary>
+    public bool DetectLocomotionSets { get; init; }
 }

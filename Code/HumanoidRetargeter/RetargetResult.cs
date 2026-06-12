@@ -138,6 +138,18 @@ public sealed class ClipResult
     /// collision-suffixed as usual).
     /// </summary>
     public bool IsMirroredVariant { get; init; }
+
+    /// <summary>
+    /// True when <see cref="RetargetRequest.CreateAdditiveVariant"/> registered a companion
+    /// additive (<c>_delta</c>) AnimFile entry for this clip in the generated/augmented vmdl
+    /// (an AnimSubtract sequence reusing this clip's DMX — no separate clip result exists,
+    /// since no separate DMX is produced).
+    /// </summary>
+    public bool HasAdditiveVariant { get; init; }
+
+    /// <summary>Name of the additive variant sequence (<c>&lt;clip&gt;_delta</c>,
+    /// collision-suffixed); null when <see cref="HasAdditiveVariant"/> is false.</summary>
+    public string? AdditiveVariantName { get; init; }
 }
 
 /// <summary>Result of a single-file <see cref="Retargeter.Convert"/> (all takes in the file).</summary>
@@ -175,4 +187,12 @@ public sealed class RetargetBatchResult
     /// <summary>Aggregated error messages (per-clip failures, augmentation failures). The
     /// batch result stays usable regardless — one bad file never aborts the batch.</summary>
     public List<string> Errors { get; } = new();
+
+    /// <summary>
+    /// Directional locomotion families found among the batch's successful clips when
+    /// <see cref="BatchOptions.DetectLocomotionSets"/> was on — one report per family,
+    /// including incomplete ones (reported with <see cref="LocomotionSetReport.Emitted"/>
+    /// false and a note instead of a blend node). Empty when the option is off.
+    /// </summary>
+    public List<LocomotionSetReport> LocomotionSets { get; } = new();
 }
