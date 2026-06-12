@@ -61,8 +61,9 @@ public static class FbxImporter
                 restWorlds = EvaluateWorlds(ctx, stack, ClipStartTicks(ctx, stack));
         }
 
+        var notes = new List<string>();
         var restLocals = WorldsToLocals(ctx, restWorlds);
-        ApplyStaticTranslationChannels(ctx, restLocals);
+        ApplyStaticTranslationChannels(ctx, restWorlds, restLocals, notes);
         var skeleton = BuildSkeleton(ctx, restLocals);
 
         // ---- clips -----------------------------------------------------------------
@@ -79,7 +80,7 @@ public static class FbxImporter
             scene.UpAxis, scene.UpAxisSign,
             scene.FrontAxis, scene.FrontAxisSign,
             scene.CoordAxis, scene.CoordAxisSign,
-            scene.OriginalUpAxis);
+            scene.OriginalUpAxis, notes);
     }
 
     // =====================================================================================
@@ -139,9 +140,16 @@ public static class FbxImporter
 
         void Visit(FbxObject m)
         {
-            if (!kept.Contains(m.Id) || !visited.Add(m.Id))
-                return;
-            result.Add(m);
+            if (kept.Contains(m.Id))
+            {
+                if (!visited.Add(m.Id))
+                    return;
+                result.Add(m);
+            }
+            // Recurse THROUGH non-kept nodes: in the fallback paths the kept set can be
+            // non-contiguous (e.g. a kept node whose ancestor chain passes through a Mesh),
+            // and the kept descendants must still be reached. ImportContext re-parents them
+            // to their nearest kept ancestor.
             foreach (var child in m.ModelChildren)
                 Visit(child);
         }
@@ -339,19 +347,36 @@ public static class FbxImporter
     /// static curve are overridden, others keep the bind/Lcl-derived value. Rotations are
     /// untouched. A curve is static when its value range satisfies
     /// <c>max−min &lt; max(1e-3, 1e-5·max|value|)</c> in native file units (cm for these rigs).</para>
+    /// <para>The override goes through the same world-matrix path as the rest build: the
+    /// static value is substituted into the node's native Lcl translation, the bone's world
+    /// position is recomputed under the (possibly scaled) parent world, and the rigid rest
+    /// local is re-derived from it — so ancestor scale folds into the result exactly like
+    /// <see cref="WorldsToLocals"/> folds it everywhere else. Writing the raw
+    /// <c>native·UnitScale</c> value directly would drop ancestor scale.</para>
+    /// <para>When several animation stacks carry static translations for the same bone that
+    /// disagree beyond the static tolerance, the first stack still wins but a note naming the
+    /// bones is appended to <paramref name="notes"/> (per-stack rest poses are out of scope).</para>
     /// </remarks>
-    private static void ApplyStaticTranslationChannels(ImportContext ctx, XForm[] restLocals)
+    private static void ApplyStaticTranslationChannels(
+        ImportContext ctx, Matrix4x4[] restWorlds, XForm[] restLocals, List<string> notes)
     {
         Span<float> statics = stackalloc float[3];
         Span<bool> hasStatic = stackalloc bool[3];
+        List<string>? disagreeing = null;
 
         for (int i = 0; i < ctx.Bones.Count; i++)
         {
             long id = ctx.Bones[i].Id;
             FbxAnimCurveNode? cn = null;
-            foreach (var stack in ctx.Scene.Stacks)
-                if (stack.Bindings.TryGetValue((id, "Lcl Translation"), out cn))
+            int firstStack = -1;
+            for (int s = 0; s < ctx.Scene.Stacks.Count; s++)
+            {
+                if (ctx.Scene.Stacks[s].Bindings.TryGetValue((id, "Lcl Translation"), out cn))
+                {
+                    firstStack = s;
                     break;
+                }
+            }
             if (cn is null)
                 continue;
 
@@ -366,22 +391,77 @@ public static class FbxImporter
                     any = true;
                 }
             }
+
+            if (any && StacksDisagree(ctx, id, firstStack, cn, statics, hasStatic))
+                (disagreeing ??= new List<string>()).Add(ctx.BoneNames[i]);
+
             if (!any)
                 continue;
 
             // The Lcl translation enters the FBX local matrix purely additively after the
-            // pivot/offset terms (see FbxTransform.LocalMatrix), so the parent-frame rest
-            // position component is base + t. Rebuild the overridden components from the
-            // static channel value on top of the pivot base; others keep the bind-derived pos.
+            // pivot/offset terms (see FbxTransform.LocalMatrix): localPos = base + t in the
+            // node's parent frame, native units.
             var xf = ctx.Transforms[i];
             var basePos = xf.LocalMatrix(Vector3.Zero, xf.LclRotationDeg, xf.LclScaling)
                 .Translation;
-            var pos = restLocals[i].Pos; // centimeters
-            if (hasStatic[0]) pos.X = (basePos.X + statics[0]) * ctx.UnitScale;
-            if (hasStatic[1]) pos.Y = (basePos.Y + statics[1]) * ctx.UnitScale;
-            if (hasStatic[2]) pos.Z = (basePos.Z + statics[2]) * ctx.UnitScale;
-            restLocals[i].Pos = pos;
+
+            int parent = ctx.ParentIndex[i];
+            var parentWorld = parent < 0 ? Matrix4x4.Identity : restWorlds[parent];
+            if (!Matrix4x4.Invert(parentWorld, out var invParentWorld))
+                continue; // degenerate parent world: keep the bind-derived rest
+
+            // Recover the native Lcl translation the bind-derived rest corresponds to (via
+            // the inverse of the same parent world the rest build used), substitute the
+            // static channel values per axis, recompute the bone's world position, and
+            // re-derive the rigid rest local from worlds — identical math to WorldsToLocals.
+            var bindLocalPos = Vector3.Transform(restWorlds[i].Translation, invParentWorld);
+            var t = bindLocalPos - basePos;
+            if (hasStatic[0]) t.X = statics[0];
+            if (hasStatic[1]) t.Y = statics[1];
+            if (hasStatic[2]) t.Z = statics[2];
+
+            var worldPos = Vector3.Transform(basePos + t, parentWorld);
+            var rigidParent = parent < 0 ? XForm.Identity : FbxTransform.ToRigid(parentWorld);
+            var localPos = Vector3.Transform(
+                worldPos - rigidParent.Pos, Quaternion.Conjugate(rigidParent.Rot));
+            restLocals[i].Pos = localPos * ctx.UnitScale;
         }
+
+        if (disagreeing is { Count: > 0 })
+            notes.Add(
+                "Static translation channels disagree across animation stacks for bone(s) " +
+                string.Join(", ", disagreeing) +
+                "; the first stack's values were used for the rest pose.");
+    }
+
+    /// <summary>
+    /// True when a later stack's static translation for the bone differs from the first
+    /// stack's beyond the static-curve tolerance on any overridden axis.
+    /// </summary>
+    private static bool StacksDisagree(
+        ImportContext ctx, long boneId, int firstStack, FbxAnimCurveNode first,
+        ReadOnlySpan<float> statics, ReadOnlySpan<bool> hasStatic)
+    {
+        for (int s = firstStack + 1; s < ctx.Scene.Stacks.Count; s++)
+        {
+            if (!ctx.Scene.Stacks[s].Bindings.TryGetValue((boneId, "Lcl Translation"), out var other) ||
+                ReferenceEquals(other, first))
+                continue;
+
+            for (int axis = 0; axis < 3; axis++)
+            {
+                if (!hasStatic[axis] ||
+                    !other.Channels.TryGetValue("XYZ"[axis], out var otherCurve) ||
+                    !TryGetStaticValue(otherCurve, out float otherValue))
+                    continue;
+
+                float tol = MathF.Max(1e-3f,
+                    1e-5f * MathF.Max(MathF.Abs(statics[axis]), MathF.Abs(otherValue)));
+                if (MathF.Abs(otherValue - statics[axis]) >= tol)
+                    return true;
+            }
+        }
+        return false;
     }
 
     /// <summary>
@@ -489,6 +569,11 @@ public static class FbxImporter
                 frame[boneToSkeleton[i]] = locals[i];
             frames.Add(frame);
         }
+
+        // Per-frame matrix→quaternion conversion can flip hemisphere between consecutive
+        // frames (CreateFromRotationMatrix branch changes); align signs per bone so
+        // downstream interpolation never spins the long way.
+        QuaternionContinuity.AlignFrames(frames);
 
         string name = string.IsNullOrEmpty(stack.Object.Name) ? "clip" : stack.Object.Name;
         return new Clip(name, fps, looping: false, frames);

@@ -69,6 +69,11 @@ public static class FbxTokenizer
     {
         int pos = Magic.Length;
         uint version = ReadU32(data, ref pos);
+        // FBX 6.x stores transforms in Properties60 blocks with a different property layout;
+        // parsing it with 7.x semantics silently yields identity transforms. Reject it.
+        if (version < 7000)
+            throw new FormatException(
+                $"FBX 6.x (Properties60) is not supported (file declares version {version}); re-export as FBX 7.x (2011 or newer).");
         // Version >= 7500 widened the three node-header fields from u32 to u64.
         bool wide = version >= 7500;
 
@@ -288,7 +293,9 @@ public static class FbxTokenizer
 
     private static ReadOnlySpan<byte> ReadBytes(byte[] data, ref int pos, int count)
     {
-        if (count < 0 || pos + count > data.Length)
+        // Bounds math in long: a huge declared count would overflow `pos + count` in int,
+        // slip past the check and surface as the wrong exception type from AsSpan.
+        if (count < 0 || (long)pos + count > data.Length)
             throw new FormatException(
                 $"FBX binary: unexpected end of file reading {count} bytes at offset {pos} (file is {data.Length} bytes).");
         var span = data.AsSpan(pos, count);

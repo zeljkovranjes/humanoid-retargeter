@@ -46,6 +46,12 @@ public sealed class SourceScene
     /// <summary>OriginalUpAxis from GlobalSettings (-1 when the exporter did not record one).</summary>
     public int OriginalUpAxis { get; }
 
+    /// <summary>
+    /// Human-readable import diagnostics (e.g. cross-stack static-translation disagreements).
+    /// Empty when the import was unambiguous.
+    /// </summary>
+    public IReadOnlyList<string> Notes { get; }
+
     /// <summary>Creates a source scene container.</summary>
     public SourceScene(
         Skeleton skeleton,
@@ -54,7 +60,8 @@ public sealed class SourceScene
         int upAxis = 1, int upAxisSign = 1,
         int frontAxis = 2, int frontAxisSign = 1,
         int coordAxis = 0, int coordAxisSign = 1,
-        int originalUpAxis = -1)
+        int originalUpAxis = -1,
+        IReadOnlyList<string>? notes = null)
     {
         Skeleton = skeleton ?? throw new ArgumentNullException(nameof(skeleton));
         Clips = clips ?? throw new ArgumentNullException(nameof(clips));
@@ -66,5 +73,6 @@ public sealed class SourceScene
         CoordAxis = coordAxis;
         CoordAxisSign = coordAxisSign;
         OriginalUpAxis = originalUpAxis;
+        Notes = notes ?? Array.Empty<string>();
     }
 }

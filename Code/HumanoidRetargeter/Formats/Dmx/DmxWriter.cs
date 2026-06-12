@@ -21,6 +21,14 @@ public sealed class DmxWriteOptions
     /// <summary>When true (default, matching fbx2dmx output) the file declares a Y-up axis
     /// system; when false it declares Z-up. Data is written as-is either way.</summary>
     public bool UpAxisY { get; set; } = true;
+
+    /// <summary>
+    /// Skeleton bone indices that get NO DmeChannel pair: the bones keep their DmeJoint and
+    /// bind (rest) transform, but no animation channels are written for them — the engine then
+    /// drives them itself (e.g. ConstraintDriven twist/helper bones, design §3). Null (default)
+    /// writes channels for every bone.
+    /// </summary>
+    public IReadOnlySet<int>? ChannelExcludedBones { get; set; }
 }
 
 /// <summary>
@@ -172,12 +180,20 @@ public static class DmxWriter
         w.EndArray();
         w.Attr("displayScale", "float", "1");
 
-        w.BeginArray("channels");
+        var channelBones = new List<int>(skeleton.Count);
         for (var i = 0; i < skeleton.Count; i++)
         {
+            if (options.ChannelExcludedBones is null || !options.ChannelExcludedBones.Contains(i))
+                channelBones.Add(i);
+        }
+
+        w.BeginArray("channels");
+        for (var n = 0; n < channelBones.Count; n++)
+        {
+            var i = channelBones[n];
             WriteChannel(w, skeleton, clip, i, transformGuids[i], position: true, last: false);
             WriteChannel(w, skeleton, clip, i, transformGuids[i], position: false,
-                last: i == skeleton.Count - 1);
+                last: n == channelBones.Count - 1);
         }
         w.EndArray();
 
@@ -267,10 +283,27 @@ public static class DmxWriter
         w.EndArray();
 
         w.BeginArray("values", position ? "vector3_array" : "quaternion_array");
+        // Orientation values are hemisphere-aligned on the fly (q and -q are the same
+        // rotation, but the engine interpolates between DMX samples numerically — see
+        // QuaternionContinuity). The clip itself is never mutated.
+        var prev = System.Numerics.Quaternion.Identity;
         for (var f = 0; f < clip.FrameCount; f++)
         {
             var x = clip.Frames[f][bone];
-            w.ArrayValue(position ? Vec(x) : Quat(x), last: f == clip.FrameCount - 1);
+            string value;
+            if (position)
+            {
+                value = Vec(x);
+            }
+            else
+            {
+                var q = x.Rot;
+                if (f > 0 && System.Numerics.Quaternion.Dot(prev, q) < 0f)
+                    q = System.Numerics.Quaternion.Negate(q);
+                prev = q;
+                value = Quat(q);
+            }
+            w.ArrayValue(value, last: f == clip.FrameCount - 1);
         }
         w.EndArray();
 
@@ -309,8 +342,10 @@ public static class DmxWriter
     private static string Vec(in Maths.XForm x)
         => $"{F(x.Pos.X)} {F(x.Pos.Y)} {F(x.Pos.Z)}";
 
-    private static string Quat(in Maths.XForm x)
-        => $"{F(x.Rot.X)} {F(x.Rot.Y)} {F(x.Rot.Z)} {F(x.Rot.W)}";
+    private static string Quat(in Maths.XForm x) => Quat(x.Rot);
+
+    private static string Quat(in System.Numerics.Quaternion q)
+        => $"{F(q.X)} {F(q.Y)} {F(q.Z)} {F(q.W)}";
 
     // ---------------------------------------------------------------- emitter
 
