@@ -139,6 +139,56 @@ public static class LocomotionSetDetector
         return (sets, reports);
     }
 
+    /// <summary>
+    /// Lightweight name-only dry-run of <see cref="Detect"/>: groups
+    /// <paramref name="clipNames"/> into directional families under the SAME parsing
+    /// (<c>_N</c>…<c>_NW</c> compass tokens and the Forward/Back(ward)/Left/Right word
+    /// forms), grouping (case-insensitive stems, first-seen casing/order kept, duplicate
+    /// directions counted once) and completeness rules (Complete = all four cardinals
+    /// present). Families with two or more members are listed whether complete or not;
+    /// single directional clips are ignored as noise. UIs use this to decide whether
+    /// enabling <see cref="BatchOptions.DetectLocomotionSets"/> could produce anything
+    /// before any conversion has run.
+    /// </summary>
+    public static IReadOnlyList<(string Stem, bool Complete, int MemberCount)> ScanNames(
+        IEnumerable<string> clipNames)
+    {
+        ArgumentNullException.ThrowIfNull(clipNames);
+
+        var groupIndex = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var groups = new List<(string Stem, bool[] Members)>();
+        foreach (var name in clipNames)
+        {
+            if (string.IsNullOrEmpty(name) || ParseDirection(name) is not { } parsed)
+                continue;
+            if (!groupIndex.TryGetValue(parsed.Stem, out var index))
+            {
+                index = groups.Count;
+                groupIndex.Add(parsed.Stem, index);
+                groups.Add((parsed.Stem, new bool[8]));
+            }
+            groups[index].Members[parsed.Direction] = true;
+        }
+
+        var families = new List<(string Stem, bool Complete, int MemberCount)>();
+        foreach (var (stem, members) in groups)
+        {
+            var memberCount = 0;
+            foreach (var present in members)
+            {
+                if (present)
+                    memberCount++;
+            }
+            if (memberCount < 2)
+                continue; // a single directional clip is noise, not a family
+
+            var complete = members[N] && members[E] && members[S] && members[W];
+            families.Add((stem, complete, memberCount));
+        }
+
+        return families;
+    }
+
     /// <summary>Builds the report (and, when the family is complete, the emission spec)
     /// for one stem group.</summary>
     private static LocomotionSetReport BuildFamily(

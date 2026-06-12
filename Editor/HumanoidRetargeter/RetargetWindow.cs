@@ -41,7 +41,10 @@ public sealed class RetargetWindow : Widget
 	bool _naturalCarriage = true;
 	bool _footstepEvents;
 	bool _mirroredVariants;
+	bool _additiveVariants;
+	bool _detectLocomotionSets;
 	bool? _loopOverride;
+	Checkbox _locomotionCheckbox;
 
 	// Output
 	bool _augmentMode;
@@ -176,6 +179,16 @@ public sealed class RetargetWindow : Widget
 		var mirrored = col1.Add( new Checkbox( "Mirrored variants" ) { Value = _mirroredVariants } );
 		mirrored.ToolTip = "Also produce a left/right-mirrored twin of every clip, named <clip>_M.";
 		mirrored.Clicked = () => _mirroredVariants = mirrored.Value;
+
+		var additive = col1.Add( new Checkbox( "Additive variants" ) { Value = _additiveVariants } );
+		additive.ToolTip = "Also emit an additive '<clip>_delta' sequence per clip (AnimSubtract) for animgraph layering.";
+		additive.Clicked = () => _additiveVariants = additive.Value;
+
+		// Smart-disabled toggle: RefreshLocomotionCheckbox (run on every list refresh) only
+		// enables it while the current take rows actually contain a complete directional
+		// family; the tooltip names what was detected (or what naming would be needed).
+		_locomotionCheckbox = col1.Add( new Checkbox( "Detect locomotion sets" ) { Value = _detectLocomotionSets } );
+		_locomotionCheckbox.Clicked = () => _detectLocomotionSets = _locomotionCheckbox.Value;
 
 		col1.AddStretchCell();
 
@@ -682,6 +695,7 @@ public sealed class RetargetWindow : Widget
 		ArmEffectorIk = _armIk,
 		GenerateFootstepEvents = _footstepEvents,
 		CreateMirroredVariant = _mirroredVariants,
+		CreateAdditiveVariant = _additiveVariants,
 		LoopingOverride = _loopOverride,
 		SampleFps = ParsePositive( _sampleFpsEdit ),
 		Solve = new HumanoidRetargeter.Solve.SolveOptions
@@ -697,15 +711,29 @@ public sealed class RetargetWindow : Widget
 		},
 	};
 
-	/// <summary>UI smoke gate hook: flips the two output-variant checkboxes' backing fields
-	/// and returns what <see cref="BuildRequest"/> produces, so the gate can assert the
-	/// footstep-events / mirrored-variants plumbing end to end.</summary>
-	internal HumanoidRetargeter.RetargetRequest BuildRequestForGate(
-		SourceTakeEntry take, bool footstepEvents, bool mirroredVariants )
+	/// <summary>The batch options the Convert All pipeline runs with (shared with the UI
+	/// smoke gate's plumbing probe so the toggle → option wiring is asserted on the REAL
+	/// construction site).</summary>
+	HumanoidRetargeter.BatchOptions BuildBatchOptions( string outputFolder, string augmentText ) => new()
+	{
+		DmxFolderRelative = outputFolder,
+		AugmentVmdlText = augmentText,
+		DetectLocomotionSets = _detectLocomotionSets,
+	};
+
+	/// <summary>UI smoke gate hook: flips the output-variant / locomotion checkboxes'
+	/// backing fields and returns what <see cref="BuildRequest"/> +
+	/// <see cref="BuildBatchOptions"/> produce, so the gate can assert the footstep-events /
+	/// mirrored-variants / additive-variants / locomotion-sets plumbing end to end.</summary>
+	internal (HumanoidRetargeter.RetargetRequest Request, HumanoidRetargeter.BatchOptions Options) BuildRequestForGate(
+		SourceTakeEntry take, bool footstepEvents, bool mirroredVariants,
+		bool additiveVariants, bool detectLocomotionSets )
 	{
 		_footstepEvents = footstepEvents;
 		_mirroredVariants = mirroredVariants;
-		return BuildRequest( take );
+		_additiveVariants = additiveVariants;
+		_detectLocomotionSets = detectLocomotionSets;
+		return (BuildRequest( take ), BuildBatchOptions( NormalizedOutputFolder(), null ));
 	}
 
 	/// <summary>Empty / non-numeric / non-positive = null (use the automatic default).</summary>
@@ -810,11 +838,7 @@ public sealed class RetargetWindow : Widget
 		{
 			var outputFolder = NormalizedOutputFolder();
 			var requests = list.Select( BuildRequest ).ToList();
-			var options = new HumanoidRetargeter.BatchOptions
-			{
-				DmxFolderRelative = outputFolder,
-				AugmentVmdlText = augmentText,
-			};
+			var options = BuildBatchOptions( outputFolder, augmentText );
 			var target = _target;
 
 			var (batch, write) = await ConvertAndWriteAsync( requests, target, options, augmentPath,
@@ -946,7 +970,47 @@ public sealed class RetargetWindow : Widget
 	void RefreshAll()
 	{
 		RebuildList();
+		RefreshLocomotionCheckbox();
 		RefreshStatus();
+	}
+
+	/// <summary>
+	/// Smart-disable for the "Detect locomotion sets" toggle, run on every list refresh
+	/// (files/takes added or removed): dry-run scans ALL current take-row clip names
+	/// (<see cref="HumanoidRetargeter.Target.LocomotionSetDetector.ScanNames"/>). No
+	/// complete directional family → the toggle is disabled AND forced off (the batch
+	/// could not emit any blend, so a stale tick must not linger); otherwise it is enabled
+	/// and the tooltip names every detected family.
+	/// </summary>
+	void RefreshLocomotionCheckbox()
+		=> ApplyLocomotionScan( _entries.SelectMany( e => e.Takes ).Select( t => t.TakeName ) );
+
+	/// <summary>The scan + checkbox-state core of <see cref="RefreshLocomotionCheckbox"/>
+	/// (internal so the UI smoke gate can drive it with synthetic clip names and assert the
+	/// smart-disable behavior); returns the applied state for the gate's assertions.</summary>
+	internal (bool Enabled, bool Value, string ToolTip) ApplyLocomotionScan( IEnumerable<string> clipNames )
+	{
+		if ( !_locomotionCheckbox.IsValid() )
+			return (false, false, "");
+
+		var complete = HumanoidRetargeter.Target.LocomotionSetDetector.ScanNames( clipNames )
+			.Where( f => f.Complete ).ToList();
+		if ( complete.Count == 0 )
+		{
+			_locomotionCheckbox.Enabled = false;
+			_locomotionCheckbox.Value = false;
+			_detectLocomotionSets = false;
+			_locomotionCheckbox.ToolTip = "No directional animation set detected - needs e.g. "
+				+ "Walk_N/Walk_E/Walk_S/Walk_W (or Forward/Back/Left/Right).";
+		}
+		else
+		{
+			_locomotionCheckbox.Enabled = true;
+			_locomotionCheckbox.ToolTip = "Detected: " + string.Join( ", ",
+				complete.Select( f => $"{f.Stem} ({(f.MemberCount == 8 ? "8-way" : "4-way")})" ) );
+		}
+
+		return (_locomotionCheckbox.Enabled, _locomotionCheckbox.Value, _locomotionCheckbox.ToolTip);
 	}
 
 	void RebuildList()
