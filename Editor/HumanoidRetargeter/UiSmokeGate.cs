@@ -7,17 +7,25 @@
 //   1. waits for the project + asset system to be ready
 //   2. loads the source fixture (HR_UI_FIXTURE, an .fbx) via SourceFileEntry.Load -
 //      the exact add-file path of the window (user preset lookup -> preset detection
-//      -> auto map) - plus Retargeter.Inspect for the report
+//      -> auto map) - plus Retargeter.Inspect for the report; also loads the
+//      footstep-bearing fixture (HR_UI_FIXTURE_STEPS, a forward-moving mocap walk)
+//      converted alongside it in the same batch
 //   3. resolves the s&box default target via TargetPickers.SboxDefault (window path)
-//   4. Retargeter.ConvertBatch with the entry's mapping as override (window path)
-//   4.5 constructs the RetargetWindow itself (stacked options layout) and asserts the
-//      footstep-events / mirrored-variants checkboxes reach BuildRequest
+//   4. Retargeter.ConvertBatch with the entry's mapping as override (window path), with
+//      footstep events + additive variants ON and locomotion-set detection ON (single
+//      clip -> no family; asserts the no-set path)
+//   4.5 constructs the RetargetWindow itself (stacked options layout), asserts the
+//      footstep-events / mirrored-variants / additive-variants / locomotion checkboxes
+//      reach BuildRequest + BuildBatchOptions, and probes the locomotion toggle's
+//      smart-disable (no directional family -> disabled + forced off; 4-way -> enabled)
 //   5. constructs a PreviewWidget on the result, applies a solved frame headlessly and
 //      draws the source-ghost overlay (the preview's "Show source" toggle)
 //   6. round-trips a user preset (UserPresets.Save -> TryLoad) for the fixture rig
 //   7. EditorPipeline.WriteAndCompileAsync: DMX + standalone vmdl into Assets,
-//      RegisterFile + Compile, polls the .vmdl_c
-//   8. Model.Load on the compiled vmdl, verifies the converted sequence is visible
+//      RegisterFile + Compile, polls the .vmdl_c; the written vmdl must carry the
+//      AE_FOOTSTEP AnimEvent nodes
+//   8. Model.Load on the compiled vmdl, verifies the converted sequences are visible -
+//      including the additive '<clip>_delta' twins (AnimSubtract compiles in-engine)
 //   9. AUGMENT mode (HR_UI_SMOKE_AUGMENT = absolute path of a vmdl inside the scratch
 //      Assets): drives the EXACT Convert-All window path (RetargetWindow.ConvertAndWriteAsync)
 //      against that vmdl. The fixture vmdl references meshes a scratch project cannot
@@ -32,6 +40,7 @@
 // (a leaked HR_UI_SMOKE env var must never write into - or quit - a real session).
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -85,9 +94,10 @@ public static class UiSmokeGate
 
 		Result.completed = true;
 		Result.passed = Result.dmxVmdlCompiled && Result.compiledFileFresh
-			&& Result.sequenceVisible
+			&& Result.sequenceVisible && Result.footstepEventsInVmdl
 			&& Result.previewWidgetOk && Result.userPresetRoundTrip
 			&& Result.windowConstructed && Result.optionsPlumbingOk
+			&& Result.locomotionSmartDisableOk
 			&& Result.dlSolverOk && Result.citizenTargetOk
 			&& (!Result.augmentMode || Result.augmentOk);
 		Flush();
@@ -172,6 +182,25 @@ public static class UiSmokeGate
 			return;
 		}
 
+		// Footstep-bearing second fixture (HR_UI_FIXTURE_STEPS, a forward-moving mocap
+		// walk the driver supplies): the main fixture is a crawl whose feet never plant,
+		// so the AE_FOOTSTEP-through-compile assertion converts this one alongside it.
+		// Missing/unreadable: the batch still runs, footstepEventsInVmdl then fails.
+		var stepsFixture = Environment.GetEnvironmentVariable( "HR_UI_FIXTURE_STEPS" );
+		SourceFileEntry stepsEntry = null;
+		if ( !string.IsNullOrWhiteSpace( stepsFixture ) && File.Exists( stepsFixture ) )
+		{
+			var loaded = SourceFileEntry.Load( stepsFixture, assetsPath );
+			if ( loaded.Scene is not null && loaded.Mapping is not null )
+				stepsEntry = loaded;
+			else
+				Note( $"steps fixture unreadable: {loaded.StatusDetail}" );
+		}
+		Note( stepsEntry is null
+			? $"steps fixture unavailable (HR_UI_FIXTURE_STEPS='{stepsFixture}') - the footstep assertion will fail"
+			: $"steps fixture: {stepsEntry.FileName} clips={stepsEntry.ClipCount} profile={stepsEntry.Mapping.ProfileName}" );
+		Flush();
+
 		// ---- 3. target via the window's picker path ----------------------------
 		TargetPickers.ResolvedTarget target;
 		try
@@ -189,6 +218,11 @@ public static class UiSmokeGate
 		Flush();
 
 		// ---- 4. ConvertBatch exactly like RetargetWindow.BuildRequest ----------
+		// Footstep events + additive variants ON: the written vmdl then carries AnimEvent
+		// and AnimSubtract nodes through the REAL compile below (steps 7/8 assert the
+		// '<clip>_delta' sequence is visible on the compiled model and the events are in the
+		// vmdl text). DetectLocomotionSets ON too - neither batch clip is directional, so
+		// no family forms, which pins the no-set path against crashes.
 		var request = new RetargetRequest
 		{
 			SourceData = entry.Bytes,
@@ -197,11 +231,29 @@ public static class UiSmokeGate
 			RootMotion = Cleanup.RootMotionMode.Off,
 			FootPlantCleanup = true,
 			ArmEffectorIk = false,
+			GenerateFootstepEvents = true,
+			CreateAdditiveVariant = true,
 			LoopingOverride = null,
 		};
+		var requests = new List<RetargetRequest> { request };
+		if ( stepsEntry is not null )
+		{
+			requests.Add( new RetargetRequest
+			{
+				SourceData = stepsEntry.Bytes,
+				SourceFileName = stepsEntry.FileName,
+				MappingOverride = stepsEntry.Mapping,
+				RootMotion = Cleanup.RootMotionMode.Off,
+				FootPlantCleanup = true,
+				ArmEffectorIk = false,
+				GenerateFootstepEvents = true,
+				CreateAdditiveVariant = true,
+				LoopingOverride = null,
+			} );
+		}
 		var batch = await Task.Run( () => Retargeter.ConvertBatch(
-			new[] { request }, target.Spec,
-			new BatchOptions { DmxFolderRelative = OutputFolder } ) );
+			requests, target.Spec,
+			new BatchOptions { DmxFolderRelative = OutputFolder, DetectLocomotionSets = true } ) );
 
 		// Root-cause evidence for the Convert-All crash: record where Task.Run
 		// continuations actually resume in an editor session.
@@ -212,8 +264,18 @@ public static class UiSmokeGate
 		Result.solvedClipCount = batch.Clips.Count( c => c.Success && c.SolvedFrames is { Count: > 0 } );
 		Result.clipNames = batch.Clips.Where( c => c.Success ).Select( c => c.ClipName ).ToArray();
 		Result.batchErrors = batch.Errors.ToArray();
+		Result.additiveClipNames = batch.Clips
+			.Where( c => c.Success && c.AdditiveVariantName is not null )
+			.Select( c => c.AdditiveVariantName ).ToArray();
+		Result.footstepEventCount = batch.Clips
+			.Where( c => c.Success )
+			.Sum( c => c.FootstepEvents?.Count ?? 0 );
+		Result.locomotionSetReports = batch.LocomotionSets.Count; // no directional clips: expected 0, but the path must not crash
 		Note( $"ConvertBatch: clips={Result.clipCount} solved={Result.solvedClipCount} "
-			+ $"names=[{string.Join( ", ", Result.clipNames )}] errors={batch.Errors.Count}" );
+			+ $"names=[{string.Join( ", ", Result.clipNames )}] "
+			+ $"deltas=[{string.Join( ", ", Result.additiveClipNames )}] "
+			+ $"footstepEvents={Result.footstepEventCount} locomotionReports={Result.locomotionSetReports} "
+			+ $"errors={batch.Errors.Count}" );
 		Flush();
 
 		if ( Result.solvedClipCount == 0 )
@@ -229,14 +291,37 @@ public static class UiSmokeGate
 			Result.windowConstructed = true;
 
 			var take = entry.Takes[0];
-			var defaults = window.BuildRequestForGate( take, footstepEvents: false, mirroredVariants: false );
-			var flipped = window.BuildRequestForGate( take, footstepEvents: true, mirroredVariants: true );
+			var (defaults, defaultOptions) = window.BuildRequestForGate( take,
+				footstepEvents: false, mirroredVariants: false,
+				additiveVariants: false, detectLocomotionSets: false );
+			var (flipped, flippedOptions) = window.BuildRequestForGate( take,
+				footstepEvents: true, mirroredVariants: true,
+				additiveVariants: true, detectLocomotionSets: true );
 			Result.optionsPlumbingOk =
 				!defaults.GenerateFootstepEvents && !defaults.CreateMirroredVariant
-				&& flipped.GenerateFootstepEvents && flipped.CreateMirroredVariant;
+				&& !defaults.CreateAdditiveVariant && !defaultOptions.DetectLocomotionSets
+				&& flipped.GenerateFootstepEvents && flipped.CreateMirroredVariant
+				&& flipped.CreateAdditiveVariant && flippedOptions.DetectLocomotionSets;
 			Note( $"RetargetWindow: constructed, options plumbing ok={Result.optionsPlumbingOk} "
-				+ $"(defaults footsteps={defaults.GenerateFootstepEvents} mirror={defaults.CreateMirroredVariant}; "
-				+ $"flipped footsteps={flipped.GenerateFootstepEvents} mirror={flipped.CreateMirroredVariant})" );
+				+ $"(defaults footsteps={defaults.GenerateFootstepEvents} mirror={defaults.CreateMirroredVariant} "
+				+ $"additive={defaults.CreateAdditiveVariant} locomotion={defaultOptions.DetectLocomotionSets}; "
+				+ $"flipped footsteps={flipped.GenerateFootstepEvents} mirror={flipped.CreateMirroredVariant} "
+				+ $"additive={flipped.CreateAdditiveVariant} locomotion={flippedOptions.DetectLocomotionSets})" );
+
+			// Smart-disable of the locomotion toggle: no complete directional family among
+			// the take rows → disabled AND forced off with the explainer tooltip; a complete
+			// 4-way family → enabled with a "Detected: …" tooltip naming the stem.
+			var none = window.ApplyLocomotionScan( new[] { entry.Takes[0].TakeName } );
+			var fourWay = window.ApplyLocomotionScan(
+				new[] { "Walk_N", "Walk_E", "Walk_S", "Walk_W" } );
+			var emptied = window.ApplyLocomotionScan( Array.Empty<string>() );
+			Result.locomotionSmartDisableOk =
+				!none.Enabled && !none.Value && none.ToolTip.Contains( "No directional animation set" )
+				&& fourWay.Enabled && fourWay.ToolTip.Contains( "Walk (4-way)" )
+				&& !emptied.Enabled && !emptied.Value;
+			Note( $"locomotion smart-disable: none=({none.Enabled},{none.Value},'{none.ToolTip}') "
+				+ $"fourWay=({fourWay.Enabled},'{fourWay.ToolTip}') "
+				+ $"emptied=({emptied.Enabled},{emptied.Value}) ok={Result.locomotionSmartDisableOk}" );
 
 			window.Destroy();
 		}
@@ -244,6 +329,7 @@ public static class UiSmokeGate
 		{
 			Result.windowConstructed = false;
 			Result.optionsPlumbingOk = false;
+			Result.locomotionSmartDisableOk = false;
 			Note( $"RetargetWindow construction/plumbing FAILED: {e}" );
 		}
 		Flush();
@@ -423,15 +509,34 @@ public static class UiSmokeGate
 			&& write.CompiledFile is not null && File.Exists( write.CompiledFile )
 			&& File.GetLastWriteTimeUtc( write.CompiledFile )
 				>= compileStartUtc - TimeSpan.FromSeconds( 10 );
+		// The compile-verification caveat closer: the REAL compiled vmdl must carry the
+		// footstep AnimEvent nodes (event_class AE_FOOTSTEP) the request asked for.
+		try
+		{
+			var vmdlText = write.VmdlPath is not null ? File.ReadAllText( write.VmdlPath ) : "";
+			Result.footstepEventsInVmdl = Result.footstepEventCount > 0
+				&& vmdlText.Contains( "AnimEvent", StringComparison.Ordinal )
+				&& vmdlText.Contains( Target.FootstepEvents.FootstepEventClass, StringComparison.Ordinal );
+		}
+		catch ( Exception e )
+		{
+			Result.footstepEventsInVmdl = false;
+			Note( $"vmdl footstep-event check FAILED: {e.Message}" );
+		}
+
 		Note( $"WriteAndCompile: dmx={write.DmxFilesWritten} vmdl={write.VmdlPath} "
 			+ $"compiled={write.Compiled} compiledFile={write.CompiledFile} "
-			+ $"fresh={Result.compiledFileFresh} errors={write.Errors.Count}" );
+			+ $"fresh={Result.compiledFileFresh} footstepEventsInVmdl={Result.footstepEventsInVmdl} "
+			+ $"errors={write.Errors.Count}" );
 		Flush();
 
 		if ( !write.Compiled || write.VmdlAsset is null )
 			return;
 
-		// ---- 8. load the compiled model, verify the sequence -------------------
+		// ---- 8. load the compiled model, verify the sequences -------------------
+		// Both the base clips AND their additive '<clip>_delta' twins (AnimSubtract nodes)
+		// must be visible on the COMPILED model - this is what proves the additive variant
+		// actually compiles in-engine rather than merely serializing.
 		var model = Model.Load( write.VmdlAsset.Path );
 		Result.modelLoads = model is not null && !model.IsError;
 		if ( model is not null )
@@ -439,12 +544,17 @@ public static class UiSmokeGate
 			Result.boneCount = model.BoneCount;
 			Result.animationCount = model.AnimationCount;
 			Result.animationNames = model.AnimationNames?.ToArray() ?? Array.Empty<string>();
-			Result.sequenceVisible = Result.clipNames.Length > 0 && Result.clipNames.All(
-				clip => Result.animationNames.Any( n => string.Equals( n, clip, StringComparison.OrdinalIgnoreCase ) ) );
+			bool Visible( string clip )
+				=> Result.animationNames.Any( n => string.Equals( n, clip, StringComparison.OrdinalIgnoreCase ) );
+			Result.additiveSequenceVisible = Result.additiveClipNames.Length > 0
+				&& Result.additiveClipNames.All( Visible );
+			Result.sequenceVisible = Result.clipNames.Length > 0 && Result.clipNames.All( Visible )
+				&& Result.additiveSequenceVisible;
 		}
 
 		Note( $"modelLoads={Result.modelLoads} bones={Result.boneCount} anims={Result.animationCount} "
-			+ $"names=[{string.Join( ", ", Result.animationNames )}] sequenceVisible={Result.sequenceVisible}" );
+			+ $"names=[{string.Join( ", ", Result.animationNames )}] sequenceVisible={Result.sequenceVisible} "
+			+ $"additiveSequenceVisible={Result.additiveSequenceVisible}" );
 		Flush();
 
 		// ---- 9. augment mode: the EXACT Convert-All window path -----------------
@@ -550,12 +660,15 @@ public static class UiSmokeGate
 			}
 			Note( $"stale-compile probe: compiled={write?.Compiled} verified={Result.augmentCompileVerified}" );
 
-			// The augmenter must really have added our clips to the vmdl on disk.
+			// The augmenter must really have added our clips to the vmdl on disk. (THIS
+			// batch's clip names, not Result.clipNames - the standalone batch additionally
+			// converts the steps fixture, which the augment run does not.)
 			try
 			{
 				var text = File.ReadAllText( augmentVmdlPath );
-				Result.augmentVmdlContainsClips = Result.clipNames.Length > 0
-					&& Result.clipNames.All( c => text.Contains( c, StringComparison.OrdinalIgnoreCase ) );
+				var augmentClipNames = batch.Clips.Where( c => c.Success ).Select( c => c.ClipName ).ToArray();
+				Result.augmentVmdlContainsClips = augmentClipNames.Length > 0
+					&& augmentClipNames.All( c => text.Contains( c, StringComparison.OrdinalIgnoreCase ) );
 			}
 			catch
 			{
@@ -657,6 +770,9 @@ public static class UiSmokeGate
 		public int clipCount { get; set; }
 		public int solvedClipCount { get; set; }
 		public string[] clipNames { get; set; } = Array.Empty<string>();
+		public string[] additiveClipNames { get; set; } = Array.Empty<string>();
+		public int footstepEventCount { get; set; }
+		public int locomotionSetReports { get; set; }
 		public string[] batchErrors { get; set; } = Array.Empty<string>();
 		public bool previewModelLoaded { get; set; }
 		public bool previewWidgetOk { get; set; }
@@ -665,6 +781,7 @@ public static class UiSmokeGate
 		public string previewPelvisRest { get; set; }
 		public bool windowConstructed { get; set; }
 		public bool optionsPlumbingOk { get; set; }
+		public bool locomotionSmartDisableOk { get; set; }
 		public bool userPresetRoundTrip { get; set; }
 		public bool dlSolverOk { get; set; }
 		public bool citizenTargetOk { get; set; }
@@ -673,6 +790,7 @@ public static class UiSmokeGate
 		public bool assetRegistered { get; set; }
 		public bool dmxVmdlCompiled { get; set; }
 		public bool compiledFileFresh { get; set; }
+		public bool footstepEventsInVmdl { get; set; }
 		public string compiledFile { get; set; }
 		public string[] writeErrors { get; set; } = Array.Empty<string>();
 		public bool modelLoads { get; set; }
@@ -680,6 +798,7 @@ public static class UiSmokeGate
 		public int animationCount { get; set; }
 		public string[] animationNames { get; set; } = Array.Empty<string>();
 		public bool sequenceVisible { get; set; }
+		public bool additiveSequenceVisible { get; set; }
 
 		// threading evidence (Convert-All crash root cause)
 		public bool mainThreadAfterTaskRun { get; set; }
