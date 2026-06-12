@@ -70,14 +70,17 @@ public static class UserPresets
 	/// Saves a confirmed mapping as a user preset profile: one alias per role - the exact
 	/// source bone name. Returns the absolute file path written.
 	/// </summary>
-	public static string Save( string assetsPath, string signature, SkeletonModel skeleton, MappingResult mapping )
+	/// <param name="namePrefix">Profile-name prefix, default <c>user</c>; the DL flow passes
+	/// <c>user_dl</c> so derived presets are recognizable in the profile chip.</param>
+	public static string Save( string assetsPath, string signature, SkeletonModel skeleton,
+		MappingResult mapping, string namePrefix = "user" )
 	{
 		var aliases = new System.Collections.Generic.Dictionary<BoneRole, string[]>();
 		foreach ( var kv in mapping.RoleToBone )
 			aliases[kv.Key] = new[] { skeleton[kv.Value].Name };
 
 		var shortSig = signature.Length >= 8 ? signature.Substring( 0, 8 ) : signature;
-		var profile = new Profile( $"user_{shortSig}", Array.Empty<string>(), aliases );
+		var profile = new Profile( $"{namePrefix}_{shortSig}", Array.Empty<string>(), aliases );
 
 		Directory.CreateDirectory( FolderAbsolute( assetsPath ) );
 		var path = PresetPath( assetsPath, signature );

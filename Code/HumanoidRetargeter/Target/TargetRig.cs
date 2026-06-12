@@ -24,15 +24,17 @@ public sealed class TargetRig
     private readonly BoneClass[] _classes;
     private readonly BoneRole?[] _roles;
     private readonly Dictionary<BoneRole, int> _boneByRole;
+    private readonly Vector3?[]? _tailWorld;
 
     private TargetRig(string name, SkeletonModel skeleton, BoneClass[] classes, BoneRole?[] roles,
-        Dictionary<BoneRole, int> boneByRole)
+        Dictionary<BoneRole, int> boneByRole, Vector3?[]? tailWorld = null)
     {
         Name = name;
         Skeleton = skeleton;
         _classes = classes;
         _roles = roles;
         _boneByRole = boneByRole;
+        _tailWorld = tailWorld;
     }
 
     /// <summary>Rig name (e.g. <c>sbox_human_male</c>).</summary>
@@ -51,6 +53,14 @@ public sealed class TargetRig
     /// <summary>The bone index carrying <paramref name="role"/>, or null when the rig has no
     /// bone for it (e.g. <see cref="BoneRole.Spine3"/>, <see cref="BoneRole.ThumbMetaL"/>).</summary>
     public int? BoneForRole(BoneRole role) => _boneByRole.TryGetValue(role, out var index) ? index : null;
+
+    /// <summary>
+    /// Rest tail position of the bone in rig world space (cm), when the rig definition
+    /// carries one (<c>tail_world</c> in the generated JSON — the s&amp;box default rig
+    /// does). Null for rigs built from plain skeletons (<see cref="FromSkeleton"/>), which
+    /// have no tail data. Used by the DL solver's end-joint synthesis.
+    /// </summary>
+    public Vector3? TailWorldOf(int boneIndex) => _tailWorld?[boneIndex];
 
     /// <summary>Indices of all bones of the given class, in skeleton order.</summary>
     public IEnumerable<int> BonesOfClass(BoneClass boneClass)
@@ -81,6 +91,7 @@ public sealed class TargetRig
         var definitions = new List<BoneDefinition>(count);
         var classByName = new Dictionary<string, BoneClass>(count, StringComparer.Ordinal);
         var roleByName = new Dictionary<string, BoneRole>(count, StringComparer.Ordinal);
+        var tailByName = new Dictionary<string, Vector3>(count, StringComparer.Ordinal);
 
         foreach (var bone in bonesJson.EnumerateArray())
         {
@@ -100,6 +111,15 @@ public sealed class TargetRig
                         $"Bone '{boneName}' is {boneClass} but carries a role — only Animated bones may have roles.");
                 roleByName[boneName] = Enum.Parse<BoneRole>(roleProp.GetString()!);
             }
+
+            if (bone.TryGetProperty("tail_world", out var tailProp)
+                && tailProp.ValueKind == JsonValueKind.Array && tailProp.GetArrayLength() == 3)
+            {
+                tailByName[boneName] = new Vector3(
+                    (float)tailProp[0].GetDouble(),
+                    (float)tailProp[1].GetDouble(),
+                    (float)tailProp[2].GetDouble());
+            }
         }
 
         var skeleton = SkeletonModel.Create(definitions);
@@ -107,6 +127,7 @@ public sealed class TargetRig
         var classes = new BoneClass[skeleton.Count];
         var roles = new BoneRole?[skeleton.Count];
         var boneByRole = new Dictionary<BoneRole, int>();
+        var tails = tailByName.Count > 0 ? new Vector3?[skeleton.Count] : null;
         for (var i = 0; i < skeleton.Count; i++)
         {
             var boneName = skeleton[i].Name;
@@ -117,9 +138,11 @@ public sealed class TargetRig
                 if (!boneByRole.TryAdd(role, i))
                     throw new ArgumentException($"Role {role} is assigned to more than one bone.");
             }
+            if (tails is not null && tailByName.TryGetValue(boneName, out var tail))
+                tails[i] = tail;
         }
 
-        return new TargetRig(name, skeleton, classes, roles, boneByRole);
+        return new TargetRig(name, skeleton, classes, roles, boneByRole, tails);
     }
 
     /// <summary>

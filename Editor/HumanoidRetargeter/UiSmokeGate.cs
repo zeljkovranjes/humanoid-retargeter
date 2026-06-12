@@ -82,6 +82,7 @@ public static class UiSmokeGate
 		Result.completed = true;
 		Result.passed = Result.dmxVmdlCompiled && Result.sequenceVisible
 			&& Result.previewWidgetOk && Result.userPresetRoundTrip
+			&& Result.dlSolverOk
 			&& (!Result.augmentMode || Result.augmentOk);
 		Flush();
 		Note( $"UI smoke gate finished, passed={Result.passed}" );
@@ -291,6 +292,41 @@ public static class UiSmokeGate
 			Note( $"user preset round-trip FAILED: {e}" );
 		}
 		Flush();
+
+		// ---- 6.5 DL solver smoke: shipped weights load + one forward pass --------
+		// (Milestone 10: the dialog's "Deep learning (experimental)" path. Kept cheap -
+		// a 10-frame slice of the fixture through the full encode/decode stack.)
+		if ( DlAssets.Available )
+		{
+			try
+			{
+				var weights = DlAssets.TryLoadWeights();
+				var dlSolver = new HumanoidRetargeter.Dl.DlSolver( weights );
+				var scene = entry.Scene;
+				var sliceFrames = scene.Clips[0].Frames.Take( 10 ).ToList();
+				var slice = new HumanoidRetargeter.Skeleton.SourceScene(
+					scene.Skeleton,
+					new[] { new HumanoidRetargeter.Skeleton.Clip( "dl_smoke", scene.Clips[0].Fps, false, sliceFrames ) },
+					scene.UnitScaleCm, scene.UpAxis, scene.UpAxisSign,
+					scene.FrontAxis, scene.FrontAxisSign, scene.CoordAxis, scene.CoordAxisSign );
+				var dlClip = dlSolver.Solve( slice, entry.Mapping, target.Spec.Rig,
+					new HumanoidRetargeter.Solve.SolveOptions() );
+				Result.dlSolverOk = dlClip.FrameCount == sliceFrames.Count;
+				Note( $"DL solver smoke: weights={weights?.Length ?? 0} bytes, "
+					+ $"{dlClip.FrameCount} frames decoded, ok={Result.dlSolverOk}" );
+			}
+			catch ( Exception e )
+			{
+				Result.dlSolverOk = false;
+				Note( $"DL solver smoke FAILED: {e}" );
+			}
+			Flush();
+		}
+		else
+		{
+			Result.dlSolverOk = true; // asset not installed: nothing to assert
+			Note( "DL solver smoke skipped: weight asset not found" );
+		}
 
 		// ---- 7. write + register + compile (the window's convert path) ---------
 		var write = await EditorPipeline.WriteAndCompileAsync(
@@ -502,6 +538,7 @@ public static class UiSmokeGate
 		public bool previewPoseUpright { get; set; }
 		public string previewPelvisRest { get; set; }
 		public bool userPresetRoundTrip { get; set; }
+		public bool dlSolverOk { get; set; }
 		public int dmxFilesWritten { get; set; }
 		public string vmdlPath { get; set; }
 		public bool assetRegistered { get; set; }

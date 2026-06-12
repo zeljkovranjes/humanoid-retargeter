@@ -7,13 +7,17 @@ namespace HumanoidRetargeter.Editor;
 /// The "No known profile found for this rig" decision dialog (design §6 no-profile flow),
 /// shown per file when <c>NeedsUserDecision</c> is set after adding it: no preset profile
 /// matched and the auto-mapper's confidence is below the detection threshold. Offers
-/// auto-map (recommended), the deep-learning solver (disabled placeholder until the DL
-/// milestone ships a model), and manual mapping.
+/// auto-map (recommended), the deep-learning solver (enabled when the SAME weight asset
+/// is installed - see <see cref="DlAssets"/>), and manual mapping.
 /// </summary>
 public sealed class NoProfileDialog : Dialog
 {
 	/// <summary>"Auto-map blindly" chosen: proceed with the best-effort auto mapping.</summary>
 	public Action AutoMapChosen { get; set; }
+
+	/// <summary>"Deep learning (experimental)" chosen: solve with the skeleton-agnostic
+	/// DL solver and preview (design §6 option 2 / §10).</summary>
+	public Action DeepLearningChosen { get; set; }
 
 	/// <summary>"Manual mapping…" chosen: open the mapping editor.</summary>
 	public Action ManualChosen { get; set; }
@@ -23,8 +27,9 @@ public sealed class NoProfileDialog : Dialog
 
 	bool _chose;
 
-	/// <summary>Creates the dialog for one source file.</summary>
-	public NoProfileDialog( Widget parent, string fileName, float autoConfidence ) : base( parent )
+	/// <summary>Creates the dialog for one source file. <paramref name="dlAvailable"/>
+	/// enables the deep-learning option (the committed weight asset was found).</summary>
+	public NoProfileDialog( Widget parent, string fileName, float autoConfidence, bool dlAvailable = false ) : base( parent )
 	{
 		Window.WindowTitle = "No known profile";
 		Window.SetWindowIcon( "person_search" );
@@ -64,8 +69,18 @@ public sealed class NoProfileDialog : Dialog
 		auto.Clicked = () => Choose( AutoMapChosen );
 
 		var dl = buttons.Add( new Button( "Deep learning (experimental)", "psychology" ) );
-		dl.Enabled = false;
-		dl.ToolTip = "Coming soon - no model installed";
+		if ( dlAvailable )
+		{
+			dl.ToolTip = "Skeleton-agnostic neural retarget (SAME) - needs no bone mapping. "
+				+ "Expect imperfect hands; review the preview before converting. "
+				+ "Non-commercial model license (CC BY-NC 4.0).";
+			dl.Clicked = () => Choose( DeepLearningChosen );
+		}
+		else
+		{
+			dl.Enabled = false;
+			dl.ToolTip = "No model installed - Assets/humanoid_retargeter/dl/same_v1.weights not found";
+		}
 
 		var manual = buttons.Add( new Button( "Manual mapping…", "edit" ) );
 		manual.Clicked = () => Choose( ManualChosen );

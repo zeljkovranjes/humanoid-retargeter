@@ -379,7 +379,8 @@ public static class Retargeter
         SourceScene scene, MappingResult map, MappingReportInfo report, int take, string clipName)
     {
         var requested = request.Solve ?? new SolveOptions();
-        var solved = new GeometricSolver().Solve(scene, map, target.Rig, new SolveOptions
+        var solver = ResolveSolver(request, target, context, report);
+        var solved = solver.Solve(scene, map, target.Rig, new SolveOptions
         {
             HipScaleHorizontal = requested.HipScaleHorizontal,
             HipScaleVertical = requested.HipScaleVertical,
@@ -430,6 +431,36 @@ public static class Retargeter
 
         var looping = request.LoopingOverride ?? solved.Looping;
         return new Clip(clipName, solved.Fps, looping, frames);
+    }
+
+    /// <summary>
+    /// Picks the solver for a request (design §10 routing): the
+    /// <see cref="GeometricSolver"/> unless the request selects
+    /// <see cref="SolverKind.DeepLearning"/>, which needs the spec's
+    /// <see cref="RetargetTargetSpec.DlWeights"/> and is built once per batch (the parsed
+    /// model is cached on the <see cref="TargetContext"/>). A DL request also notes that
+    /// per-role mapping is ignored by that solver.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">Thrown (and surfaced as the clip's
+    /// error) when DL is requested without weights.</exception>
+    private static IRetargetSolver ResolveSolver(
+        RetargetRequest request, RetargetTargetSpec target, TargetContext context,
+        MappingReportInfo report)
+    {
+        if (request.Solver != SolverKind.DeepLearning)
+            return new GeometricSolver();
+
+        if (target.DlWeights is not { Length: > 0 })
+        {
+            throw new InvalidOperationException(
+                "Deep-learning solver requested but RetargetTargetSpec.DlWeights is not set "
+                + "(read Assets/humanoid_retargeter/dl/same_v1.weights and pass its bytes).");
+        }
+
+        AddNote(report,
+            "Deep-learning solver (SAME, experimental): skeleton-agnostic — per-role mapping "
+            + "is not used (hips/alignment heuristics only); finger bones stay at rest.");
+        return context.GetDlSolver(target.DlWeights);
     }
 
     private static void ApplyRootMotion(
@@ -747,6 +778,13 @@ public static class Retargeter
         /// <summary>ConstraintDriven bone indices (twist/helper) — excluded from DMX
         /// channels per design §3; null when the rig has none.</summary>
         public IReadOnlySet<int>? ConstraintDrivenBones { get; }
+
+        private Dl.DlSolver? _dlSolver;
+
+        /// <summary>The batch-shared deep-learning solver, parsing <paramref name="weights"/>
+        /// once on first use (the batch runs requests sequentially — no locking needed).</summary>
+        public IRetargetSolver GetDlSolver(byte[] weights)
+            => _dlSolver ??= new Dl.DlSolver(weights);
 
         public TargetContext(TargetRig rig)
         {
