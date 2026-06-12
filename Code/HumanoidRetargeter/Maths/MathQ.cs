@@ -92,6 +92,18 @@ public static class MathQ
     }
 
     /// <summary>
+    /// Angle between two directions in radians, in [0, π] (magnitudes are ignored).
+    /// Near-zero inputs yield 0. Uses atan2, which stays accurate near 0 and π where
+    /// acos of the dot product loses precision.
+    /// </summary>
+    public static float AngleBetween(Vector3 a, Vector3 b)
+    {
+        if (a.LengthSquared() < NearZeroLengthSq || b.LengthSquared() < NearZeroLengthSq)
+            return 0f;
+        return MathF.Atan2(Vector3.Cross(a, b).Length(), Vector3.Dot(a, b));
+    }
+
+    /// <summary>
     /// Builds an orthonormal right-handed basis rotation from a forward and an up hint.
     /// </summary>
     /// <remarks>
