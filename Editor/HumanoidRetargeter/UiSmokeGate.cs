@@ -144,7 +144,7 @@ public static class UiSmokeGate
 			return;
 		}
 
-		var inspect = Retargeter.Inspect( File.ReadAllBytes( fixture ), Path.GetFileName( fixture ) );
+		var inspect = Retargeter.Inspect( File.ReadAllBytes( fixture ), Path.GetFileName( fixture ) ).Mapping;
 		Result.inspectProfile = inspect.ProfileName;
 		Result.inspectConfidence = inspect.Confidence;
 		Result.inspectNeedsUserDecision = inspect.NeedsUserDecision;

@@ -16,8 +16,10 @@ namespace HumanoidRetargeter.Editor;
 /// (green = preset/user preset, amber = auto-mapped/needs review, red = failed), fix
 /// mappings manually, preview the retargeted clip on the skinned target model, and batch
 /// convert everything into one animation vmdl (standalone or augmenting an existing one).
-/// Every file carries its own mapping - a single batch may mix Mixamo, ActorCore and BVH
-/// sources.
+/// A file with several animation takes unpacks into one list entry per take
+/// ("file.fbx · TakeName"), each independently previewable/removable/convertible; the
+/// mapping stays per FILE (one skeleton per file). Every file carries its own mapping -
+/// a single batch may mix Mixamo, ActorCore and BVH sources.
 /// </summary>
 [Dock( "Editor", "Humanoid Retargeter", "sync_alt" )]
 public sealed class RetargetWindow : Widget
@@ -365,8 +367,10 @@ public sealed class RetargetWindow : Widget
 				entry.Status = EntryStatus.Ready;
 				RefreshAll();
 
-				// Design §6: manual mapping flows straight into the preview for confirmation.
-				OpenPreview( entry );
+				// Design §6: manual mapping flows straight into the preview for confirmation
+				// (the first take stands in for the file - the mapping is per file).
+				if ( entry.Takes.Count > 0 )
+					OpenPreview( entry.Takes[0] );
 			},
 		};
 		editor.Show();
@@ -378,15 +382,27 @@ public sealed class RetargetWindow : Widget
 		RefreshAll();
 	}
 
+	/// <summary>Removes one take row; the file entry goes with its last take.</summary>
+	void RemoveTake( SourceTakeEntry take )
+	{
+		take.File.Takes.Remove( take );
+		if ( take.File.Takes.Count == 0 )
+			_entries.Remove( take.File );
+		RefreshAll();
+	}
+
 	// ============================================================================ preview
 
-	async void OpenPreview( SourceFileEntry entry )
+	/// <summary>Solves and previews ONE take (per-take rows preview their own take; the
+	/// request carries the take index so only that clip is solved).</summary>
+	async void OpenPreview( SourceTakeEntry take )
 	{
+		var entry = take.File;
 		if ( _converting || entry.Scene is null || _target is null )
 			return;
 
-		SetStatus( $"Solving preview for {entry.FileName}…", Theme.Blue );
-		var request = BuildRequest( entry );
+		SetStatus( $"Solving preview for {take.DisplayName}…", Theme.Blue );
+		var request = BuildRequest( take );
 		var target = _target;
 
 		HumanoidRetargeter.RetargetResult result;
@@ -398,23 +414,23 @@ public sealed class RetargetWindow : Widget
 		catch ( Exception e )
 		{
 			await EditorPipeline.SwitchToMainThread();
-			entry.Status = EntryStatus.Failed;
-			entry.StatusDetail = e.Message;
+			take.ConversionStatus = EntryStatus.Failed;
+			take.StatusDetail = e.Message;
 			RefreshAll();
 			return;
 		}
 
 		if ( !result.Clips.Any( c => c.Success ) )
 		{
-			entry.Status = EntryStatus.Failed;
-			entry.StatusDetail = result.Errors.FirstOrDefault() ?? "No clip solved.";
+			take.ConversionStatus = EntryStatus.Failed;
+			take.StatusDetail = result.Errors.FirstOrDefault() ?? "No clip solved.";
 			RefreshAll();
 			return;
 		}
 
 		RefreshStatus();
 
-		var dialog = new PreviewDialog( this, entry.FileName, result.Clips, target, entry.Mapping.Source )
+		var dialog = new PreviewDialog( this, take.DisplayName, result.Clips, target, entry.Mapping.Source )
 		{
 			Confirmed = savePreset =>
 			{
@@ -425,7 +441,7 @@ public sealed class RetargetWindow : Widget
 				if ( entry.Status is EntryStatus.NeedsReview )
 					entry.Status = EntryStatus.Ready;
 				RefreshAll();
-				_ = ConvertEntriesAsync( new[] { entry } );
+				_ = ConvertEntriesAsync( new[] { take } );
 			},
 		};
 		dialog.Show();
@@ -450,12 +466,16 @@ public sealed class RetargetWindow : Widget
 
 	// ============================================================================ convert
 
-	HumanoidRetargeter.RetargetRequest BuildRequest( SourceFileEntry entry ) => new()
+	/// <summary>One facade request per take row. Multi-take files set
+	/// <see cref="HumanoidRetargeter.RetargetRequest.TakeIndex"/> so each row converts only
+	/// its own take; single-take files keep the all-takes default (equivalent).</summary>
+	HumanoidRetargeter.RetargetRequest BuildRequest( SourceTakeEntry take ) => new()
 	{
-		SourceData = entry.Bytes,
-		SourceFileName = entry.FileName,
-		SourceId = entry.FilePath, // full path: same-named files in different folders must not collide
-		MappingOverride = entry.Mapping,
+		SourceData = take.File.Bytes,
+		SourceFileName = take.File.FileName,
+		SourceId = take.SourceId, // full path + take index: rows must join results unambiguously
+		TakeIndex = take.File.Takes.Count > 1 ? take.TakeIndex : null,
+		MappingOverride = take.File.Mapping,
 		RootMotion = _rootMotion,
 		FootPlantCleanup = _footPlant,
 		ArmEffectorIk = _armIk,
@@ -511,12 +531,15 @@ public sealed class RetargetWindow : Widget
 		return (batch, write);
 	}
 
-	async Task ConvertEntriesAsync( IReadOnlyList<SourceFileEntry> only )
+	async Task ConvertEntriesAsync( IReadOnlyList<SourceTakeEntry> only )
 	{
 		if ( _converting )
 			return;
 
-		var list = (only ?? _entries).Where( e => e.Scene is not null && e.Mapping is not null ).ToList();
+		// Convert All (null) = every take row of every readable file; per-take requests keep
+		// each row independently convertible.
+		var list = (only ?? _entries.SelectMany( e => e.Takes ))
+			.Where( t => t.File.Scene is not null && t.File.Mapping is not null ).ToList();
 		if ( list.Count == 0 )
 		{
 			SetStatus( "Nothing to convert - add readable animation files first.", Theme.Yellow );
@@ -558,10 +581,10 @@ public sealed class RetargetWindow : Widget
 		_converting = true;
 		_progress = 0.05f;
 		_progressBar.Visible = true;
-		foreach ( var entry in list )
-			entry.Status = EntryStatus.Converting;
+		foreach ( var take in list )
+			take.ConversionStatus = EntryStatus.Converting;
 		RefreshAll();
-		SetStatus( $"Converting {list.Count} file(s)…", Theme.Blue );
+		SetStatus( $"Converting {list.Count} clip(s)…", Theme.Blue );
 
 		try
 		{
@@ -598,10 +621,10 @@ public sealed class RetargetWindow : Widget
 				var detail = batch.Errors.FirstOrDefault(
 					e => e.Contains( "augment", StringComparison.OrdinalIgnoreCase ) )
 					?? "vmdl augmentation failed.";
-				foreach ( var entry in list )
+				foreach ( var take in list )
 				{
-					entry.Status = EntryStatus.Failed;
-					entry.StatusDetail = detail;
+					take.ConversionStatus = EntryStatus.Failed;
+					take.StatusDetail = detail;
 				}
 				RefreshAll();
 				SetStatus( $"Augmenting {_augmentAsset?.Name} failed - nothing written. {detail}", Theme.Red );
@@ -641,10 +664,10 @@ public sealed class RetargetWindow : Widget
 		{
 			// The exception may surface on a pool thread - back to main before touching UI.
 			await EditorPipeline.SwitchToMainThread();
-			foreach ( var entry in list.Where( x => x.Status == EntryStatus.Converting ) )
+			foreach ( var take in list.Where( x => x.ConversionStatus == EntryStatus.Converting ) )
 			{
-				entry.Status = EntryStatus.Failed;
-				entry.StatusDetail = e.Message;
+				take.ConversionStatus = EntryStatus.Failed;
+				take.StatusDetail = e.Message;
 			}
 			SetStatus( $"Conversion failed: {e.Message}", Theme.Red );
 		}
@@ -662,30 +685,32 @@ public sealed class RetargetWindow : Widget
 		return newline < 0 ? text : text.Substring( 0, newline ).TrimEnd( '\r' );
 	}
 
-	void ApplyClipResults( IReadOnlyList<SourceFileEntry> list, IReadOnlyList<HumanoidRetargeter.ClipResult> clips )
+	void ApplyClipResults( IReadOnlyList<SourceTakeEntry> list, IReadOnlyList<HumanoidRetargeter.ClipResult> clips )
 	{
-		foreach ( var entry in list )
+		foreach ( var take in list )
 		{
-			entry.LastClips.Clear();
-			// Join on SourceId (the full path BuildRequest supplied) - same-named files in
-			// different folders must map back to their own rows.
-			entry.LastClips.AddRange( clips.Where( c => c.SourceId == entry.FilePath ) );
+			take.LastClips.Clear();
+			// Join on SourceId (full path + take index, as BuildRequest supplied) -
+			// same-named files/takes must map back to their own rows.
+			take.LastClips.AddRange( clips.Where( c => c.SourceId == take.SourceId ) );
 
-			var failed = entry.LastClips.Where( c => !c.Success ).ToList();
-			if ( entry.LastClips.Count == 0 )
+			var failed = take.LastClips.Where( c => !c.Success ).ToList();
+			if ( take.LastClips.Count == 0 )
 			{
-				entry.Status = EntryStatus.Failed;
-				entry.StatusDetail = "No clips produced.";
+				take.ConversionStatus = EntryStatus.Failed;
+				take.StatusDetail = "No clips produced.";
 			}
 			else if ( failed.Count > 0 )
 			{
-				entry.Status = EntryStatus.Failed;
-				entry.StatusDetail = failed[0].Error ?? "Clip failed.";
+				take.ConversionStatus = EntryStatus.Failed;
+				take.StatusDetail = failed[0].Error ?? "Clip failed.";
 			}
 			else
 			{
-				entry.Status = EntryStatus.Converted;
-				entry.StatusDetail = $"{entry.LastClips.Count} clip(s) converted.";
+				take.ConversionStatus = EntryStatus.Converted;
+				take.StatusDetail = take.LastClips.Count == 1
+					? "Converted."
+					: $"{take.LastClips.Count} clip(s) converted.";
 			}
 		}
 	}
@@ -723,8 +748,17 @@ public sealed class RetargetWindow : Widget
 		}
 		else
 		{
+			// One row per TAKE: a multi-take file unpacks into individual entries
+			// ("file.fbx · TakeName"), each independently previewable/removable/convertible.
+			// Unreadable files (no takes) keep a single file-level row.
 			foreach ( var entry in _entries )
-				_listLayout.Add( new FileRow( this, entry ) );
+			{
+				if ( entry.Takes.Count == 0 )
+					_listLayout.Add( new FileRow( this, entry, null ) );
+				else
+					foreach ( var take in entry.Takes )
+						_listLayout.Add( new FileRow( this, entry, take ) );
+			}
 		}
 
 		_listLayout.AddStretchCell();
@@ -751,61 +785,79 @@ public sealed class RetargetWindow : Widget
 
 	// ============================================================================ row widget
 
-	/// <summary>One file row: status icon, file name, profile chip (green/amber/red),
-	/// confidence, clip count, and Mapping/Preview/Remove actions.</summary>
+	/// <summary>One take row (or a file-level row for unreadable files): status icon, label
+	/// ("file.fbx · TakeName" for multi-take files), profile chip (green/amber/red, file
+	/// level — the mapping is per file), and Mapping/Preview/Remove actions. Preview and
+	/// conversion act on THIS take only.</summary>
 	sealed class FileRow : Widget
 	{
 		readonly RetargetWindow _window;
 		readonly SourceFileEntry _entry;
+		readonly SourceTakeEntry _take; // null only for unreadable (takeless) files
 
-		public FileRow( RetargetWindow window, SourceFileEntry entry ) : base( window )
+		public FileRow( RetargetWindow window, SourceFileEntry entry, SourceTakeEntry take ) : base( window )
 		{
 			_window = window;
 			_entry = entry;
+			_take = take;
 
 			FixedHeight = 34;
 			Layout = Layout.Row();
 			Layout.Margin = new Sandbox.UI.Margin( 32, 4, 8, 4 ); // left margin = status icon space
 			Layout.Spacing = 8;
 
-			var name = Layout.Add( new Label( this ) { Text = entry.FileName } );
+			var detailText = take?.StatusDetail is { Length: > 0 } takeDetail ? takeDetail : entry.StatusDetail;
+
+			var name = Layout.Add( new Label( this ) { Text = take?.DisplayName ?? entry.FileName } );
 			name.SetStyles( "font-weight: 600;" );
-			name.ToolTip = entry.FilePath + (entry.StatusDetail.Length > 0 ? "\n" + entry.StatusDetail : "");
+			name.ToolTip = entry.FilePath + (detailText.Length > 0 ? "\n" + detailText : "");
 
 			Layout.Add( new Chip( this, entry.ChipText, ToneColor( entry.Tone ) ) );
 
-			if ( entry.ClipCount > 0 )
+			if ( take is not null && entry.Takes.Count > 1 )
 			{
-				var clips = Layout.Add( new Label( this )
+				var takeLabel = Layout.Add( new Label( this )
 				{
-					Text = entry.ClipCount == 1 ? "1 clip" : $"{entry.ClipCount} clips",
+					Text = $"take {take.TakeIndex + 1}/{entry.ClipCount}",
 				} );
-				clips.SetStyles( $"color: {Theme.TextLight.Hex};" );
+				takeLabel.SetStyles( $"color: {Theme.TextLight.Hex};" );
 			}
 
-			if ( entry.StatusDetail.Length > 0 && entry.Status is EntryStatus.Failed )
+			if ( detailText.Length > 0 && Status() is EntryStatus.Failed )
 			{
-				var detail = Layout.Add( new Label( this ) { Text = entry.StatusDetail }, 1 );
+				var detail = Layout.Add( new Label( this ) { Text = detailText }, 1 );
 				detail.SetStyles( $"color: {Theme.Red.Hex};" );
 			}
 
 			Layout.AddStretchCell();
 
-			if ( entry.Scene is not null )
+			if ( entry.Scene is not null && take is not null )
 			{
 				var mapping = Layout.Add( new Button( "Mapping…", "device_hub" ) );
-				mapping.ToolTip = "Review / edit the bone mapping";
+				mapping.ToolTip = entry.Takes.Count > 1
+					? "Review / edit the bone mapping (shared by every take of this file)"
+					: "Review / edit the bone mapping";
 				mapping.Clicked = () => _window.OpenMappingEditor( entry );
 
 				var preview = Layout.Add( new Button( "Preview…", "preview" ) );
-				preview.ToolTip = "Solve and preview the retargeted clip before converting";
-				preview.Clicked = () => _window.OpenPreview( entry );
+				preview.ToolTip = "Solve and preview this take on the target before converting";
+				preview.Clicked = () => _window.OpenPreview( take );
 			}
 
 			var remove = Layout.Add( new IconButton( "close" ) );
-			remove.ToolTip = "Remove from the list";
-			remove.OnClick = () => _window.RemoveEntry( entry );
+			remove.ToolTip = take is not null && entry.Takes.Count > 1
+				? "Remove this take from the list"
+				: "Remove from the list";
+			remove.OnClick = () =>
+			{
+				if ( take is not null )
+					_window.RemoveTake( take );
+				else
+					_window.RemoveEntry( entry );
+			};
 		}
+
+		EntryStatus Status() => _take?.EffectiveStatus ?? _entry.Status;
 
 		static Color ToneColor( ChipTone tone ) => tone switch
 		{
@@ -814,7 +866,7 @@ public sealed class RetargetWindow : Widget
 			_ => Theme.Red,
 		};
 
-		(string Icon, Color Color) StatusIcon() => _entry.Status switch
+		(string Icon, Color Color) StatusIcon() => Status() switch
 		{
 			EntryStatus.Ready => ("check_circle", Theme.Green),
 			EntryStatus.NeedsReview => ("warning", Theme.Yellow),

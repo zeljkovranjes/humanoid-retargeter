@@ -63,7 +63,8 @@ using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global
 /// </remarks>
 public static class Retargeter
 {
-    /// <summary>Converts ALL takes of one source file. Equivalent to a one-request batch.</summary>
+    /// <summary>Converts one source file — all takes, or only
+    /// <see cref="RetargetRequest.TakeIndex"/> when set. Equivalent to a one-request batch.</summary>
     public static RetargetResult Convert(RetargetRequest request, RetargetTargetSpec target)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -191,15 +192,24 @@ public static class Retargeter
 
     /// <summary>
     /// Detection-only entry point for UI listings: imports the file and runs the same
-    /// preset-then-auto mapping as conversion, without solving anything. Throws
-    /// <see cref="FormatException"/> when the file is unreadable.
+    /// preset-then-auto mapping as conversion, without solving anything. Also reports the
+    /// file's take metadata (clip names, in take-index order) so listings can expand a
+    /// multi-take file into one entry per take. Throws <see cref="FormatException"/> when
+    /// the file is unreadable.
     /// </summary>
-    public static MappingReportInfo Inspect(byte[] sourceData, string fileName)
+    public static InspectResult Inspect(byte[] sourceData, string fileName)
     {
         ArgumentNullException.ThrowIfNull(sourceData);
         ArgumentNullException.ThrowIfNull(fileName);
         var scene = ImportSource(sourceData, fileName);
-        return ResolveMapping(scene.Skeleton).Report;
+        var takeNames = new List<string>(scene.Clips.Count);
+        foreach (var clip in scene.Clips)
+            takeNames.Add(clip.Name);
+        return new InspectResult
+        {
+            Mapping = ResolveMapping(scene.Skeleton).Report,
+            TakeNames = takeNames,
+        };
     }
 
     // ================================================================ per-request pipeline
@@ -267,8 +277,32 @@ public static class Retargeter
                 + "verify the compiled sequence on engine-space targets).");
         }
 
+        // TakeIndex narrows the conversion to a single take (UI per-take entries submit one
+        // request per selected take); null keeps the historical convert-all-takes behavior.
+        var takeStart = 0;
+        var takeEnd = scene.Clips.Count;
+        if (request.TakeIndex is { } takeIndex)
+        {
+            if (takeIndex < 0 || takeIndex >= scene.Clips.Count)
+            {
+                clips.Add(new ClipResult
+                {
+                    ClipName = FileStem(request.SourceFileName),
+                    SourceFileName = request.SourceFileName,
+                    SourceId = sourceId,
+                    Mapping = report,
+                    Success = false,
+                    Error = $"Take index {takeIndex} is out of range: the source file "
+                        + $"contains {scene.Clips.Count} take(s).",
+                });
+                return false;
+            }
+            takeStart = takeIndex;
+            takeEnd = takeIndex + 1;
+        }
+
         var anyPinkySuccess = false;
-        for (var take = 0; take < scene.Clips.Count; take++)
+        for (var take = takeStart; take < takeEnd; take++)
         {
             var clipName = UniqueClipName(
                 SanitizeClipName(RequestedClipName(request, scene, take)),

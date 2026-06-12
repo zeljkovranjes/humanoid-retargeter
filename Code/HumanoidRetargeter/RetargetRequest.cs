@@ -39,6 +39,14 @@ public sealed class RetargetRequest
     public float? SampleFps { get; init; }
 
     /// <summary>
+    /// Restricts the conversion to ONE take of the source file (0-based index into the
+    /// imported scene's clips). Null = convert all takes. Out of range fails the request's
+    /// clip result with a clear error (the batch continues). UI listings that expand a
+    /// multi-take file into one entry per take submit one request per selected take.
+    /// </summary>
+    public int? TakeIndex { get; init; }
+
+    /// <summary>
     /// UI-supplied mapping (manual mapping table or a user preset loaded Editor-side).
     /// Null = auto-detect per request: preset profiles via <see cref="ProfileDetector"/>,
     /// then the <see cref="AutoMapper"/> as best-effort fallback.

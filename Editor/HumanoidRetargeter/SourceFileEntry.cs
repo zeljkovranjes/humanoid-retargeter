@@ -60,14 +60,20 @@ public sealed class SourceFileEntry
 	/// apply, or preview confirmation).</summary>
 	public bool MappingConfirmed { get; set; }
 
-	/// <summary>Row status (drives row color + icon).</summary>
+	/// <summary>File-level (mapping lifecycle) status: Ready / NeedsReview / Failed-to-load.
+	/// Take rows overlay their own conversion status (<see cref="SourceTakeEntry"/>).</summary>
 	public EntryStatus Status { get; set; }
 
-	/// <summary>One-line detail shown for failures / conversion results.</summary>
+	/// <summary>One-line detail shown for load failures.</summary>
 	public string StatusDetail { get; set; } = "";
 
-	/// <summary>Per-clip results of the last conversion of this file, if any.</summary>
-	public List<HumanoidRetargeter.ClipResult> LastClips { get; } = new();
+	/// <summary>
+	/// One entry per animation take in the file, in take-index order (empty when the file is
+	/// unreadable or has no animation). The window shows one row per take: a multi-take file
+	/// unpacks into individual entries that share THIS file's bytes/skeleton/mapping but are
+	/// previewed, converted and removed independently (one facade request per take).
+	/// </summary>
+	public List<SourceTakeEntry> Takes { get; } = new();
 
 	/// <summary>Number of animation takes in the file (0 when unreadable).</summary>
 	public int ClipCount => Scene?.Clips.Count ?? 0;
@@ -89,11 +95,22 @@ public sealed class SourceFileEntry
 			entry.Bytes = File.ReadAllBytes( filePath );
 			entry.Scene = Retargeter.ImportSource( entry.Bytes, filePath );
 			entry.Signature = SkeletonSignature.Compute( entry.Scene.Skeleton );
+			for ( var i = 0; i < entry.Scene.Clips.Count; i++ )
+				entry.Takes.Add( new SourceTakeEntry( entry, i, entry.Scene.Clips[i].Name ) );
 		}
 		catch ( Exception e )
 		{
 			entry.Status = EntryStatus.Failed;
 			entry.StatusDetail = e.Message;
+			return entry;
+		}
+
+		// Readable but animation-less: nothing to convert, say so up front (take rows are
+		// what conversion operates on, so a takeless entry would otherwise sit inert).
+		if ( entry.Takes.Count == 0 )
+		{
+			entry.Status = EntryStatus.Failed;
+			entry.StatusDetail = "Source file contains no animation takes.";
 			return entry;
 		}
 
@@ -149,6 +166,55 @@ public sealed class SourceFileEntry
 			return ChipTone.Amber;
 		}
 	}
+}
+
+/// <summary>
+/// One animation take of a loaded source file = one row in the retarget window. A file with
+/// N takes unpacks into N of these; they share the owning <see cref="SourceFileEntry"/>'s
+/// bytes/skeleton/mapping (mapping is per FILE — one skeleton per file) but carry their own
+/// conversion lifecycle, are previewed/converted via a per-take facade request
+/// (<see cref="HumanoidRetargeter.RetargetRequest.TakeIndex"/>) and are removable one by one.
+/// </summary>
+public sealed class SourceTakeEntry
+{
+	internal SourceTakeEntry( SourceFileEntry file, int takeIndex, string takeName )
+	{
+		File = file;
+		TakeIndex = takeIndex;
+		TakeName = string.IsNullOrWhiteSpace( takeName ) ? $"take {takeIndex + 1}" : takeName;
+	}
+
+	/// <summary>Owning file entry (bytes, scene, mapping, file-level status).</summary>
+	public SourceFileEntry File { get; }
+
+	/// <summary>0-based take index (what <see cref="HumanoidRetargeter.RetargetRequest.TakeIndex"/> accepts).</summary>
+	public int TakeIndex { get; }
+
+	/// <summary>Take (clip) name from the source file.</summary>
+	public string TakeName { get; }
+
+	/// <summary>Conversion lifecycle of THIS take (Converting/Converted/Failed); null while
+	/// no conversion ran — the row then shows the file's mapping status.</summary>
+	public EntryStatus? ConversionStatus { get; set; }
+
+	/// <summary>One-line detail of the last conversion of this take.</summary>
+	public string StatusDetail { get; set; } = "";
+
+	/// <summary>Per-clip results of the last conversion of this take, if any.</summary>
+	public List<HumanoidRetargeter.ClipResult> LastClips { get; } = new();
+
+	/// <summary>Identity handed to the facade as <c>SourceId</c> and used to join
+	/// <see cref="HumanoidRetargeter.ClipResult"/>s back to this row (full path + take
+	/// index: file names AND take names may collide across the session).</summary>
+	public string SourceId => $"{File.FilePath}::take:{TakeIndex}";
+
+	/// <summary>Row label: <c>"file.fbx · TakeName"</c> for multi-take files, the bare file
+	/// name otherwise.</summary>
+	public string DisplayName => File.Takes.Count > 1 ? $"{File.FileName} · {TakeName}" : File.FileName;
+
+	/// <summary>What the row shows: the take's conversion status when one ran, else the
+	/// file's mapping status.</summary>
+	public EntryStatus EffectiveStatus => ConversionStatus ?? File.Status;
 }
 
 /// <summary>Profile-chip color classes (visual quality bar: green/amber/red statuses).</summary>
