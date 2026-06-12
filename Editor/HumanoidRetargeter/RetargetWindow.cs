@@ -336,7 +336,7 @@ public sealed class RetargetWindow : Widget
 
 	void ShowNoProfileDialog( SourceFileEntry entry )
 	{
-		var dialog = new NoProfileDialog( this, entry.FileName, entry.Mapping?.Confidence ?? 0f )
+		var dialog = new NoProfileDialog( this, entry.FileName, entry.Mapping?.Confidence ?? 0f, DlAssets.Available )
 		{
 			AutoMapChosen = () =>
 			{
@@ -344,6 +344,15 @@ public sealed class RetargetWindow : Widget
 				entry.NeedsUserDecision = false;
 				entry.Status = EntryStatus.Ready;
 				RefreshAll();
+			},
+			// Design §6 option 2: the DL solver needs no mapping - solve and flow straight
+			// into the preview; confirming there marks the entry ready (and offers saving a
+			// trajectory-derived preset, see TrySaveDerivedPreset).
+			DeepLearningChosen = () =>
+			{
+				entry.UseDlSolver = true;
+				RefreshAll();
+				OpenPreview( entry );
 			},
 			ManualChosen = () => OpenMappingEditor( entry ),
 		};
@@ -419,7 +428,15 @@ public sealed class RetargetWindow : Widget
 			Confirmed = savePreset =>
 			{
 				if ( savePreset )
-					TrySaveUserPreset( entry );
+				{
+					// DL entries save a preset DERIVED from the previewed alignment
+					// (trajectory correlation) - the rig then takes the deterministic
+					// geometric path on every later conversion (design §6).
+					if ( entry.UseDlSolver )
+						TrySaveDerivedPreset( entry, result, target );
+					else
+						TrySaveUserPreset( entry );
+				}
 				entry.MappingConfirmed = true;
 				entry.NeedsUserDecision = false;
 				if ( entry.Status is EntryStatus.NeedsReview )
@@ -448,6 +465,47 @@ public sealed class RetargetWindow : Widget
 		}
 	}
 
+	/// <summary>"Save as profile" on a confirmed DL preview: derives the role↔bone mapping
+	/// implied by the DL alignment (trajectory correlation over the previewed clip,
+	/// <see cref="HumanoidRetargeter.Dl.DlMappingDeriver"/>) and stores it as a user preset
+	/// named <c>user_dl_*</c> - below-threshold roles stay unmapped.</summary>
+	void TrySaveDerivedPreset( SourceFileEntry entry, HumanoidRetargeter.RetargetResult result,
+		TargetPickers.ResolvedTarget target )
+	{
+		var assetsPath = Project.Current?.GetAssetsPath();
+		if ( assetsPath is null || entry.Scene is null )
+			return;
+
+		var clip = result.Clips.FirstOrDefault( c => c.Success && c.SolvedFrames is { Count: > 0 } );
+		if ( clip is null )
+			return;
+
+		try
+		{
+			var dlClip = new HumanoidRetargeter.Skeleton.Clip(
+				clip.ClipName, clip.Fps, clip.Looping, clip.SolvedFrames );
+			var derived = HumanoidRetargeter.Dl.DlMappingDeriver.Derive(
+				entry.Scene, 0, dlClip, target.Spec.Rig );
+			derived.Notes.Add( "derived from DL" );
+
+			// Hips alone is structural, not evidence of an alignment - don't save that.
+			if ( derived.RoleToBone.Count <= 1 )
+			{
+				SetStatus( "Could not derive a mapping from the DL preview (trajectories too "
+					+ "ambiguous) - no preset saved.", Theme.Yellow );
+				return;
+			}
+
+			UserPresets.Save( assetsPath, entry.Signature, entry.Scene.Skeleton, derived, "user_dl" );
+			SetStatus( $"Saved DL-derived preset ({derived.RoleToBone.Count} roles, mean correlation "
+				+ $"{derived.Confidence:0.00}) for {entry.FileName}.", Theme.Green );
+		}
+		catch ( Exception e )
+		{
+			SetStatus( $"Could not save DL-derived preset: {e.Message}", Theme.Red );
+		}
+	}
+
 	// ============================================================================ convert
 
 	HumanoidRetargeter.RetargetRequest BuildRequest( SourceFileEntry entry ) => new()
@@ -456,6 +514,9 @@ public sealed class RetargetWindow : Widget
 		SourceFileName = entry.FileName,
 		SourceId = entry.FilePath, // full path: same-named files in different folders must not collide
 		MappingOverride = entry.Mapping,
+		Solver = entry.UseDlSolver
+			? HumanoidRetargeter.SolverKind.DeepLearning
+			: HumanoidRetargeter.SolverKind.Geometric,
 		RootMotion = _rootMotion,
 		FootPlantCleanup = _footPlant,
 		ArmEffectorIk = _armIk,

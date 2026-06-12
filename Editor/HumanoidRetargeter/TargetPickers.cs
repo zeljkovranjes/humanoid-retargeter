@@ -107,6 +107,7 @@ public static class TargetPickers
 				BaseModelPath = asset.Path,
 				DefaultRootBone = RootBoneName( skeleton, map ),
 				UpAxis = TargetUpAxis.ZUpEngine,        // Model.Bones bind pose is engine space
+				DlWeights = DlAssets.TryLoadWeights(),
 			},
 			Description = $"Custom model: {asset.Name}",
 			PreviewModelPath = asset.Path,
@@ -147,6 +148,7 @@ public static class TargetPickers
 				VmdlScale = RetargetTargetSpec.SboxSourceScale, // cm-authored skeleton
 				BaseModelPath = "",
 				DefaultRootBone = RootBoneName( skeleton, map ),
+				DlWeights = DlAssets.TryLoadWeights(),
 			},
 			Description = $"Custom FBX: {Path.GetFileName( filePath )}",
 			PreviewModelPath = null,

@@ -6,6 +6,20 @@ using HumanoidRetargeter.Target;
 
 namespace HumanoidRetargeter;
 
+/// <summary>Which solver retargets a request's clips (design §10).</summary>
+public enum SolverKind
+{
+    /// <summary>The deterministic <see cref="Solve.GeometricSolver"/> (default; better
+    /// wherever a role mapping exists).</summary>
+    Geometric,
+
+    /// <summary>The experimental skeleton-agnostic deep-learning solver
+    /// (<see cref="Dl.DlSolver"/>, SAME pretrained checkpoint) — the no-profile fallback.
+    /// Requires <see cref="RetargetTargetSpec.DlWeights"/>; ignores per-role mapping
+    /// (only hips/alignment heuristics consult it) and leaves fingers at rest.</summary>
+    DeepLearning,
+}
+
 /// <summary>
 /// One source animation file to retarget (engine-agnostic: bytes in, no file IO). Every
 /// request runs its OWN profile detection, so a single batch may mix Mixamo + ActorCore +
@@ -13,6 +27,11 @@ namespace HumanoidRetargeter;
 /// </summary>
 public sealed class RetargetRequest
 {
+    /// <summary>Solver choice for this request's clips. <see cref="SolverKind.DeepLearning"/>
+    /// requires the batch's <see cref="RetargetTargetSpec.DlWeights"/> to be set; the
+    /// conversion fails per-clip with a clear error otherwise.</summary>
+    public SolverKind Solver { get; init; } = SolverKind.Geometric;
+
     /// <summary>Raw bytes of the source file (.fbx or .bvh).</summary>
     public required byte[] SourceData { get; init; }
 
@@ -137,16 +156,26 @@ public sealed class RetargetTargetSpec
     public TargetUpAxis UpAxis { get; init; } = TargetUpAxis.YUpCm;
 
     /// <summary>
+    /// Raw bytes of the committed SAME weight blob
+    /// (<c>Assets/humanoid_retargeter/dl/same_v1.weights</c>; callers do the file IO).
+    /// Required only when a request selects <see cref="SolverKind.DeepLearning"/>; the
+    /// solver instance is built once per batch from these bytes.
+    /// </summary>
+    public byte[]? DlWeights { get; init; }
+
+    /// <summary>
     /// The shipped s&amp;box default target: rig parsed from the committed
     /// <c>Assets/humanoid_retargeter/target_rig_sbox.json</c> text (callers do the file IO),
-    /// 0.3937 vmdl scale, citizen human male base model, pelvis root.
+    /// 0.3937 vmdl scale, citizen human male base model, pelvis root. Pass the committed
+    /// SAME weight bytes as <paramref name="dlWeights"/> to enable the deep-learning solver.
     /// </summary>
-    public static RetargetTargetSpec SboxDefault(string targetRigJson) => new()
+    public static RetargetTargetSpec SboxDefault(string targetRigJson, byte[]? dlWeights = null) => new()
     {
         Rig = TargetRig.SboxDefault(targetRigJson),
         VmdlScale = SboxSourceScale,
         BaseModelPath = SboxHumanMalePath,
         DefaultRootBone = "pelvis",
+        DlWeights = dlWeights,
     };
 }
 

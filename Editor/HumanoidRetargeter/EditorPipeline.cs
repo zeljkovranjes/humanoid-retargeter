@@ -140,7 +140,9 @@ public static class EditorPipeline
 		var path = FindLibraryAssetFile( TargetRigJsonRelative )
 			?? throw new FileNotFoundException(
 				$"Target rig definition not found ({TargetRigJsonRelative}). Is the humanoid_retargeter library installed?" );
-		return RetargetTargetSpec.SboxDefault( File.ReadAllText( path ) );
+		// DL weights ride along when the committed model asset exists (enables the
+		// deep-learning fallback solver; null keeps everything else working without it).
+		return RetargetTargetSpec.SboxDefault( File.ReadAllText( path ), DlAssets.TryLoadWeights() );
 	}
 
 	/// <summary>Disk + asset-system outcome of one conversion run.</summary>

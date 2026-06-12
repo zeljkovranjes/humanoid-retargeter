@@ -60,6 +60,12 @@ public sealed class SourceFileEntry
 	/// apply, or preview confirmation).</summary>
 	public bool MappingConfirmed { get; set; }
 
+	/// <summary>Retarget this file with the experimental deep-learning solver instead of
+	/// the geometric one (chosen in the no-profile dialog; design §6 option 2). The entry's
+	/// mapping is still carried for the report/heuristics, but the DL solver ignores
+	/// per-role assignments.</summary>
+	public bool UseDlSolver { get; set; }
+
 	/// <summary>Row status (drives row color + icon).</summary>
 	public EntryStatus Status { get; set; }
 
