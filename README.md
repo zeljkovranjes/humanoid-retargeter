@@ -1,109 +1,136 @@
 # Humanoid Retargeter
 
-An [s&box](https://sbox.game) **library** that retargets skeletal animations from any
-humanoid rig onto the s&box armature (or any other humanoid rig) — body, hands, feet,
-fingers, bone rolls, and root motion — entirely in managed C#, inside the editor.
+An [s&box](https://sbox.game) library that retargets skeletal animations from **any
+humanoid rig onto any humanoid rig** — body, hands, feet, fingers, bone rolls, and root
+motion — entirely inside the editor, in pure managed C#.
 
-Drop in a Mixamo, ActorCore/Character Creator, UE Mannequin, or BVH mocap file (or a rig
-the library has never seen), and get compiled, animgraph-ready s&box animations.
+Drop in Mixamo, ActorCore/Character Creator, UE Mannequin, BVH mocap, or glTF animations
+(or a rig the library has never seen) and get compiled, animgraph-ready s&box animations.
 
-## How it works
+---
 
-```
-source (.fbx / .bvh)
-  → managed importers (binary+ASCII FBX incl. PreRotation/pivots; BVH)
-  → automatic profile detection
-      presets: Mixamo · ActorCore/CC · UE Mannequin · Rokoko/Xsens BVH
-      → your saved presets (auto-learned, keyed by skeleton signature)
-      → token auto-mapper (DAZ/Poser, Biped, CMU, … naming)
-      → pure-topology fallback (works on rigs with meaningless bone names)
-  → geometric retarget solver
-      canonical anatomical frames from rest GEOMETRY (never local axes —
-      handles the citizen rig's chest-forward bone rolls),
-      A/T-pose rest normalization on both rigs, absolute canonical-orientation
-      matching, spine chain interpolation (3–5 source spine bones → 3),
-      finger curl/splay transfer, hip-height-scaled pelvis translation
-  → cleanup: Kovar foot-plant correction (anti foot-skate), optional limb IK,
-      root-motion extract / in-place
-  → s&box IK helper bones baked exactly like shipped clips drive them
-      (root_IK, hand/foot IK targets, ikrule bones — relationships reverse-
-      engineered from Facepunch's own animations to ~1e-4 cm accuracy)
-  → DMX animation files + vmdl (new anim-only model via Base Model, or
-      non-destructive augmentation of your existing vmdl) → compiled
-```
+## Prerequisites
 
-## Install
+| Requirement | Notes |
+|---|---|
+| **s&box** (editor) | A current s&box install with the editor (`sbox-dev`). The library is editor-side; nothing runs at game runtime. |
+| **A game project** | Conversions write into your project's `Assets/` folder. Any project works — including the shipped samples. The library refuses to modify engine-owned content (`addons/`, `core/`). |
+| **This library installed** | Copy or clone this repository into your project's `Libraries/` folder (e.g. `Libraries/local.humanoid_retargeter/`). Only `Code/`, `Editor/`, `Assets/` and the `.sbproj` are needed. |
+| Source animations | `.fbx` (binary or ASCII, FBX 7.x), `.bvh`, `.glb`, or `.gltf` files. FBX 6.x is rejected with a clear message — re-export from your DCC. |
 
-Copy/clone this library into your project's `Libraries/` folder (or install via the
-Library Manager once published). No native DLLs, no external tools.
+No NuGet packages, no native DLLs, no Python, no external tools.
 
-## Use
+---
 
-**Window:** *View → Humanoid Retargeter*
-1. **Add Files** (or right-click FBX/BVH assets in the Asset Browser → *Retarget to s&box rig…*).
-2. Each file is profile-detected independently — batches can mix Mixamo + ActorCore + BVH
-   freely. Status chips: green = recognized, amber = auto-mapped (review recommended),
-   red = failed.
-3. If no profile is found you'll be offered: **Auto-map blindly** (recommended),
-   **Deep learning** (experimental — ships in a later release), or **Manual mapping**.
-4. **Preview** plays the retargeted clip on the actual citizen model before anything is
-   written. Confirming a manual/auto mapping offers **"Save as profile"** — that rig is
-   then recognized instantly forever after.
-5. Pick the **target**: s&box rig (default) or any custom humanoid model/vmdl/FBX
-   (its skeleton is detected and mapped the same way sources are).
-6. Pick the **output**: a new animation vmdl (uses s&box's Base Model feature) or
-   **augment an existing vmdl** (splices `AnimFile` entries non-destructively; re-running
-   with the same names updates them in place).
-7. **Convert All** — per-clip results, compile status, and errors are shown inline.
+## Features
 
-**Code:** everything the window does is on the engine-agnostic facade:
+### Input
+- **FBX** — own managed parser (binary + ASCII, v7000–7700): full pivot/PreRotation
+  transform evaluation, all rotation orders, multi-take files, zlib-compressed curves.
+- **BVH** — mocap files with any channel ordering; unit heuristics for meter/cm exports.
+- **glTF / GLB** — node hierarchies, skins, animation samplers (linear/step/cubic-spline).
+- **Multi-take unpacking** — a file containing many animations expands into one list entry
+  per take, each independently previewable, removable, and convertible.
 
-```csharp
-var result = Retargeter.ConvertBatch(requests, RetargetTargetSpec.SboxDefault(rigJson));
-```
+### Rig understanding (automatic, per file)
+- **Built-in profiles**: Mixamo, ActorCore / Character Creator (`CC_Base_*`),
+  UE Mannequin (UE4/UE5 naming), Rokoko/Xsens-style BVH.
+- **Your saved presets** — confirm a mapping once and that skeleton is recognized
+  instantly forever (keyed by skeleton signature).
+- **Auto-mapper** — token-based name matching for unlisted rigs (DAZ/Poser, 3ds Max
+  Biped, CMU, …) with hierarchy validation.
+- **Topology fallback** — maps rigs with meaningless bone names from the skeleton's
+  shape alone (verified: recovers every role including all 30 finger phalanges on a
+  fully renamed skeleton).
+- **No-profile dialog** — when nothing matches confidently: auto-map blindly, use the
+  deep-learning solver, or map manually. Batches may mix profiles freely.
 
-Options per request: root motion (off / extract / in-place), foot-plant cleanup, arm IK,
-hip translation scales, looping, clip names.
+### Retargeting
+- **Geometric solver** (default): canonical anatomical frames built from rest geometry
+  (immune to bone-roll conventions), A/T-pose rest normalization on both rigs, exact
+  identity on same-rig round-trips (≤ 0.00025°), spine chain interpolation (3–5 source
+  spine bones → target), finger curl/splay transfer, hip-height-scaled root translation.
+- **Natural shoulder/neck carriage** (option, on by default): clavicles and neck keep the
+  target body's own posture and receive only the source's motion — fixes the slumped
+  shoulders / hunched neck look that exact direction-copying produces on
+  differently-proportioned rigs. Toe-less sources automatically get the same treatment
+  for feet (no more heel-standing).
+- **Deep-learning solver** (experimental): a pure-C# implementation of SAME
+  (skeleton-agnostic motion embedding) running the pretrained checkpoint — no mapping
+  needed at all. Offered in the no-profile dialog; after previewing, it can derive and
+  save a regular profile from its own output so the rig switches to the deterministic
+  geometric path. *(Weights ship in `Assets/humanoid_retargeter/dl/`; see ATTRIBUTION —
+  CC BY-NC 4.0, non-commercial.)*
+- **Cleanup passes**: Kovar foot-plant correction (anti foot-skate with plant detection,
+  blending, and knee-pop-free stretch), optional arm effector IK, root motion
+  keep / strip-in-place / extract-to-root.
+- **s&box-exact IK helper bones**: `root_IK`, hand/foot IK targets, and `ikrule` bones are
+  baked with the exact relationships Facepunch's own clips use (reverse-engineered to
+  ~0.0001 cm) — retargeted clips drive the citizen animgraph like official animations.
+  Twist/helper bones are correctly left to the model's own constraints.
 
-## Quality
+### Targets
+- **s&box Human** (default) — the 5-finger `citizen_human` rig.
+- **s&box Citizen (classic)** — the 4-finger citizen; missing pinky roles are skipped
+  cleanly.
+- **Any custom humanoid** — pick any model/.vmdl or FBX as the target; its skeleton goes
+  through the same detection/mapping machinery (best-effort even on imperfect matches).
+  Engine-unit targets are handled with the correct axis/unit conventions automatically.
 
-Every stage is gated by tests (CI suite: `dotnet test dev/HumanoidRetargeter.Tests`):
+### Output
+- **DMX animation files** (byte-compatible with s&box's own fbx2dmx output) plus either:
+  - a **new animation vmdl** (s&box Base Model: your model keeps the mesh, the new vmdl
+    holds the sequences), or
+  - **augmentation of an existing vmdl** — non-destructive splice with a `.bak` backup,
+    collision protection for your hand-authored entries, idempotent re-runs (re-converting
+    updates entries in place), and automatic CopyPinky constraint neutralization when real
+    pinky animation is present.
+- **Batch conversion** — N files × all takes in one click, per-clip failure isolation,
+  name-collision auto-suffixing, one combined vmdl.
 
-- FBX/BVH importers validated against headless-Blender ground truth at float precision
-  (max 0.0004° across full clips).
-- Retargeting a shipped citizen clip onto the citizen rig reproduces it to **0.00025°**
-  (identity proof of the solver math).
-- An **independent** Blender harness re-measures the full corpus (Mixamo, ActorCore, UE,
-  CMU/DAZ BVH) from raw data: anatomical direction error, end-effector paths, foot-contact
-  agreement, jitter — results in `dev/verification/RESULTS.md`, with side-by-side renders.
-- An unattended editor-process gate compiles real output through `sbox-dev` and asserts
-  the sequences appear on the model.
+### Editor experience
+- Dockable **Humanoid Retargeter** window (View menu): colored profile/status chips with
+  confidence badges, per-row Mapping / Preview / Remove, options panel (root motion,
+  looping, foot-plant, carriage, arm IK, hip scales, sample fps), progress + per-clip
+  compile status with real compiler errors surfaced.
+- **Live preview** before anything is written — the actual skinned s&box model playing the
+  retargeted clip, with play/pause/scrub. Confirming offers **"Save as profile"**.
+- **Asset browser integration** — right-click animation files → *Retarget Animation*.
+- Code API: `Retargeter.Convert` / `ConvertBatch` / `Inspect` (engine-agnostic, bytes in,
+  strings out).
+
+---
+
+## Quick start
+
+1. Install the library (see prerequisites), open your project in the editor.
+2. *View → Humanoid Retargeter*.
+3. **Add Files…** (or right-click animation assets → *Retarget Animation*).
+4. Check the profile chips — green is good to go; amber/red rows offer auto-map, DL, or
+   manual mapping.
+5. Optional: **Preview** any row on the real model.
+6. Pick the target and output mode, hit **Convert All**.
+7. The compiled sequences appear on the output model, ready for animgraph/`Sequence` use.
+
+## Verification
+
+The repo ships its own evidence (`dev/`): 391 unit/integration tests; an independent
+headless-Blender harness that re-measures the full corpus (Mixamo, ActorCore, UE, CMU/DAZ
+BVH — 10/10 passing: anatomical direction error, end-effector paths, foot contacts,
+jitter) with side-by-side renders; and unattended editor-process gates that compile real
+output through `sbox-dev` and assert the sequences, preview pose, and preset round-trip.
 
 ## Limitations
 
-- Sources must be humanoid bipeds (no quadrupeds/tails-as-spines); facial/morph animation
-  is not transferred.
-- s&box twist/helper bones are intentionally not exported — they're constraint-driven by
-  the model (exporting channels for them is ignored by Source 2 anyway).
-- GLB input isn't supported yet (s&box itself doesn't consume GLB; FBX/BVH cover the
-  major sources).
-- CMU-converted BVH uses a non-physical unit scale; hip-height normalization absorbs it,
-  but absolute world travel from such files reflects the source's odd scale.
+- Humanoid bipeds only (no quadrupeds/tails); facial/morph animation is not transferred.
+- glTF with external `.bin` URIs isn't supported — use `.glb` (embedded) instead.
+- FBX 6.x (2010-era) files are rejected; re-export as FBX 7.x.
+- The DL solver ignores fingers (checkpoint limitation) and is weakest on hands — the
+  geometric path remains the quality reference wherever a mapping exists.
 
-## Deep-learning mode (roadmap)
+## Attribution
 
-A SAME-style skeleton-agnostic solver (ONNX Runtime, pure C# inference) is planned as the
-fallback for rigs the auto-mapper can't handle, and as a mapping-discovery tool (DL result
-→ preview → save derived profile → deterministic geometric path thereafter).
-SAME (Lee et al., SIGGRAPH Asia 2023) is licensed CC BY-NC 4.0; any shipped weights or
-adaptations will carry attribution, and this library is non-commercial.
-
-## Repository layout
-
-- `Code/HumanoidRetargeter/` — engine-agnostic core (also compiles under net8.0:
-  `dev/HumanoidRetargeter.Dev.csproj`)
-- `Editor/HumanoidRetargeter/` — window, dialogs, preview, asset actions, compile pipeline
-- `Assets/humanoid_retargeter/` — target rig definition + built-in profiles (+ your saved
-  `profiles/user/` presets)
-- `dev/` — test suite, fixtures, corpus, verification harness, editor-process gates
-- `docs/superpowers/` — design spec and implementation plan
+The deep-learning mode implements **SAME** (Lee et al., *SAME: Skeleton-Agnostic Motion
+Embedding for Character Animation*, SIGGRAPH Asia 2023), weights derived from the authors'
+checkpoint — [github.com/sunny-Codes/SAME](https://github.com/sunny-Codes/SAME),
+**CC BY-NC 4.0** (non-commercial). See `Assets/humanoid_retargeter/dl/ATTRIBUTION.md`.
