@@ -40,8 +40,51 @@ public static class ProfileLibrary
     /// LeftArm|LeftUpperArm</c> name variants, usually no fingers.</summary>
     public static Profile RokokoBvh { get; } = BuildRokokoBvh();
 
-    /// <summary>All built-in presets, in detection order.</summary>
-    public static IReadOnlyList<Profile> All { get; } = new[] { Mixamo, ActorCoreCc, UeMannequin, RokokoBvh };
+    /// <summary>
+    /// SMPL body model family (AMASS exports, Meshcapade FBX rigs). Joint names per the
+    /// published model (vchoutas/smplx <c>joint_names.py</c>, Meshcapade wiki):
+    /// <c>pelvis</c>, sided <c>hip→knee→ankle→foot</c> legs (the "hip" joint IS the thigh;
+    /// "ankle" is the foot, "foot" is the toe region) and <c>collar→shoulder→elbow→wrist</c>
+    /// arms ("shoulder" is the upper arm, "wrist" is the hand; the <c>hand</c> joint is a
+    /// finger stub and stays unmapped). Both spellings occur in the wild: <c>left_hip</c>
+    /// (model joints) and <c>L_Hip</c> with gendered FBX prefixes <c>m_avg_</c>/<c>f_avg_</c>
+    /// (SMPL Unity/FBX rigs). No fingers — that is SMPL-X (<see cref="SmplX"/>), kept as a
+    /// separate preset so a finger-less SMPL rig still reaches full optional coverage.
+    /// </summary>
+    public static Profile Smpl { get; } = BuildSmpl(withFingers: false);
+
+    /// <summary>
+    /// SMPL-X: the SMPL body joints (<see cref="Smpl"/>) plus articulated hands —
+    /// <c>left_thumb1..3</c>/<c>left_index1..3</c>-style finger joints per
+    /// vchoutas/smplx <c>joint_names.py</c> (jaw/eye joints carry no humanoid role).
+    /// Evaluated before <see cref="Smpl"/> so it wins the tie on SMPL-X rigs (both score
+    /// the body fully; only this one maps the fingers).
+    /// </summary>
+    public static Profile SmplX { get; } = BuildSmpl(withFingers: true);
+
+    /// <summary>
+    /// NVIDIA SOMA uniform-proportion skeleton (SOMA/SEED BVH exports, e.g.
+    /// github.com/NVIDIA/soma-retargeter <c>assets/motions/bvh</c>). Mixamo-identical
+    /// upper-body and finger names, but: spine is <c>Spine1→Spine2→Chest</c> (no plain
+    /// "Spine"), neck is <c>Neck1→Neck2</c>, and the legs are <c>LeftLeg→LeftShin</c> —
+    /// SOMA's <c>LeftLeg</c> is the THIGH (mixamo's is the calf), which is exactly why the
+    /// mixamo preset must never claim these rigs.
+    /// </summary>
+    public static Profile SomaBvh { get; } = BuildSomaBvh();
+
+    /// <summary>
+    /// Classic BVH / Character-Studio-friendly naming (MotionBuilder "Export BVH to
+    /// Character Studio" convention, ACCAD-style mocap BVHs): <c>Hips</c>,
+    /// <c>Chest[2..4]</c> spine, arms <c>Collar→Shoulder→Elbow→Wrist</c> (the "Shoulder"
+    /// is the upper arm) and legs <c>Hip→Knee→Ankle→Toe</c> (the sided "Hip" is the
+    /// thigh). No fingers.
+    /// </summary>
+    public static Profile ClassicBvh { get; } = BuildClassicBvh();
+
+    /// <summary>All built-in presets, in detection order (first wins score ties — see
+    /// <see cref="SmplX"/> vs <see cref="Smpl"/>).</summary>
+    public static IReadOnlyList<Profile> All { get; } =
+        new[] { Mixamo, ActorCoreCc, UeMannequin, RokokoBvh, SmplX, Smpl, SomaBvh, ClassicBvh };
 
     // ---------------------------------------------------------------- mixamo
 
@@ -189,6 +232,114 @@ public static class ProfileLibrary
             aliases[Role("Toe", roleSide)] = new[] { $"{nameSide}Toe", $"{nameSide}ToeBase" };
         }
         return new Profile("rokoko_bvh", new string[0], aliases);
+    }
+
+    // ---------------------------------------------------------------- smpl / smpl-x
+
+    private static Profile BuildSmpl(bool withFingers)
+    {
+        var aliases = new Dictionary<BoneRole, string[]>
+        {
+            [BoneRole.Hips] = new[] { "Pelvis" },
+            [BoneRole.Spine0] = new[] { "Spine1" },
+            [BoneRole.Spine1] = new[] { "Spine2" },
+            [BoneRole.Spine2] = new[] { "Spine3" },
+            [BoneRole.Neck] = new[] { "Neck" },
+            [BoneRole.Head] = new[] { "Head" },
+        };
+        foreach (var (roleSide, abbr, word) in new[] { ("L", "L", "left"), ("R", "R", "right") })
+        {
+            // Both documented spellings per role: abbreviated FBX-rig names ("L_Hip") and
+            // spelled model joint names ("left_hip"). Comparison is separator-insensitive.
+            aliases[Role("Clavicle", roleSide)] = new[] { $"{abbr}_Collar", $"{word}_collar" };
+            aliases[Role("UpperArm", roleSide)] = new[] { $"{abbr}_Shoulder", $"{word}_shoulder" };
+            aliases[Role("LowerArm", roleSide)] = new[] { $"{abbr}_Elbow", $"{word}_elbow" };
+            aliases[Role("Hand", roleSide)] = new[] { $"{abbr}_Wrist", $"{word}_wrist" };
+            aliases[Role("UpperLeg", roleSide)] = new[] { $"{abbr}_Hip", $"{word}_hip" };
+            aliases[Role("LowerLeg", roleSide)] = new[] { $"{abbr}_Knee", $"{word}_knee" };
+            aliases[Role("Foot", roleSide)] = new[] { $"{abbr}_Ankle", $"{word}_ankle" };
+            aliases[Role("Toe", roleSide)] = new[] { $"{abbr}_Foot", $"{word}_foot" };
+
+            if (!withFingers)
+                continue;
+
+            // SMPL-X finger joints (left_index1..3 etc., per vchoutas/smplx joint_names.py).
+            foreach (var finger in new[] { "thumb", "index", "middle", "ring", "pinky" })
+            {
+                var name = char.ToUpperInvariant(finger[0]) + finger[1..];
+                aliases[Role($"{name}Prox", roleSide)] = new[] { $"{word}_{finger}1" };
+                aliases[Role($"{name}Mid", roleSide)] = new[] { $"{word}_{finger}2" };
+                aliases[Role($"{name}Dist", roleSide)] = new[] { $"{word}_{finger}3" };
+            }
+        }
+        // Gendered SMPL FBX rigs prefix every bone (m_avg_L_Hip, f_avg_Pelvis).
+        return new Profile(withFingers ? "smpl_x" : "smpl", new[] { "^m_avg_", "^f_avg_" }, aliases);
+    }
+
+    // ---------------------------------------------------------------- nvidia soma bvh
+
+    private static Profile BuildSomaBvh()
+    {
+        var aliases = new Dictionary<BoneRole, string[]>
+        {
+            [BoneRole.Hips] = new[] { "Hips" },
+            [BoneRole.Spine0] = new[] { "Spine1" },
+            [BoneRole.Spine1] = new[] { "Spine2" },
+            [BoneRole.Spine2] = new[] { "Chest" },
+            [BoneRole.Neck] = new[] { "Neck1" },
+            [BoneRole.Head] = new[] { "Head" },
+        };
+        foreach (var (roleSide, nameSide) in Sides())
+        {
+            aliases[Role("Clavicle", roleSide)] = new[] { $"{nameSide}Shoulder" };
+            aliases[Role("UpperArm", roleSide)] = new[] { $"{nameSide}Arm" };
+            aliases[Role("LowerArm", roleSide)] = new[] { $"{nameSide}ForeArm" };
+            aliases[Role("Hand", roleSide)] = new[] { $"{nameSide}Hand" };
+            // SOMA's "Leg" is the thigh, "Shin" the calf — the decisive difference from
+            // mixamo, where "Leg" is the calf under "UpLeg".
+            aliases[Role("UpperLeg", roleSide)] = new[] { $"{nameSide}Leg" };
+            aliases[Role("LowerLeg", roleSide)] = new[] { $"{nameSide}Shin" };
+            aliases[Role("Foot", roleSide)] = new[] { $"{nameSide}Foot" };
+            aliases[Role("Toe", roleSide)] = new[] { $"{nameSide}ToeBase" };
+
+            // Mixamo-style finger names; segment 4 ("LeftHandIndex4") and the *End markers
+            // carry no role.
+            foreach (var finger in new[] { "Thumb", "Index", "Middle", "Ring", "Pinky" })
+            {
+                aliases[Role($"{finger}Prox", roleSide)] = new[] { $"{nameSide}Hand{finger}1" };
+                aliases[Role($"{finger}Mid", roleSide)] = new[] { $"{nameSide}Hand{finger}2" };
+                aliases[Role($"{finger}Dist", roleSide)] = new[] { $"{nameSide}Hand{finger}3" };
+            }
+        }
+        return new Profile("soma_bvh", new string[0], aliases);
+    }
+
+    // ---------------------------------------------------------------- classic bvh
+
+    private static Profile BuildClassicBvh()
+    {
+        var aliases = new Dictionary<BoneRole, string[]>
+        {
+            [BoneRole.Hips] = new[] { "Hips" },
+            [BoneRole.Spine0] = new[] { "Chest" },
+            [BoneRole.Spine1] = new[] { "Chest2" },
+            [BoneRole.Spine2] = new[] { "Chest3" },
+            [BoneRole.Spine3] = new[] { "Chest4" },
+            [BoneRole.Neck] = new[] { "Neck" },
+            [BoneRole.Head] = new[] { "Head" },
+        };
+        foreach (var (roleSide, nameSide) in Sides())
+        {
+            aliases[Role("Clavicle", roleSide)] = new[] { $"{nameSide}Collar" };
+            aliases[Role("UpperArm", roleSide)] = new[] { $"{nameSide}Shoulder" };
+            aliases[Role("LowerArm", roleSide)] = new[] { $"{nameSide}Elbow" };
+            aliases[Role("Hand", roleSide)] = new[] { $"{nameSide}Wrist" };
+            aliases[Role("UpperLeg", roleSide)] = new[] { $"{nameSide}Hip" };
+            aliases[Role("LowerLeg", roleSide)] = new[] { $"{nameSide}Knee" };
+            aliases[Role("Foot", roleSide)] = new[] { $"{nameSide}Ankle" };
+            aliases[Role("Toe", roleSide)] = new[] { $"{nameSide}Toe" };
+        }
+        return new Profile("classic_bvh", new string[0], aliases);
     }
 
     // ---------------------------------------------------------------- helpers
