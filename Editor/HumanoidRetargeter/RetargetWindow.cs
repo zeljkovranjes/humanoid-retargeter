@@ -38,6 +38,7 @@ public sealed class RetargetWindow : Widget
 	RootMotionMode _rootMotion = RootMotionMode.Off;
 	bool _footPlant = true;
 	bool _armIk;
+	bool _naturalCarriage = true;
 	bool? _loopOverride;
 
 	// Output
@@ -153,6 +154,11 @@ public sealed class RetargetWindow : Widget
 
 		var footPlant = options.Layout.Add( new Checkbox( "Foot-plant cleanup" ) { Value = _footPlant } );
 		footPlant.Clicked = () => _footPlant = footPlant.Value;
+
+		var carriage = options.Layout.Add( new Checkbox( "Natural shoulder/neck carriage" ) { Value = _naturalCarriage } );
+		carriage.ToolTip = "Keep the s&box body's own shoulder line and neck posture, transferring only the source's motion. "
+			+ "Untick to exactly copy the source rig's shoulder/neck directions (can look slumped/hunched on differently-proportioned rigs).";
+		carriage.Clicked = () => _naturalCarriage = carriage.Value;
 
 		var armIk = options.Layout.Add( new Checkbox( "Arm effector IK" ) { Value = _armIk } );
 		armIk.ToolTip = "Pull wrists onto limb-length-normalized source hand positions. "
@@ -548,6 +554,11 @@ public sealed class RetargetWindow : Widget
 		{
 			HipScaleHorizontal = ParsePositive( _hipScaleHEdit ),
 			HipScaleVertical = ParsePositive( _hipScaleVEdit ),
+			// null = recommended defaults (clavicle/neck keep the target's natural
+			// carriage); empty map = legacy all-absolute direction matching.
+			TransferModes = _naturalCarriage
+				? null
+				: new Dictionary<HumanoidRetargeter.Mapping.BoneRole, HumanoidRetargeter.Solve.RoleTransferMode>(),
 		},
 	};
 
