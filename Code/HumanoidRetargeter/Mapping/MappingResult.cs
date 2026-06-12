@@ -19,6 +19,14 @@ public enum MappingSource
 
     /// <summary>The user assigned roles by hand in the mapping editor.</summary>
     Manual,
+
+    /// <summary>
+    /// The source file itself declares the mapping — e.g. a VRM's
+    /// <c>humanoid.humanBones</c> block (both the 0.x <c>extensions.VRM</c> and the 1.0
+    /// <c>extensions.VRMC_vrm</c> layouts). Authoritative: consulted before user presets and
+    /// shipped-profile detection, at confidence 1.0.
+    /// </summary>
+    Authored,
 }
 
 /// <summary>

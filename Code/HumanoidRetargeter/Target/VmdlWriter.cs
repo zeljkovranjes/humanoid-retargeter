@@ -4,6 +4,35 @@ using System.Globalization;
 
 namespace HumanoidRetargeter.Target;
 
+/// <summary>
+/// One AnimEvent to attach as a child of a vmdl AnimFile node. The node shape replicates the
+/// shipped citizen animation list prefab exactly (all 28 shipped events are
+/// <c>AE_FOOTSTEP</c>): <c>_class = "AnimEvent"</c>, <c>event_class</c>, <c>event_frame</c>
+/// (integer frame on the clip's grid), and an <c>event_keys</c> object carrying
+/// <c>Attachment</c> (<c>"foot_L"</c>/<c>"foot_R"</c>), <c>Foot</c> (STRING <c>"0"</c> =
+/// left, <c>"1"</c> = right) and <c>Volume</c> (<c>0.7</c> throughout the shipped data).
+/// </summary>
+public sealed class AnimEventEntry
+{
+    /// <summary>Event class name (e.g. <c>AE_FOOTSTEP</c>).</summary>
+    public string EventClass { get; set; } = "";
+
+    /// <summary>Frame the event fires on (the clip's own frame grid).</summary>
+    public int Frame { get; set; }
+
+    /// <summary>event_keys <c>Attachment</c> value (<c>"foot_L"</c>/<c>"foot_R"</c> in the
+    /// shipped footstep data); null omits the key.</summary>
+    public string? Attachment { get; set; }
+
+    /// <summary>event_keys <c>Foot</c> value — the shipped data encodes the side as a STRING:
+    /// <c>"0"</c> = left, <c>"1"</c> = right; null omits the key.</summary>
+    public string? Foot { get; set; }
+
+    /// <summary>event_keys <c>Volume</c> value (<c>0.7</c> in all shipped footstep events);
+    /// null omits the key.</summary>
+    public double? Volume { get; set; }
+}
+
 /// <summary>One animation to register in a vmdl AnimationList.</summary>
 public sealed class AnimEntry
 {
@@ -20,6 +49,10 @@ public sealed class AnimEntry
     /// <summary>Whether to add an ExtractMotion child node (ground-plane translation
     /// extraction, linear, matching the shipped citizen prefab usage).</summary>
     public bool ExtractMotion { get; set; }
+
+    /// <summary>AnimEvent children to emit on the AnimFile node (e.g. generated
+    /// <c>AE_FOOTSTEP</c> events); empty = no event nodes.</summary>
+    public IReadOnlyList<AnimEventEntry> Events { get; set; } = Array.Empty<AnimEventEntry>();
 }
 
 /// <summary>
@@ -101,7 +134,9 @@ public static class VmdlWriter
     /// <summary>
     /// Builds one AnimFile KV3 node (full attribute set as compiled in M0). When the entry
     /// requests motion extraction, an ExtractMotion child extracting ground-plane translation
-    /// on <paramref name="motionRootBone"/> is included.
+    /// on <paramref name="motionRootBone"/> is included; <see cref="AnimEntry.Events"/>
+    /// become AnimEvent children (shipped-prefab node shape, see
+    /// <see cref="AnimEventEntry"/>).
     /// </summary>
     internal static KvObject BuildAnimFileNode(AnimEntry entry, string motionRootBone)
     {
@@ -113,6 +148,7 @@ public static class VmdlWriter
             ["name"] = new KvString(entry.Name),
         };
 
+        var nodeChildren = new KvArray();
         if (entry.ExtractMotion)
         {
             var extract = new KvObject
@@ -127,10 +163,12 @@ public static class VmdlWriter
                 ["root_bone_name"] = new KvString(motionRootBone),
                 ["motion_type"] = new KvString("Single"),
             };
-            var nodeChildren = new KvArray();
             nodeChildren.Items.Add(extract);
-            node["children"] = nodeChildren;
         }
+        foreach (var animEvent in entry.Events)
+            nodeChildren.Items.Add(BuildAnimEventNode(animEvent));
+        if (nodeChildren.Items.Count > 0)
+            node["children"] = nodeChildren;
 
         node["activity_name"] = new KvString("");
         node["activity_weight"] = new KvLong(1);
@@ -151,6 +189,34 @@ public static class VmdlWriter
         node["framerate"] = new KvDouble(-1.0);
         node["take"] = new KvLong(0);
         node["reverse"] = new KvBool(false);
+        return node;
+    }
+
+    /// <summary>
+    /// Builds one AnimEvent KV3 node in the shipped citizen prefab shape:
+    /// <c>_class</c>/<c>event_class</c>/<c>event_frame</c> plus an <c>event_keys</c> object
+    /// (key order <c>Attachment</c>, <c>Foot</c>, <c>Volume</c>, exactly like the shipped
+    /// data; null-valued keys are omitted, and an all-null key set omits the object).
+    /// </summary>
+    private static KvObject BuildAnimEventNode(AnimEventEntry animEvent)
+    {
+        var node = new KvObject
+        {
+            ["_class"] = new KvString("AnimEvent"),
+            ["event_class"] = new KvString(animEvent.EventClass),
+            ["event_frame"] = new KvLong(animEvent.Frame),
+        };
+
+        var keys = new KvObject();
+        if (animEvent.Attachment is not null)
+            keys["Attachment"] = new KvString(animEvent.Attachment);
+        if (animEvent.Foot is not null)
+            keys["Foot"] = new KvString(animEvent.Foot);
+        if (animEvent.Volume is { } volume)
+            keys["Volume"] = new KvDouble(volume);
+        if (keys.Count > 0)
+            node["event_keys"] = keys;
+
         return node;
     }
 }

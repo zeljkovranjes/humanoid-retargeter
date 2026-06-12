@@ -34,13 +34,14 @@ public sealed class RetargetRequest
     /// conversion fails per-clip with a clear error otherwise.</summary>
     public SolverKind Solver { get; init; } = SolverKind.Geometric;
 
-    /// <summary>Raw bytes of the source file (.fbx, .bvh, .glb or .gltf).</summary>
+    /// <summary>Raw bytes of the source file (.fbx, .bvh, .glb, .gltf or .vrm).</summary>
     public required byte[] SourceData { get; init; }
 
     /// <summary>
     /// Source file name (used for the report and DMX provenance). The extension drives the
-    /// format choice (<c>.fbx</c> / <c>.bvh</c> / <c>.glb</c> / <c>.gltf</c>); when the
-    /// extension is unknown the content is sniffed (FBX binary magic /
+    /// format choice (<c>.fbx</c> / <c>.bvh</c> / <c>.glb</c> / <c>.gltf</c> / <c>.vrm</c> —
+    /// a VRM is a glTF container whose authored humanoid bone map becomes the mapping);
+    /// when the extension is unknown the content is sniffed (FBX binary magic /
     /// "FBXHeaderExtension" / BVH "HIERARCHY" / GLB 'glTF' magic / glTF JSON).
     /// </summary>
     public required string SourceFileName { get; init; }
@@ -115,6 +116,25 @@ public sealed class RetargetRequest
     /// otherwise disturb elbow styling.
     /// </summary>
     public bool ArmEffectorIk { get; init; }
+
+    /// <summary>
+    /// Generate <c>AE_FOOTSTEP</c> AnimEvent nodes on each produced clip's vmdl AnimFile
+    /// entry (default OFF). After solving and cleanup, foot-plant intervals are detected on
+    /// the SOLVED target clip (<see cref="Cleanup.FootPlant.DetectPlantIntervals"/>); each
+    /// plant's start frame is a touchdown and becomes one footstep event, in the exact node
+    /// shape the shipped citizen data uses (see <see cref="Target.FootstepEvents"/>).
+    /// Skipped (with a report note) when the target rig lacks complete leg chains.
+    /// </summary>
+    public bool GenerateFootstepEvents { get; init; }
+
+    /// <summary>
+    /// Additionally produce a mirrored twin of every converted clip (default OFF), named
+    /// <c>&lt;clip&gt;_M</c> (collision-suffixed across the batch as usual). Mirroring runs
+    /// in TARGET space on the solved clip (<see cref="Solve.ClipMirror"/>): left/right role
+    /// bone channels swap and everything is reflected across the target character's sagittal
+    /// plane; IK-baked helper bones are re-baked from the mirrored body afterwards.
+    /// </summary>
+    public bool CreateMirroredVariant { get; init; }
 
     /// <summary>Output clip name override; with multiple takes an index suffix is appended.
     /// Null = the source take name.</summary>

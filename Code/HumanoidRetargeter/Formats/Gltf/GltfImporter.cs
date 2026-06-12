@@ -87,12 +87,20 @@ public static class GltfImporter
         }
 
         // glTF spec axes: Y-up (1), Z-front (2), X-coord (0) — recorded, not converted.
-        return new SourceScene(
+        var scene = new SourceScene(
             skeleton, clips, UnitScale,
             upAxis: 1, upAxisSign: 1,
             frontAxis: 2, frontAxisSign: 1,
             coordAxis: 0, coordAxisSign: 1,
             originalUpAxis: -1);
+
+        // VRM (.vrm = glTF + VRM extension): the file's authored humanoid.humanBones map
+        // becomes a pre-resolved Authored mapping (node index → skeleton bone index).
+        scene.AuthoredMapping = VrmHumanoid.BuildMapping(document, nodeIndex =>
+            ctx.BoneIndexByNode.TryGetValue(nodeIndex, out var bone)
+                ? skeleton.IndexOf(ctx.BoneNames[bone])
+                : -1);
+        return scene;
     }
 
     // =====================================================================================
@@ -100,10 +108,10 @@ public static class GltfImporter
     // =====================================================================================
 
     /// <summary>
-    /// Kept set = skins[].joints ∪ animated nodes ∪ their ancestors, returned in
-    /// parent-before-child order (DFS from the roots, document order among siblings,
-    /// recursing THROUGH non-kept nodes — re-parenting to the nearest kept ancestor happens
-    /// in <see cref="ImportContext"/>).
+    /// Kept set = skins[].joints ∪ animated nodes ∪ VRM humanoid bones ∪ their ancestors,
+    /// returned in parent-before-child order (DFS from the roots, document order among
+    /// siblings, recursing THROUGH non-kept nodes — re-parenting to the nearest kept
+    /// ancestor happens in <see cref="ImportContext"/>).
     /// </summary>
     private static List<int> SelectSkeletonNodes(GltfDocument document)
     {
@@ -112,6 +120,13 @@ public static class GltfImporter
         foreach (var animation in document.Animations)
             foreach (var channel in animation.Channels)
                 kept.Add(channel.NodeIndex);
+        if (document.VrmHumanBones is { } vrmBones)
+        {
+            // VRM humanoid bones are authored skeleton ground truth — always part of the
+            // imported skeleton even when a (malformed) file forgets to skin one of them.
+            foreach (var nodeIndex in vrmBones.Values)
+                kept.Add(nodeIndex);
+        }
 
         // Close over ancestors so disjoint subtrees stay connected to their roots.
         // (Cycle-safe: kept doubles as the walk's visited set — a malformed parent cycle

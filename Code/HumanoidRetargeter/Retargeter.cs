@@ -209,7 +209,7 @@ public static class Retargeter
             takeNames.Add(clip.Name);
         return new InspectResult
         {
-            Mapping = ResolveMapping(scene.Skeleton).Report,
+            Mapping = ResolveMapping(scene.Skeleton, authoredMapping: scene.AuthoredMapping).Report,
             TakeNames = takeNames,
         };
     }
@@ -230,7 +230,8 @@ public static class Retargeter
         try
         {
             scene = ImportSource(request.SourceData, request.SourceFileName, request.SampleFps);
-            (map, report) = ResolveMapping(scene.Skeleton, request.MappingOverride);
+            (map, report) = ResolveMapping(
+                scene.Skeleton, request.MappingOverride, authoredMapping: scene.AuthoredMapping);
         }
         catch (Exception e)
         {
@@ -320,7 +321,7 @@ public static class Retargeter
                 SanitizeClipName(RequestedClipName(request, scene, take)),
                 usedNames, options.AutoSuffixCollisions);
             anyPinkySuccess |= ConvertOne(
-                request, target, context, options, clips, entries,
+                request, target, context, options, usedNames, clips, entries,
                 scene, map, report, sourceId, mapsPinky, take, clipName);
         }
 
@@ -383,10 +384,13 @@ public static class Retargeter
                 scene.UpAxis, scene.UpAxisSign,
                 scene.FrontAxis, scene.FrontAxisSign,
                 scene.CoordAxis, scene.CoordAxisSign,
-                scene.OriginalUpAxis, scene.Notes);
+                scene.OriginalUpAxis, scene.Notes)
+            {
+                AuthoredMapping = scene.AuthoredMapping,
+            };
 
             anyPinkySuccess |= ConvertOne(
-                request, target, context, options, clips, entries,
+                request, target, context, options, usedNames, clips, entries,
                 defScene, map, report, sourceId, mapsPinky, take: 0, clipName);
         }
 
@@ -410,52 +414,23 @@ public static class Retargeter
     }
 
     /// <summary>Solves ONE clip (take <paramref name="take"/> of <paramref name="scene"/>)
-    /// end to end — solve + cleanup + DMX — appending a success or failure
-    /// <see cref="ClipResult"/> (failures never abort the batch). Returns true on success
+    /// end to end — solve + cleanup + DMX, plus the optional mirrored twin
+    /// (<see cref="RetargetRequest.CreateMirroredVariant"/>) — appending success or failure
+    /// <see cref="ClipResult"/>s (failures never abort the batch). Returns true on success
     /// with a pinky-driving mapping.</summary>
     private static bool ConvertOne(
         RetargetRequest request, RetargetTargetSpec target, TargetContext context,
-        BatchOptions options, List<ClipResult> clips, List<AnimEntry> entries,
+        BatchOptions options, HashSet<string> usedNames,
+        List<ClipResult> clips, List<AnimEntry> entries,
         SourceScene scene, MappingResult map, MappingReportInfo report,
         string sourceId, bool mapsPinky, int take, string clipName)
     {
+        Clip clip;
         try
         {
-            var clip = SolveAndClean(request, target, context, scene, map, report, take, clipName);
-            var dmxFileName = SanitizeFileName(clipName) + ".dmx";
-            var dmx = DmxWriter.Write(target.Rig.Skeleton, clip, new DmxWriteOptions
-            {
-                Name = clipName,
-                SourceNote = request.SourceFileName,
-                // Design §3: ConstraintDriven (twist/helper) bones keep their joints +
-                // bind in the DMX but get NO channels — the engine drives them.
-                ChannelExcludedBones = context.ConstraintDrivenBones,
-                UpAxisY = target.UpAxis == TargetUpAxis.YUpCm,
-            });
-
-            var extractMotion = request.RootMotion == RootMotionMode.Extract;
-            clips.Add(new ClipResult
-            {
-                ClipName = clipName,
-                SourceFileName = request.SourceFileName,
-                SourceId = sourceId,
-                DmxFileName = dmxFileName,
-                DmxContent = dmx,
-                Mapping = report,
-                Success = true,
-                SolvedFrames = clip.Frames,
-                Fps = clip.Fps,
-                Looping = clip.Looping,
-                ExtractMotion = extractMotion,
-            });
-            entries.Add(new AnimEntry
-            {
-                Name = clipName,
-                SourceFilename = JoinAssetPath(options.DmxFolderRelative, dmxFileName),
-                Looping = clip.Looping,
-                ExtractMotion = extractMotion,
-            });
-            return mapsPinky;
+            clip = SolveAndClean(request, target, context, scene, map, report, take, clipName);
+            EmitClip(request, target, context, options, clips, entries, report, sourceId,
+                clipName, clip.Frames, clip.Fps, clip.Looping, isMirrored: false);
         }
         catch (Exception e)
         {
@@ -470,6 +445,125 @@ public static class Retargeter
             });
             return false;
         }
+
+        if (request.CreateMirroredVariant)
+        {
+            // The twin gets its own collision-suffixed name and its own failure isolation:
+            // a mirror problem (asymmetric rig) fails ONLY the twin, never the primary clip.
+            var mirroredName = UniqueClipName(
+                SanitizeClipName(clipName + "_M"), usedNames, options.AutoSuffixCollisions);
+            try
+            {
+                var mirroredFrames = ClipMirror.Mirror(clip.Frames, target.Rig);
+                // IK helper bones derive from the body: re-bake them from the MIRRORED body
+                // (their mirrored channels are placeholders the baker overwrites).
+                if (context.HasIkBakedBones)
+                    IkBoneBaker.Bake(mirroredFrames, target.Rig);
+                EmitClip(request, target, context, options, clips, entries, report, sourceId,
+                    mirroredName, mirroredFrames, clip.Fps, clip.Looping, isMirrored: true);
+            }
+            catch (Exception e)
+            {
+                clips.Add(new ClipResult
+                {
+                    ClipName = mirroredName,
+                    SourceFileName = request.SourceFileName,
+                    SourceId = sourceId,
+                    Mapping = report,
+                    Success = false,
+                    Error = $"mirrored variant: {e.Message}",
+                });
+            }
+        }
+
+        return mapsPinky;
+    }
+
+    /// <summary>Shared tail of clip production (primary and mirrored twin): optional footstep
+    /// events, DMX serialization, the <see cref="ClipResult"/> and the vmdl
+    /// <see cref="AnimEntry"/>.</summary>
+    private static void EmitClip(
+        RetargetRequest request, RetargetTargetSpec target, TargetContext context,
+        BatchOptions options, List<ClipResult> clips, List<AnimEntry> entries,
+        MappingReportInfo report, string sourceId,
+        string clipName, List<XForm[]> frames, float fps, bool looping, bool isMirrored)
+    {
+        var events = GenerateFootsteps(request, target, context, report, frames, fps);
+        var dmxFileName = SanitizeFileName(clipName) + ".dmx";
+        var dmx = DmxWriter.Write(
+            target.Rig.Skeleton, new Clip(clipName, fps, looping, frames), new DmxWriteOptions
+            {
+                Name = clipName,
+                SourceNote = isMirrored ? request.SourceFileName + " (mirrored)" : request.SourceFileName,
+                // Design §3: ConstraintDriven (twist/helper) bones keep their joints +
+                // bind in the DMX but get NO channels — the engine drives them.
+                ChannelExcludedBones = context.ConstraintDrivenBones,
+                UpAxisY = target.UpAxis == TargetUpAxis.YUpCm,
+            });
+
+        var extractMotion = request.RootMotion == RootMotionMode.Extract;
+        clips.Add(new ClipResult
+        {
+            ClipName = clipName,
+            SourceFileName = request.SourceFileName,
+            SourceId = sourceId,
+            DmxFileName = dmxFileName,
+            DmxContent = dmx,
+            Mapping = report,
+            Success = true,
+            SolvedFrames = frames,
+            Fps = fps,
+            Looping = looping,
+            ExtractMotion = extractMotion,
+            FootstepEvents = events,
+            IsMirroredVariant = isMirrored,
+        });
+        entries.Add(new AnimEntry
+        {
+            Name = clipName,
+            SourceFilename = JoinAssetPath(options.DmxFolderRelative, dmxFileName),
+            Looping = looping,
+            ExtractMotion = extractMotion,
+            Events = events,
+        });
+    }
+
+    /// <summary>
+    /// Generates the <c>AE_FOOTSTEP</c> events for a solved clip when the request asks for
+    /// them (<see cref="RetargetRequest.GenerateFootstepEvents"/>): plant intervals are
+    /// detected on the SOLVED TARGET frames (this is where the engine plays the clip, so
+    /// touchdowns must be measured here), each interval start = one footstep
+    /// (<see cref="FootstepEvents"/>). Empty when the feature is off or the target rig lacks
+    /// the leg chains / character up (noted on the report then).
+    /// </summary>
+    private static IReadOnlyList<AnimEventEntry> GenerateFootsteps(
+        RetargetRequest request, RetargetTargetSpec target, TargetContext context,
+        MappingReportInfo report, List<XForm[]> frames, float fps)
+    {
+        if (!request.GenerateFootstepEvents)
+            return Array.Empty<AnimEventEntry>();
+        if (context.Up is not { } up || context.FootChains is not { } feet)
+        {
+            AddNote(report, "Footstep events skipped: " + context.UpOrChainProblem);
+            return Array.Empty<AnimEventEntry>();
+        }
+        return FootstepEvents.Generate(
+            frames, target.Rig.Skeleton, feet.Left, feet.Right, up, fps,
+            ScaledPlantOptions(target));
+    }
+
+    /// <summary>Default plant thresholds are cm-tuned; engine-space rigs are in inches, so
+    /// they are scaled by the cm→inch factor to keep the same physical sensitivity (shared by
+    /// the foot-plant cleanup and the footstep-event detection).</summary>
+    private static FootPlantOptions ScaledPlantOptions(RetargetTargetSpec target)
+    {
+        var options = new FootPlantOptions();
+        if (target.UpAxis == TargetUpAxis.ZUpEngine)
+        {
+            options.SpeedThresholdCmPerSec *= RetargetTargetSpec.SboxSourceScale;
+            options.HeightThresholdCm *= RetargetTargetSpec.SboxSourceScale;
+        }
+        return options;
     }
 
     private static bool MapsPinkyRole(MappingResult map)
@@ -514,17 +608,9 @@ public static class Retargeter
                 // foot world rotations).
                 GroundAlignFeet(frames, scene, map, target.Rig.Skeleton, feet, up, solved.Fps, take);
 
-                // Default plant thresholds are cm-tuned; engine-space rigs are in inches, so
-                // scale them by the cm→inch factor to keep the same physical sensitivity.
-                var footPlantOptions = new FootPlantOptions();
-                if (target.UpAxis == TargetUpAxis.ZUpEngine)
-                {
-                    footPlantOptions.SpeedThresholdCmPerSec *= RetargetTargetSpec.SboxSourceScale;
-                    footPlantOptions.HeightThresholdCm *= RetargetTargetSpec.SboxSourceScale;
-                }
                 FootPlant.Apply(
                     frames, target.Rig.Skeleton, feet.Left, feet.Right, up, solved.Fps,
-                    footPlantOptions);
+                    ScaledPlantOptions(target));
             }
             else
             {
@@ -748,14 +834,17 @@ public static class Retargeter
         {
             "fbx" => FbxImporter.Import(data, fbxOptions),
             "bvh" => BvhImporter.Import(data, bvhOptions),
-            "glb" or "gltf" => GltfImporter.Import(data, gltfOptions),
+            // .vrm = glTF 2.0 GLB container + VRM extension (the importer reads the authored
+            // humanoid bone map into SourceScene.AuthoredMapping); unknown-extension VRM
+            // bytes also land here via the GLB magic sniff below.
+            "glb" or "gltf" or "vrm" => GltfImporter.Import(data, gltfOptions),
             _ => SniffFormat(data) switch
             {
                 "fbx" => FbxImporter.Import(data, fbxOptions),
                 "bvh" => BvhImporter.Import(data, bvhOptions),
                 "gltf" => GltfImporter.Import(data, gltfOptions),
                 _ => throw new FormatException(
-                    $"Unrecognized source format for '{fileName}' (expected .fbx, .bvh, .glb or .gltf)."),
+                    $"Unrecognized source format for '{fileName}' (expected .fbx, .bvh, .glb, .gltf or .vrm)."),
             },
         };
     }
@@ -797,25 +886,35 @@ public static class Retargeter
 
     /// <summary>
     /// THE mapping cascade, shared by conversion, UI file listings, and custom-target
-    /// detection: explicit override → user preset (via <paramref name="userPresetLookup"/>,
-    /// keyed by <see cref="Mapping.SkeletonSignature"/>) → shipped preset detection →
-    /// best-effort auto-map. The report's <see cref="MappingReportInfo.NeedsUserDecision"/>
-    /// is true only on the auto path below the preset detection threshold — conversion still
-    /// proceeds with that map; callers decide whether to ask/reject.
+    /// detection: explicit override → authored mapping (from the file itself, e.g. a VRM's
+    /// humanoid bone map — authoritative ground truth at confidence 1.0) → user preset (via
+    /// <paramref name="userPresetLookup"/>, keyed by <see cref="Mapping.SkeletonSignature"/>)
+    /// → shipped preset detection → best-effort auto-map. The report's
+    /// <see cref="MappingReportInfo.NeedsUserDecision"/> is true only on the auto path below
+    /// the preset detection threshold — conversion still proceeds with that map; callers
+    /// decide whether to ask/reject.
     /// </summary>
     /// <param name="skeleton">Source (or candidate target) skeleton.</param>
     /// <param name="mappingOverride">Explicit mapping (manual table / already-resolved user
-    /// preset); wins outright when non-null.</param>
+    /// preset); wins outright when non-null — a deliberate user decision beats even the
+    /// file's own bone map.</param>
     /// <param name="userPresetLookup">Editor-side user-preset hook: receives the skeleton's
     /// signature, returns the stored mapping or null. The facade itself can do no file IO.</param>
+    /// <param name="authoredMapping">A mapping authored INSIDE the source file
+    /// (<see cref="SourceScene.AuthoredMapping"/>, <see cref="MappingSource.Authored"/>);
+    /// consulted before user presets because the file itself is authoritative.</param>
     public static (MappingResult Map, MappingReportInfo Report) ResolveMapping(
         SkeletonModel skeleton, MappingResult? mappingOverride = null,
-        Func<string, MappingResult?>? userPresetLookup = null)
+        Func<string, MappingResult?>? userPresetLookup = null,
+        MappingResult? authoredMapping = null)
     {
         ArgumentNullException.ThrowIfNull(skeleton);
 
         if (mappingOverride is not null)
             return (mappingOverride, BuildReport(mappingOverride, needsUserDecision: false, skeleton));
+
+        if (authoredMapping is not null)
+            return (authoredMapping, BuildReport(authoredMapping, needsUserDecision: false, skeleton));
 
         if (userPresetLookup is not null
             && userPresetLookup(Mapping.SkeletonSignature.Compute(skeleton)) is { } userPreset)
