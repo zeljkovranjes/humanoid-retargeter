@@ -116,11 +116,11 @@ No NuGet packages, no native DLLs, no Python, no external tools.
 
 ## Verification
 
-The repo ships its own evidence (`dev/`): 391 unit/integration tests; an independent
-headless-Blender harness that re-measures the full corpus (Mixamo, ActorCore, UE, CMU/DAZ
-BVH — 10/10 passing: anatomical direction error, end-effector paths, foot contacts,
-jitter) with side-by-side renders; and unattended editor-process gates that compile real
-output through `sbox-dev` and assert the sequences, preview pose, and preset round-trip.
+Development is gated by 400+ unit/integration tests, an independent headless-Blender
+harness that re-measures a 10-rig corpus (Mixamo, ActorCore, UE, CMU/DAZ BVH — anatomical
+direction error, end-effector paths, foot contacts, jitter) with side-by-side renders, and
+unattended editor-process gates that compile real output through `sbox-dev` and assert the
+sequences, preview pose, and preset round-trip.
 
 ## Limitations
 
