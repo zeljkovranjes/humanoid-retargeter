@@ -153,7 +153,17 @@ public sealed class SourceFileEntry
 		{
 			var metaPath = entry.FilePath + ".meta";
 			if ( !File.Exists( metaPath ) )
+			{
+				// Unity packs store the animation list ONLY in the sidecar. A single long
+				// take with no sidecar is the classic symptom of an FBX copied out of its
+				// pack without the .meta — tell the user what to do instead of silently
+				// showing one opaque clip.
+				if ( entry.Scene.Clips.Count == 1 && entry.Scene.Clips[0].FrameCount > 400 )
+					entry.StatusDetail = "Single continuous timeline. If this file comes from a Unity "
+						+ "animation pack, place its '" + entry.FileName + ".meta' next to it and "
+						+ "re-add - the individual animations are defined there.";
 				return;
+			}
 			var defs = UnityMeta.ParseClipAnimations( File.ReadAllText( metaPath ) );
 			if ( defs.Count == 0 )
 				return;
