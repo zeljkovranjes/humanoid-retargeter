@@ -131,6 +131,13 @@ public sealed class ClipResult
     /// touchdowns).
     /// </summary>
     public IReadOnlyList<AnimEventEntry> FootstepEvents { get; init; } = Array.Empty<AnimEventEntry>();
+
+    /// <summary>
+    /// True when this clip is the mirrored twin produced by
+    /// <see cref="RetargetRequest.CreateMirroredVariant"/> (named <c>&lt;clip&gt;_M</c>,
+    /// collision-suffixed as usual).
+    /// </summary>
+    public bool IsMirroredVariant { get; init; }
 }
 
 /// <summary>Result of a single-file <see cref="Retargeter.Convert"/> (all takes in the file).</summary>

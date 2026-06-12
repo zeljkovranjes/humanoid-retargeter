@@ -320,7 +320,7 @@ public static class Retargeter
                 SanitizeClipName(RequestedClipName(request, scene, take)),
                 usedNames, options.AutoSuffixCollisions);
             anyPinkySuccess |= ConvertOne(
-                request, target, context, options, clips, entries,
+                request, target, context, options, usedNames, clips, entries,
                 scene, map, report, sourceId, mapsPinky, take, clipName);
         }
 
@@ -386,7 +386,7 @@ public static class Retargeter
                 scene.OriginalUpAxis, scene.Notes);
 
             anyPinkySuccess |= ConvertOne(
-                request, target, context, options, clips, entries,
+                request, target, context, options, usedNames, clips, entries,
                 defScene, map, report, sourceId, mapsPinky, take: 0, clipName);
         }
 
@@ -410,55 +410,23 @@ public static class Retargeter
     }
 
     /// <summary>Solves ONE clip (take <paramref name="take"/> of <paramref name="scene"/>)
-    /// end to end — solve + cleanup + DMX — appending a success or failure
-    /// <see cref="ClipResult"/> (failures never abort the batch). Returns true on success
+    /// end to end — solve + cleanup + DMX, plus the optional mirrored twin
+    /// (<see cref="RetargetRequest.CreateMirroredVariant"/>) — appending success or failure
+    /// <see cref="ClipResult"/>s (failures never abort the batch). Returns true on success
     /// with a pinky-driving mapping.</summary>
     private static bool ConvertOne(
         RetargetRequest request, RetargetTargetSpec target, TargetContext context,
-        BatchOptions options, List<ClipResult> clips, List<AnimEntry> entries,
+        BatchOptions options, HashSet<string> usedNames,
+        List<ClipResult> clips, List<AnimEntry> entries,
         SourceScene scene, MappingResult map, MappingReportInfo report,
         string sourceId, bool mapsPinky, int take, string clipName)
     {
+        Clip clip;
         try
         {
-            var clip = SolveAndClean(request, target, context, scene, map, report, take, clipName);
-            var events = GenerateFootsteps(request, target, context, report, clip.Frames, clip.Fps);
-            var dmxFileName = SanitizeFileName(clipName) + ".dmx";
-            var dmx = DmxWriter.Write(target.Rig.Skeleton, clip, new DmxWriteOptions
-            {
-                Name = clipName,
-                SourceNote = request.SourceFileName,
-                // Design §3: ConstraintDriven (twist/helper) bones keep their joints +
-                // bind in the DMX but get NO channels — the engine drives them.
-                ChannelExcludedBones = context.ConstraintDrivenBones,
-                UpAxisY = target.UpAxis == TargetUpAxis.YUpCm,
-            });
-
-            var extractMotion = request.RootMotion == RootMotionMode.Extract;
-            clips.Add(new ClipResult
-            {
-                ClipName = clipName,
-                SourceFileName = request.SourceFileName,
-                SourceId = sourceId,
-                DmxFileName = dmxFileName,
-                DmxContent = dmx,
-                Mapping = report,
-                Success = true,
-                SolvedFrames = clip.Frames,
-                Fps = clip.Fps,
-                Looping = clip.Looping,
-                ExtractMotion = extractMotion,
-                FootstepEvents = events,
-            });
-            entries.Add(new AnimEntry
-            {
-                Name = clipName,
-                SourceFilename = JoinAssetPath(options.DmxFolderRelative, dmxFileName),
-                Looping = clip.Looping,
-                ExtractMotion = extractMotion,
-                Events = events,
-            });
-            return mapsPinky;
+            clip = SolveAndClean(request, target, context, scene, map, report, take, clipName);
+            EmitClip(request, target, context, options, clips, entries, report, sourceId,
+                clipName, clip.Frames, clip.Fps, clip.Looping, isMirrored: false);
         }
         catch (Exception e)
         {
@@ -473,6 +441,87 @@ public static class Retargeter
             });
             return false;
         }
+
+        if (request.CreateMirroredVariant)
+        {
+            // The twin gets its own collision-suffixed name and its own failure isolation:
+            // a mirror problem (asymmetric rig) fails ONLY the twin, never the primary clip.
+            var mirroredName = UniqueClipName(
+                SanitizeClipName(clipName + "_M"), usedNames, options.AutoSuffixCollisions);
+            try
+            {
+                var mirroredFrames = ClipMirror.Mirror(clip.Frames, target.Rig);
+                // IK helper bones derive from the body: re-bake them from the MIRRORED body
+                // (their mirrored channels are placeholders the baker overwrites).
+                if (context.HasIkBakedBones)
+                    IkBoneBaker.Bake(mirroredFrames, target.Rig);
+                EmitClip(request, target, context, options, clips, entries, report, sourceId,
+                    mirroredName, mirroredFrames, clip.Fps, clip.Looping, isMirrored: true);
+            }
+            catch (Exception e)
+            {
+                clips.Add(new ClipResult
+                {
+                    ClipName = mirroredName,
+                    SourceFileName = request.SourceFileName,
+                    SourceId = sourceId,
+                    Mapping = report,
+                    Success = false,
+                    Error = $"mirrored variant: {e.Message}",
+                });
+            }
+        }
+
+        return mapsPinky;
+    }
+
+    /// <summary>Shared tail of clip production (primary and mirrored twin): optional footstep
+    /// events, DMX serialization, the <see cref="ClipResult"/> and the vmdl
+    /// <see cref="AnimEntry"/>.</summary>
+    private static void EmitClip(
+        RetargetRequest request, RetargetTargetSpec target, TargetContext context,
+        BatchOptions options, List<ClipResult> clips, List<AnimEntry> entries,
+        MappingReportInfo report, string sourceId,
+        string clipName, List<XForm[]> frames, float fps, bool looping, bool isMirrored)
+    {
+        var events = GenerateFootsteps(request, target, context, report, frames, fps);
+        var dmxFileName = SanitizeFileName(clipName) + ".dmx";
+        var dmx = DmxWriter.Write(
+            target.Rig.Skeleton, new Clip(clipName, fps, looping, frames), new DmxWriteOptions
+            {
+                Name = clipName,
+                SourceNote = isMirrored ? request.SourceFileName + " (mirrored)" : request.SourceFileName,
+                // Design §3: ConstraintDriven (twist/helper) bones keep their joints +
+                // bind in the DMX but get NO channels — the engine drives them.
+                ChannelExcludedBones = context.ConstraintDrivenBones,
+                UpAxisY = target.UpAxis == TargetUpAxis.YUpCm,
+            });
+
+        var extractMotion = request.RootMotion == RootMotionMode.Extract;
+        clips.Add(new ClipResult
+        {
+            ClipName = clipName,
+            SourceFileName = request.SourceFileName,
+            SourceId = sourceId,
+            DmxFileName = dmxFileName,
+            DmxContent = dmx,
+            Mapping = report,
+            Success = true,
+            SolvedFrames = frames,
+            Fps = fps,
+            Looping = looping,
+            ExtractMotion = extractMotion,
+            FootstepEvents = events,
+            IsMirroredVariant = isMirrored,
+        });
+        entries.Add(new AnimEntry
+        {
+            Name = clipName,
+            SourceFilename = JoinAssetPath(options.DmxFolderRelative, dmxFileName),
+            Looping = looping,
+            ExtractMotion = extractMotion,
+            Events = events,
+        });
     }
 
     /// <summary>

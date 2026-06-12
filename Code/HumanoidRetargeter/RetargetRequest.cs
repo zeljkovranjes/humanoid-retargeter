@@ -126,6 +126,15 @@ public sealed class RetargetRequest
     /// </summary>
     public bool GenerateFootstepEvents { get; init; }
 
+    /// <summary>
+    /// Additionally produce a mirrored twin of every converted clip (default OFF), named
+    /// <c>&lt;clip&gt;_M</c> (collision-suffixed across the batch as usual). Mirroring runs
+    /// in TARGET space on the solved clip (<see cref="Solve.ClipMirror"/>): left/right role
+    /// bone channels swap and everything is reflected across the target character's sagittal
+    /// plane; IK-baked helper bones are re-baked from the mirrored body afterwards.
+    /// </summary>
+    public bool CreateMirroredVariant { get; init; }
+
     /// <summary>Output clip name override; with multiple takes an index suffix is appended.
     /// Null = the source take name.</summary>
     public string? ClipNameOverride { get; init; }
