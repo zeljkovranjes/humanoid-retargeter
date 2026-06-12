@@ -41,6 +41,7 @@ using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global
 public sealed class CanonicalFrames
 {
     private readonly Dictionary<BoneRole, Quaternion> _frames;
+    private readonly HashSet<BoneRole> _virtualPrimary;
 
     /// <summary>Character forward (the direction the toes point at rest), unit length.</summary>
     public Vector3 CharacterForward { get; }
@@ -52,9 +53,11 @@ public sealed class CanonicalFrames
     public float HipHeight { get; }
 
     private CanonicalFrames(
-        Dictionary<BoneRole, Quaternion> frames, Vector3 forward, Vector3 up, float hipHeight)
+        Dictionary<BoneRole, Quaternion> frames, HashSet<BoneRole> virtualPrimary,
+        Vector3 forward, Vector3 up, float hipHeight)
     {
         _frames = frames;
+        _virtualPrimary = virtualPrimary;
         CharacterForward = forward;
         CharacterUp = up;
         HipHeight = hipHeight;
@@ -63,6 +66,16 @@ public sealed class CanonicalFrames
     /// <summary>True when a canonical frame exists for <paramref name="role"/> (the role is
     /// mapped and its chain geometry is resolvable).</summary>
     public bool Has(BoneRole role) => _frames.ContainsKey(role);
+
+    /// <summary>
+    /// True when the role's primary axis is a <b>virtual</b> character-axis extension rather
+    /// than real joint geometry (e.g. a Foot with no mapped Toe extends along character
+    /// forward; the Head and mapped Toes extend along character up/forward by convention).
+    /// Absolute direction matching against a virtual primary imposes an arbitrary direction,
+    /// so the solver falls back to delta transfer when the source is virtual but the target
+    /// is real (see <see cref="GeometricSolver"/> remarks).
+    /// </summary>
+    public bool HasVirtualPrimary(BoneRole role) => _virtualPrimary.Contains(role);
 
     /// <summary>The world-space canonical rest frame of <paramref name="role"/>.</summary>
     /// <exception cref="InvalidOperationException">Thrown when <see cref="Has"/> is false for
@@ -92,11 +105,12 @@ public sealed class CanonicalFrames
 
         var cf = CharacterFrame.Compute(skeleton, map, worldRest);
         var frames = new Dictionary<BoneRole, Quaternion>();
+        var virtualPrimary = new HashSet<BoneRole>();
 
         foreach (var (chain, kind, left) in Chains())
-            BuildChainFrames(chain, kind, left, map, worldRest, cf, frames);
+            BuildChainFrames(chain, kind, left, map, worldRest, cf, frames, virtualPrimary);
 
-        return new CanonicalFrames(frames, cf.Forward, cf.Up, cf.HipHeight);
+        return new CanonicalFrames(frames, virtualPrimary, cf.Forward, cf.Up, cf.HipHeight);
     }
 
     // ---------------------------------------------------------------- chain construction
@@ -144,7 +158,8 @@ public sealed class CanonicalFrames
 
     private static void BuildChainFrames(
         BoneRole[] chain, ChainKind kind, bool left, MappingResult map,
-        IReadOnlyList<XForm> worldRest, CharacterFrame cf, Dictionary<BoneRole, Quaternion> frames)
+        IReadOnlyList<XForm> worldRest, CharacterFrame cf, Dictionary<BoneRole, Quaternion> frames,
+        HashSet<BoneRole> virtualPrimary)
     {
         // Collapse to the mapped chain members; gaps are skipped so e.g. a missing Spine1
         // makes Spine0 point straight at Spine2.
@@ -162,19 +177,23 @@ public sealed class CanonicalFrames
             var (role, pos) = mapped[i];
             Vector3? prevDir = i > 0 ? pos - mapped[i - 1].Pos : null;
 
-            var primary = i + 1 < mapped.Count
-                ? mapped[i + 1].Pos - pos
+            var (primary, isVirtual) = i + 1 < mapped.Count
+                ? ((Vector3?)(mapped[i + 1].Pos - pos), false)
                 : TipPrimary(kind, role, pos, prevDir, left, map, worldRest, cf);
             if (primary is null || primary.Value.LengthSquared() < 1e-8f)
                 continue;
 
             var secondary = Secondary(kind, role, primary.Value, dorsal, cf);
             frames[role] = BasisFromPrimarySecondary(primary.Value, secondary, cf);
+            if (isVirtual)
+                virtualPrimary.Add(role);
         }
     }
 
-    /// <summary>Primary direction for the last mapped bone of a chain (virtual extensions).</summary>
-    private static Vector3? TipPrimary(
+    /// <summary>Primary direction for the last mapped bone of a chain. <c>Virtual</c> is true
+    /// when the direction is a character-axis convention rather than this rig's real joint
+    /// geometry (see <see cref="HasVirtualPrimary"/>).</summary>
+    private static (Vector3? Dir, bool Virtual) TipPrimary(
         ChainKind kind, BoneRole role, Vector3 pos, Vector3? prevDir, bool left,
         MappingResult map, IReadOnlyList<XForm> worldRest, CharacterFrame cf)
     {
@@ -183,35 +202,37 @@ public sealed class CanonicalFrames
             case ChainKind.Body:
                 // Head extends along character up (virtual head-top point); a body chain that
                 // ends early keeps its previous segment direction, defaulting to up.
-                return role == BoneRole.Head ? cf.Up : prevDir ?? cf.Up;
+                if (role == BoneRole.Head)
+                    return (cf.Up, true);
+                return prevDir is not null ? (prevDir, false) : (cf.Up, true);
 
             case ChainKind.Arm:
                 if (role is BoneRole.HandL or BoneRole.HandR)
                 {
                     var knuckles = HandGeometry.FingerProximalMidpoint(map, worldRest, left);
                     if (knuckles is not null)
-                        return knuckles.Value - pos;
+                        return (knuckles.Value - pos, false);
                 }
-                return prevDir; // along the forearm / previous segment; null → no frame
+                return (prevDir, false); // along the forearm / previous segment; null → no frame
 
             case ChainKind.Leg:
                 // Foot without a mapped toe, and the toe itself, extend along character
                 // forward (toes point forward by the character-frame convention).
                 if (role is BoneRole.FootL or BoneRole.FootR or BoneRole.ToeL or BoneRole.ToeR)
-                    return cf.Forward;
-                return prevDir;
+                    return (cf.Forward, true);
+                return (prevDir, false);
 
             case ChainKind.Finger:
                 if (prevDir is not null)
-                    return prevDir; // distal tip extrapolates its previous segment
+                    return (prevDir, false); // distal tip extrapolates its previous segment
                 // Single mapped finger bone: point away from the hand when possible.
                 var handRole = left ? BoneRole.HandL : BoneRole.HandR;
                 if (map.RoleToBone.TryGetValue(handRole, out var handIndex))
-                    return pos - worldRest[handIndex].Pos;
-                return null;
+                    return (pos - worldRest[handIndex].Pos, false);
+                return (null, false);
 
             default:
-                return null;
+                return (null, false);
         }
     }
 
