@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using HumanoidRetargeter.Mapping;
 
 namespace HumanoidRetargeter.Skeleton;
 
@@ -51,6 +52,15 @@ public sealed class SourceScene
     /// Empty when the import was unambiguous.
     /// </summary>
     public IReadOnlyList<string> Notes { get; }
+
+    /// <summary>
+    /// A role mapping AUTHORED inside the source file itself, when the format carries one —
+    /// a VRM's <c>humanoid.humanBones</c> block (set by the glTF importer,
+    /// <see cref="MappingSource.Authored"/>, confidence 1.0). Null for formats/files without
+    /// authored role data. <see cref="Retargeter.ResolveMapping"/> consults this before user
+    /// presets and shipped-profile detection — it is ground truth from the file.
+    /// </summary>
+    public MappingResult? AuthoredMapping { get; set; }
 
     /// <summary>Creates a source scene container.</summary>
     public SourceScene(

@@ -34,13 +34,14 @@ public sealed class RetargetRequest
     /// conversion fails per-clip with a clear error otherwise.</summary>
     public SolverKind Solver { get; init; } = SolverKind.Geometric;
 
-    /// <summary>Raw bytes of the source file (.fbx, .bvh, .glb or .gltf).</summary>
+    /// <summary>Raw bytes of the source file (.fbx, .bvh, .glb, .gltf or .vrm).</summary>
     public required byte[] SourceData { get; init; }
 
     /// <summary>
     /// Source file name (used for the report and DMX provenance). The extension drives the
-    /// format choice (<c>.fbx</c> / <c>.bvh</c> / <c>.glb</c> / <c>.gltf</c>); when the
-    /// extension is unknown the content is sniffed (FBX binary magic /
+    /// format choice (<c>.fbx</c> / <c>.bvh</c> / <c>.glb</c> / <c>.gltf</c> / <c>.vrm</c> —
+    /// a VRM is a glTF container whose authored humanoid bone map becomes the mapping);
+    /// when the extension is unknown the content is sniffed (FBX binary magic /
     /// "FBXHeaderExtension" / BVH "HIERARCHY" / GLB 'glTF' magic / glTF JSON).
     /// </summary>
     public required string SourceFileName { get; init; }

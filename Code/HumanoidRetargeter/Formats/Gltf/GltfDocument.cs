@@ -71,6 +71,21 @@ internal sealed class GltfDocument
     /// <summary>All animations with decoded rotation/translation channels (scale/weights ignored).</summary>
     public List<GltfAnimation> Animations { get; } = new();
 
+    /// <summary>
+    /// The VRM humanoid bone map authored in the file, when present: VRM bone name
+    /// (<c>hips</c>, <c>leftUpperArm</c>, …) → node index. Read from BOTH extension layouts:
+    /// VRM 0.x <c>extensions.VRM.humanoid.humanBones</c> (an ARRAY of
+    /// <c>{ "bone": "hips", "node": 14 }</c> entries) and VRM 1.0
+    /// <c>extensions.VRMC_vrm.humanoid.humanBones</c> (an OBJECT
+    /// <c>{ "hips": { "node": 14 }, … }</c>). Null when the file carries neither.
+    /// </summary>
+    public Dictionary<string, int>? VrmHumanBones { get; private set; }
+
+    /// <summary>Which VRM extension supplied <see cref="VrmHumanBones"/>: <c>0</c> for the
+    /// 0.x <c>VRM</c> extension, <c>1</c> for the 1.0 <c>VRMC_vrm</c> extension, <c>-1</c>
+    /// when none.</summary>
+    public int VrmVersion { get; private set; } = -1;
+
     private GltfDocument()
     {
     }
@@ -113,7 +128,83 @@ internal sealed class GltfDocument
         document.ReadNodes(root);
         document.ReadSkins(root);
         document.ReadAnimations(root, buffers);
+        document.ReadVrmHumanoid(root);
         return document;
+    }
+
+    // ================================================================== VRM humanoid
+
+    /// <summary>
+    /// Reads the authored humanoid bone map of a VRM file (a .vrm is a regular glTF 2.0/GLB
+    /// container plus a VRM extension). VRM 1.0's <c>VRMC_vrm</c> wins when both extensions
+    /// are present. Defensive throughout: malformed entries and out-of-range node indices
+    /// are skipped (a broken bone map degrades to the regular detection cascade rather than
+    /// failing the import).
+    /// </summary>
+    private void ReadVrmHumanoid(JsonElement root)
+    {
+        if (!root.TryGetProperty("extensions", out var extensions)
+            || extensions.ValueKind != JsonValueKind.Object)
+            return;
+
+        // ---- VRM 1.0: extensions.VRMC_vrm.humanoid.humanBones = { "<bone>": { "node": n } } ----
+        if (TryGetHumanBones(extensions, "VRMC_vrm", out var humanBones1)
+            && humanBones1.ValueKind == JsonValueKind.Object)
+        {
+            var map = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (var property in humanBones1.EnumerateObject())
+            {
+                if (property.Value.ValueKind == JsonValueKind.Object
+                    && property.Value.TryGetProperty("node", out var node)
+                    && node.ValueKind == JsonValueKind.Number
+                    && node.TryGetInt32(out var index)
+                    && index >= 0 && index < Nodes.Count)
+                {
+                    map[property.Name] = index;
+                }
+            }
+            if (map.Count > 0)
+            {
+                VrmHumanBones = map;
+                VrmVersion = 1;
+                return;
+            }
+        }
+
+        // ---- VRM 0.x: extensions.VRM.humanoid.humanBones = [ { "bone": "...", "node": n } ] ----
+        if (TryGetHumanBones(extensions, "VRM", out var humanBones0)
+            && humanBones0.ValueKind == JsonValueKind.Array)
+        {
+            var map = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (var entry in humanBones0.EnumerateArray())
+            {
+                if (entry.ValueKind == JsonValueKind.Object
+                    && entry.TryGetProperty("bone", out var bone)
+                    && bone.ValueKind == JsonValueKind.String
+                    && entry.TryGetProperty("node", out var node)
+                    && node.ValueKind == JsonValueKind.Number
+                    && node.TryGetInt32(out var index)
+                    && index >= 0 && index < Nodes.Count)
+                {
+                    map[bone.GetString()!] = index;
+                }
+            }
+            if (map.Count > 0)
+            {
+                VrmHumanBones = map;
+                VrmVersion = 0;
+            }
+        }
+    }
+
+    private static bool TryGetHumanBones(JsonElement extensions, string extensionName, out JsonElement humanBones)
+    {
+        humanBones = default;
+        return extensions.TryGetProperty(extensionName, out var vrm)
+            && vrm.ValueKind == JsonValueKind.Object
+            && vrm.TryGetProperty("humanoid", out var humanoid)
+            && humanoid.ValueKind == JsonValueKind.Object
+            && humanoid.TryGetProperty("humanBones", out humanBones);
     }
 
     // ================================================================== GLB container

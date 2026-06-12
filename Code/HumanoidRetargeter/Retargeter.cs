@@ -209,7 +209,7 @@ public static class Retargeter
             takeNames.Add(clip.Name);
         return new InspectResult
         {
-            Mapping = ResolveMapping(scene.Skeleton).Report,
+            Mapping = ResolveMapping(scene.Skeleton, authoredMapping: scene.AuthoredMapping).Report,
             TakeNames = takeNames,
         };
     }
@@ -230,7 +230,8 @@ public static class Retargeter
         try
         {
             scene = ImportSource(request.SourceData, request.SourceFileName, request.SampleFps);
-            (map, report) = ResolveMapping(scene.Skeleton, request.MappingOverride);
+            (map, report) = ResolveMapping(
+                scene.Skeleton, request.MappingOverride, authoredMapping: scene.AuthoredMapping);
         }
         catch (Exception e)
         {
@@ -383,7 +384,10 @@ public static class Retargeter
                 scene.UpAxis, scene.UpAxisSign,
                 scene.FrontAxis, scene.FrontAxisSign,
                 scene.CoordAxis, scene.CoordAxisSign,
-                scene.OriginalUpAxis, scene.Notes);
+                scene.OriginalUpAxis, scene.Notes)
+            {
+                AuthoredMapping = scene.AuthoredMapping,
+            };
 
             anyPinkySuccess |= ConvertOne(
                 request, target, context, options, usedNames, clips, entries,
@@ -830,14 +834,17 @@ public static class Retargeter
         {
             "fbx" => FbxImporter.Import(data, fbxOptions),
             "bvh" => BvhImporter.Import(data, bvhOptions),
-            "glb" or "gltf" => GltfImporter.Import(data, gltfOptions),
+            // .vrm = glTF 2.0 GLB container + VRM extension (the importer reads the authored
+            // humanoid bone map into SourceScene.AuthoredMapping); unknown-extension VRM
+            // bytes also land here via the GLB magic sniff below.
+            "glb" or "gltf" or "vrm" => GltfImporter.Import(data, gltfOptions),
             _ => SniffFormat(data) switch
             {
                 "fbx" => FbxImporter.Import(data, fbxOptions),
                 "bvh" => BvhImporter.Import(data, bvhOptions),
                 "gltf" => GltfImporter.Import(data, gltfOptions),
                 _ => throw new FormatException(
-                    $"Unrecognized source format for '{fileName}' (expected .fbx, .bvh, .glb or .gltf)."),
+                    $"Unrecognized source format for '{fileName}' (expected .fbx, .bvh, .glb, .gltf or .vrm)."),
             },
         };
     }
@@ -879,25 +886,35 @@ public static class Retargeter
 
     /// <summary>
     /// THE mapping cascade, shared by conversion, UI file listings, and custom-target
-    /// detection: explicit override → user preset (via <paramref name="userPresetLookup"/>,
-    /// keyed by <see cref="Mapping.SkeletonSignature"/>) → shipped preset detection →
-    /// best-effort auto-map. The report's <see cref="MappingReportInfo.NeedsUserDecision"/>
-    /// is true only on the auto path below the preset detection threshold — conversion still
-    /// proceeds with that map; callers decide whether to ask/reject.
+    /// detection: explicit override → authored mapping (from the file itself, e.g. a VRM's
+    /// humanoid bone map — authoritative ground truth at confidence 1.0) → user preset (via
+    /// <paramref name="userPresetLookup"/>, keyed by <see cref="Mapping.SkeletonSignature"/>)
+    /// → shipped preset detection → best-effort auto-map. The report's
+    /// <see cref="MappingReportInfo.NeedsUserDecision"/> is true only on the auto path below
+    /// the preset detection threshold — conversion still proceeds with that map; callers
+    /// decide whether to ask/reject.
     /// </summary>
     /// <param name="skeleton">Source (or candidate target) skeleton.</param>
     /// <param name="mappingOverride">Explicit mapping (manual table / already-resolved user
-    /// preset); wins outright when non-null.</param>
+    /// preset); wins outright when non-null — a deliberate user decision beats even the
+    /// file's own bone map.</param>
     /// <param name="userPresetLookup">Editor-side user-preset hook: receives the skeleton's
     /// signature, returns the stored mapping or null. The facade itself can do no file IO.</param>
+    /// <param name="authoredMapping">A mapping authored INSIDE the source file
+    /// (<see cref="SourceScene.AuthoredMapping"/>, <see cref="MappingSource.Authored"/>);
+    /// consulted before user presets because the file itself is authoritative.</param>
     public static (MappingResult Map, MappingReportInfo Report) ResolveMapping(
         SkeletonModel skeleton, MappingResult? mappingOverride = null,
-        Func<string, MappingResult?>? userPresetLookup = null)
+        Func<string, MappingResult?>? userPresetLookup = null,
+        MappingResult? authoredMapping = null)
     {
         ArgumentNullException.ThrowIfNull(skeleton);
 
         if (mappingOverride is not null)
             return (mappingOverride, BuildReport(mappingOverride, needsUserDecision: false, skeleton));
+
+        if (authoredMapping is not null)
+            return (authoredMapping, BuildReport(authoredMapping, needsUserDecision: false, skeleton));
 
         if (userPresetLookup is not null
             && userPresetLookup(Mapping.SkeletonSignature.Compute(skeleton)) is { } userPreset)
