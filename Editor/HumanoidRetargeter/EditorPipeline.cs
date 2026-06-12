@@ -82,6 +82,19 @@ public static class EditorPipeline
 		{
 			var full = Path.GetFullPath( path );
 
+			// The CURRENT PROJECT is always writable, even when it physically lives inside
+			// the install tree (e.g. the shipped sample projects under <sbox>/samples/...).
+			// The guard exists to protect ENGINE content (core/, addons/, citizen, ...),
+			// not the project the user deliberately opened.
+			var project = Sandbox.Project.Current?.GetRootPath();
+			if ( !string.IsNullOrWhiteSpace( project ) )
+			{
+				var projPrefix = Path.GetFullPath( project ).TrimEnd( Path.DirectorySeparatorChar )
+					+ Path.DirectorySeparatorChar;
+				if ( full.StartsWith( projPrefix, StringComparison.OrdinalIgnoreCase ) )
+					return false;
+			}
+
 			var root = EngineRootPath;
 			if ( root is not null )
 			{
