@@ -63,7 +63,7 @@ public static class AutoMapper
     private static readonly string[] IgnoredCoreTokens = { "x", "stretch" };
 
     private static readonly string[] HipsCores = { "hips", "hip", "pelvis" };
-    private static readonly string[] SpineCores = { "spine", "chest", "torso", "waist" };
+    private static readonly string[] SpineCores = { "spine", "chest", "torso", "waist", "lowerback", "abdomen" };
     private static readonly string[] ClavicleCores = { "shoulder", "clavicle", "collar", "collarbone" };
     private static readonly string[] UpperArmCores = { "upperarm", "uparm", "arm", "bicep" };
     private static readonly string[] LowerArmCores = { "forearm", "lowerarm", "lowarm", "elbow" };
@@ -123,7 +123,19 @@ public static class AutoMapper
             var resolvedSide = side != SideTag.None ? side : SideFromWorldX(skeleton, i);
             var info = new NameInfo(i, resolvedSide, core, digit);
 
-            if (HipsCores.Contains(core)) { hips.Add(info); continue; }
+            if (HipsCores.Contains(core))
+            {
+                // A NAME-sided singular "hip" (SMPL "L_Hip", classic BVH "LeftHip") is the
+                // thigh — a child of the pelvis, not the pelvis itself. Only the name side
+                // counts here: a slightly off-center pelvis must never become a leg.
+                if (core == "hip" && side != SideTag.None)
+                {
+                    AddSided(sided["UpperLeg"], info, result);
+                    continue;
+                }
+                hips.Add(info);
+                continue;
+            }
             if (core == "root") { rootCandidates.Add(info); continue; }
             if (SpineCores.Contains(core)) { spine.Add(info); continue; }
             if (core == "neck") { neck.Add(info); continue; }
@@ -170,6 +182,34 @@ public static class AutoMapper
             else if (lower.Count == 0)
             {
                 lower.Add(ordered[0]);
+            }
+        }
+
+        // -------- "shoulder" bones: in classic BVH (Collar → Shoulder → Elbow → Wrist) the
+        // shoulder IS the upper arm; in Mixamo (Shoulder → Arm → ForeArm) it is the
+        // clavicle. When no upper-arm candidate exists, promote a shoulder out of the
+        // clavicle bucket if a separate collar/clavicle-named bone covers that side, or if
+        // the lower-arm candidate is a DIRECT child of the shoulder bone (no room for an
+        // upper arm in between).
+        foreach (var side in new[] { SideTag.L, SideTag.R })
+        {
+            var clavicles = sided["Clavicle"][(int)side - 1];
+            var upperArms = sided["UpperArm"][(int)side - 1];
+            if (upperArms.Count > 0)
+                continue;
+            var shoulders = clavicles.Where(c => c.Core == "shoulder").ToList();
+            if (shoulders.Count == 0)
+                continue;
+            var lowerArms = sided["LowerArm"][(int)side - 1];
+            var promote = clavicles.Any(c => c.Core != "shoulder")
+                ? shoulders
+                : shoulders
+                    .Where(s => lowerArms.Any(l => skeleton[l.Index].ParentIndex == s.Index))
+                    .ToList();
+            foreach (var shoulder in promote)
+            {
+                clavicles.Remove(shoulder);
+                upperArms.Add(shoulder);
             }
         }
 

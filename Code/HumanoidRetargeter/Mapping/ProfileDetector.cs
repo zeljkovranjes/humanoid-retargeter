@@ -106,10 +106,25 @@ public static class ProfileDetector
 /// Everything else (more spine bones, clavicles, toes, fingers) is optional and contributes
 /// the remaining weight.
 /// </summary>
+/// <remarks>
+/// Every missing REQUIRED slot additionally penalizes the score multiplicatively
+/// (<see cref="MissingRequiredPenalty"/>). This keeps detection honest: rich optional
+/// coverage (e.g. 30 matching finger names) can never carry a preset over
+/// <see cref="ProfileDetector.DetectionThreshold"/> when a required limb is unmatched —
+/// with one slot missing the ceiling is (0.75·14/15 + 0.25)·0.75 ≈ 0.71 &lt; 0.8. A preset
+/// only claims a rig when all 15 required slots resolve; otherwise the auto-mapper (which
+/// sees the same names with more flexibility) takes over. Found via
+/// Neutral_throw_ball_001__A057.bvh (NVIDIA SOMA skeleton): its mixamo-identical upper
+/// body + finger names scored 0.90 while both upper legs were unmapped (SOMA's "LeftLeg"
+/// is the thigh, mixamo's is the calf).
+/// </remarks>
 internal static class MappingConfidence
 {
     private const float RequiredWeight = 0.75f;
     private const float OptionalWeight = 0.25f;
+
+    /// <summary>Multiplicative score penalty applied once per missing required slot.</summary>
+    private const float MissingRequiredPenalty = 0.75f;
 
     private static readonly BoneRole[] SpineRoles =
         { BoneRole.Spine0, BoneRole.Spine1, BoneRole.Spine2, BoneRole.Spine3, BoneRole.Spine4 };
@@ -148,12 +163,13 @@ internal static class MappingConfidence
         }
 
         var requiredFraction = requiredSatisfied / (float)requiredTotal;
+        var missingPenalty = MathF.Pow(MissingRequiredPenalty, requiredTotal - requiredSatisfied);
 
         var optionalDefined = definedRoles.Where(r => !RequiredPool.Contains(r)).Distinct().ToList();
         if (optionalDefined.Count == 0)
-            return requiredFraction;
+            return requiredFraction * missingPenalty;
 
         var optionalFraction = optionalDefined.Count(mappedSet.Contains) / (float)optionalDefined.Count;
-        return RequiredWeight * requiredFraction + OptionalWeight * optionalFraction;
+        return (RequiredWeight * requiredFraction + OptionalWeight * optionalFraction) * missingPenalty;
     }
 }
