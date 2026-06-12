@@ -253,12 +253,18 @@ public sealed class PreviewWidget : SceneRenderingWidget
 		if ( !Camera.IsValid() )
 			return;
 
-		var bounds = _sceneModel.IsValid()
+		// Frame the POSED character, not the model asset: Model.Bounds is the bind-pose box
+		// anchored at the scene origin, so clips that start offset or travel (BVH mocap
+		// especially) would walk out of a frame built from it. SceneObject.Bounds follows
+		// the current pose; the bind-pose SIZE is kept for the zoom so it doesn't pulse
+		// with the animation (arms out ≠ zoom out).
+		var center = _sceneModel.IsValid()
+			? _sceneModel.Bounds.Center
+			: Vector3.Up * 32f;
+		var sizeBounds = _sceneModel.IsValid()
 			? _sceneModel.Model.Bounds
 			: BBox.FromPositionAndSize( Vector3.Up * 32f, 64f );
-
-		var center = bounds.Center;
-		var radius = MathF.Max( bounds.Size.Length * 0.5f, 8f );
+		var radius = MathF.Max( sizeBounds.Size.Length * 0.5f, 8f );
 		var distance = MathX.SphereCameraDistance( radius, Camera.FieldOfView ) * 1.05f;
 
 		var yawRad = MathX.DegreeToRadian( _yaw );
