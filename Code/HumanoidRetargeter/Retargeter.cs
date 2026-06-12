@@ -384,6 +384,7 @@ public static class Retargeter
             HipScaleHorizontal = requested.HipScaleHorizontal,
             HipScaleVertical = requested.HipScaleVertical,
             TransferFingers = requested.TransferFingers,
+            TransferModes = requested.TransferModes,
             ClipIndex = take,
             ClipName = clipName,
         });

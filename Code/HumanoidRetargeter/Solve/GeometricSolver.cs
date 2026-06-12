@@ -31,9 +31,24 @@ using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global
 /// the chain-child direction), rather than preserving each rig's idiosyncratic rest offsets:
 /// a naive rest-relative delta (<c>C_tgt·ΔC·C_tgt⁻¹·R_rest</c>) carries the full rest-pose
 /// direction mismatch between rigs into every frame — measured at 52° on the s&amp;box rig's
-/// curled finger rest vs Mixamo's straight fingers, 12° on the clavicle line. Note ΔR is
-/// measured from the <i>normalized</i> rest, and the source's rest anatomy enters only through
-/// <c>C_src</c>, built on that same normalized rest.</para>
+/// curled finger rest vs Mixamo's straight fingers. Note ΔR is measured from the
+/// <i>normalized</i> rest, and the source's rest anatomy enters only through <c>C_src</c>,
+/// built on that same normalized rest.</para>
+/// <para><b>Per-role transfer modes.</b> The argument inverts for the shoulder girdle and
+/// neck carriage: a rig's clavicle line and neck-base direction are <i>anatomy</i>, not pose
+/// (Mixamo/UE/CMU rest clavicle directions diverge 6–28° from the s&amp;box rig's), so
+/// absolute matching drags the target's shoulders to the source's rest line and hunches the
+/// neck. Roles marked <see cref="RoleTransferMode.DeltaFromRest"/> (defaults:
+/// Clavicle L/R, Neck — see <see cref="SolveOptions.DefaultTransferModes"/>) instead replay
+/// the source's canonical-space delta from its own normalized rest onto the target's
+/// normalized rest: <c>R_tgtWorld(f) = C_tgt · ΔC(f) · C_tgt⁻¹ · R_tgtNormRest</c> with
+/// <c>ΔC(f) = C_src⁻¹·ΔR(f)·C_src</c>. Both modes share the postmultiplier
+/// <c>C_src·C_tgt⁻¹·R_tgtNormRest</c> and differ only in the premultiplier
+/// (<c>Q_tgt·Q_src⁻¹</c> vs <c>C_tgt·C_src⁻¹</c>); with source == target the two coincide,
+/// so the round-trip identity below holds for every mode. Feet additionally fall back to
+/// delta when the source foot direction is a <i>virtual</i> character-forward extension
+/// (no mapped toe) but the target's is real anatomy
+/// (<see cref="CanonicalFrames.HasVirtualPrimary"/>).</para>
 /// <para>Identity proof (citizen round-trip): with source == target, <c>Q_tgt = Q_src</c>,
 /// <c>C_tgt = C_src</c> and the normalized rests coincide, so
 /// <c>R_tgt(f) = ΔR(f)·R_normRest = R_src(f)</c> exactly.</para>
@@ -111,9 +126,14 @@ public sealed class GeometricSolver : IRetargetSolver
 
             public required int TgtBone { get; init; }
 
-            /// <summary>Postmultiplier <c>C_src · C_tgt⁻¹ · R_tgtNormRest</c>.
-            /// (The premultiplier <c>Q_tgt · Q_src⁻¹</c> is the Plan-level
-            /// <see cref="_basisChange"/> — constant across entries.)</summary>
+            /// <summary>Premultiplier: <c>Q_tgt · Q_src⁻¹</c> (character-frame change of
+            /// basis, the Plan-level <see cref="_basisChange"/>) for
+            /// <see cref="RoleTransferMode.AbsoluteDirection"/> entries,
+            /// <c>C_tgt · C_src⁻¹</c> for <see cref="RoleTransferMode.DeltaFromRest"/>.</summary>
+            public required Quaternion Pre { get; init; }
+
+            /// <summary>Postmultiplier <c>C_src · C_tgt⁻¹ · R_tgtNormRest</c> (shared by both
+            /// transfer modes).</summary>
             public required Quaternion B { get; init; }
         }
 
@@ -141,10 +161,13 @@ public sealed class GeometricSolver : IRetargetSolver
         private readonly Quaternion[] _rot;
         private readonly XForm[] _tgtWorld;
 
+        private readonly IReadOnlyDictionary<BoneRole, RoleTransferMode> _modes;
+
         public Plan(SkeletonModel src, MappingResult srcMap, TargetRig rig, SolveOptions options)
         {
             _src = src;
             _tgt = rig.Skeleton;
+            _modes = options.TransferModes ?? SolveOptions.DefaultTransferModes;
 
             var tgtMap = rig.ToMappingResult();
             var (srcNorm, _) = RestNormalizer.Normalize(src, srcMap);
@@ -219,10 +242,25 @@ public sealed class GeometricSolver : IRetargetSolver
 
             var cs = _srcCanon.WorldFrameOf(role);
             var ct = _tgtCanon.WorldFrameOf(role);
+            var delta = _modes.TryGetValue(role, out var mode) && mode == RoleTransferMode.DeltaFromRest;
+
+            // Feet whose SOURCE direction is a virtual character-forward extension (no mapped
+            // toe) while the target's is real anatomy fall back to delta transfer: absolute
+            // matching would impose that arbitrary virtual direction on the target's real
+            // ankle→ball chain every frame (measured: constant ~41° dorsiflex / heel-standing
+            // on the toe-less makehuman/daz rig). With real anatomy on both sides feet stay
+            // absolute — foot pitch carries ground-contact meaning. Same-rig round trips have
+            // equal virtual flags on both sides, so this never fires there.
+            if (role is BoneRole.FootL or BoneRole.FootR
+                && _srcCanon.HasVirtualPrimary(role) && !_tgtCanon.HasVirtualPrimary(role))
+            {
+                delta = true;
+            }
             _direct.Add(new DirectEntry
             {
                 Slot = RegisterSlot(srcBone),
                 TgtBone = tgtBone,
+                Pre = delta ? MathQ.Normalize(ct * Quaternion.Conjugate(cs)) : _basisChange,
                 B = MathQ.Normalize(cs * Quaternion.Conjugate(ct) * _tgtNormRest[tgtBone].Rot),
             });
         }
@@ -350,7 +388,7 @@ public sealed class GeometricSolver : IRetargetSolver
 
             foreach (var d in _direct)
             {
-                _rot[d.TgtBone] = MathQ.Normalize(_basisChange * _deltas[d.Slot] * d.B);
+                _rot[d.TgtBone] = MathQ.Normalize(d.Pre * _deltas[d.Slot] * d.B);
                 _solved[d.TgtBone] = true;
             }
 
