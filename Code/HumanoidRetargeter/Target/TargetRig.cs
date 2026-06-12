@@ -12,10 +12,12 @@ namespace HumanoidRetargeter.Target;
 using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global-namespace Vector3 (see Code/HumanoidRetargeter/Assembly.cs)
 
 /// <summary>
-/// The s&amp;box humanoid target rig: skeleton plus per-bone <see cref="BoneClass"/> and
-/// (for animated bones) canonical <see cref="BoneRole"/> annotations. Loaded from the
-/// committed <c>Assets/humanoid_retargeter/target_rig_sbox.json</c> produced by
-/// <see cref="TargetRigGenerator"/>. This type does no file IO — callers pass JSON text.
+/// A humanoid target rig: skeleton plus per-bone <see cref="BoneClass"/> and (for animated
+/// bones) canonical <see cref="BoneRole"/> annotations. The shipped s&amp;box default is
+/// loaded from the committed <c>Assets/humanoid_retargeter/target_rig_sbox.json</c> produced
+/// by <see cref="TargetRigGenerator"/> (see <see cref="SboxDefault"/>); arbitrary user-picked
+/// targets are built from any <see cref="SkeletonModel"/> via <see cref="FromSkeleton"/>.
+/// This type does no file IO — callers pass JSON text.
 /// </summary>
 public sealed class TargetRig
 {
@@ -121,6 +123,54 @@ public sealed class TargetRig
         }
 
         return new TargetRig(name, skeleton, classes, roles, boneByRole);
+    }
+
+    /// <summary>
+    /// Parses the shipped s&amp;box default target rig from the committed
+    /// <c>Assets/humanoid_retargeter/target_rig_sbox.json</c> text (callers do the file IO).
+    /// Alias of <see cref="Load"/>, named per design §1 to distinguish the curated default
+    /// target from <see cref="FromSkeleton"/> custom targets.
+    /// </summary>
+    public static TargetRig SboxDefault(string targetRigJson) => Load(targetRigJson);
+
+    /// <summary>
+    /// Builds a target rig from an arbitrary humanoid skeleton (design §1 "Custom targets"):
+    /// roles come from <paramref name="map"/> (the same detection/mapping used for sources),
+    /// bone classes from <paramref name="rules"/> name patterns (default
+    /// <see cref="BoneClassRules"/>). Any bone that carries a mapped role is forced
+    /// <see cref="BoneClass.Animated"/> — a role always wins over a twist-like name. That is
+    /// what makes ActorCore rigs work: <c>CC_Base_NeckTwist01</c> matches the twist pattern
+    /// but IS the neck bone (the actorcore_cc profile maps it to <see cref="BoneRole.Neck"/>),
+    /// so it ends up Animated.
+    /// </summary>
+    /// <exception cref="ArgumentException">Thrown when the mapping references a bone index
+    /// outside the skeleton or assigns two roles to the same bone.</exception>
+    public static TargetRig FromSkeleton(SkeletonModel skeleton, MappingResult map, BoneClassRules? rules = null)
+    {
+        ArgumentNullException.ThrowIfNull(skeleton);
+        ArgumentNullException.ThrowIfNull(map);
+        rules ??= new BoneClassRules();
+
+        var roles = new BoneRole?[skeleton.Count];
+        var boneByRole = new Dictionary<BoneRole, int>(map.RoleToBone.Count);
+        foreach (var (role, boneIndex) in map.RoleToBone)
+        {
+            if (boneIndex < 0 || boneIndex >= skeleton.Count)
+                throw new ArgumentException(
+                    $"Mapping assigns role {role} to bone index {boneIndex}, outside the skeleton (count {skeleton.Count}).",
+                    nameof(map));
+            if (roles[boneIndex] is { } existing)
+                throw new ArgumentException(
+                    $"Bone '{skeleton[boneIndex].Name}' carries both roles {existing} and {role}.", nameof(map));
+            roles[boneIndex] = role;
+            boneByRole.Add(role, boneIndex);
+        }
+
+        var classes = new BoneClass[skeleton.Count];
+        for (var i = 0; i < skeleton.Count; i++)
+            classes[i] = roles[i] is not null ? BoneClass.Animated : rules.Classify(skeleton[i].Name);
+
+        return new TargetRig(map.ProfileName, skeleton, classes, roles, boneByRole);
     }
 
     private static Vector3 ReadVector3(JsonElement e)
