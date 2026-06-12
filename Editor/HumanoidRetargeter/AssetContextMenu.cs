@@ -31,7 +31,7 @@ public static class RetargeterAssetContextMenu
 		if ( files.Count == 0 )
 			return;
 
-		var label = files.Count == 1 ? "Retarget to s&box rig…" : $"Retarget {files.Count} files to s&box rig…";
+		var label = files.Count == 1 ? "Retarget Animation" : $"Retarget {files.Count} Animations";
 		e.Menu.AddOption( label, "sync_alt", () => RetargetWindow.Open().AddFiles( files ) );
 	}
 }

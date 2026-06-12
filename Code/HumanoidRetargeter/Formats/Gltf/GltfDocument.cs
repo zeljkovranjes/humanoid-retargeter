@@ -92,12 +92,12 @@ internal sealed class GltfDocument
         JsonElement root;
         try
         {
-            // Strip a UTF-8 BOM (Utf8JsonReader rejects it); Clone detaches from the
-            // disposed JsonDocument.
-            var span = json.AsMemory();
-            if (json.Length >= 3 && json[0] == 0xEF && json[1] == 0xBB && json[2] == 0xBF)
-                span = span[3..];
-            using var doc = JsonDocument.Parse(span);
+            // Parse via string: Memory<T>/ReadOnlyMemory<T> are not on the s&box runtime
+            // whitelist (SB1000), and the string path also lets us strip a UTF-8 BOM
+            // (Utf8JsonReader rejects raw BOM bytes). Clone detaches from the disposed
+            // JsonDocument.
+            var text = System.Text.Encoding.UTF8.GetString(json).TrimStart('\uFEFF');
+            using var doc = JsonDocument.Parse(text);
             root = doc.RootElement.Clone();
         }
         catch (JsonException e)
