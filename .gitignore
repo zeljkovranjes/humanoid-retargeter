@@ -12,3 +12,7 @@ Code/Properties/
 Editor/humanoid_retargeter.editor.csproj
 Editor/Properties/
 .sbox/
+# local-only (also purged from history; keep out of the public repo)
+.claude/
+docs/superpowers/
+research/
