@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Numerics;
 using HumanoidRetargeter.Maths;
 using SkeletonModel = HumanoidRetargeter.Skeleton.Skeleton;
-using HumanoidRetargeter.Skeleton;
 
 namespace HumanoidRetargeter.Cleanup;
 
@@ -154,14 +153,18 @@ public static class FootPlant
         var ankleR = AnkleWorldPositions(frames, skeleton, right.Ankle);
         report.GroundHeight = EstimateGround(ankleL, ankleR, up);
 
-        ProcessFoot(frames, skeleton, left, ankleL, up, fps, report.GroundHeight, options, report.Left);
-        ProcessFoot(frames, skeleton, right, ankleR, up, fps, report.GroundHeight, options, report.Right);
+        // One FK scratch buffer shared by every per-frame correction (perf: the pass used
+        // to run several allocating full-skeleton FK passes per corrected frame).
+        var fkScratch = new XForm[skeleton.Count];
+        ProcessFoot(frames, skeleton, left, ankleL, up, fps, report.GroundHeight, options, report.Left, fkScratch);
+        ProcessFoot(frames, skeleton, right, ankleR, up, fps, report.GroundHeight, options, report.Right, fkScratch);
         return report;
     }
 
     private static void ProcessFoot(
         List<XForm[]> frames, SkeletonModel skeleton, FootChain chain, Vector3[] ankle,
-        Vector3 up, float fps, float ground, FootPlantOptions options, FootPlantFootReport report)
+        Vector3 up, float fps, float ground, FootPlantOptions options, FootPlantFootReport report,
+        XForm[] fkScratch)
     {
         // (b) Detection with hysteresis + minimum duration.
         var plants = DetectPlants(ankle, up, ground, fps, options);
@@ -198,7 +201,7 @@ public static class FootPlant
                 bool isBlendFrame = f < plant.Start || f > plant.End;
                 if (isBlendFrame && planted[f])
                     continue; // frame belongs to a neighboring plant — leave it pinned there
-                CorrectFrame(frames[f], skeleton, chain, anchor, w, bendAxis, options, report);
+                CorrectFrame(frames[f], skeleton, chain, anchor, w, bendAxis, options, report, fkScratch);
             }
         }
 
@@ -218,9 +221,10 @@ public static class FootPlant
     /// <summary>Applies one frame's weighted IK-to-anchor correction (stretch + rotations).</summary>
     private static void CorrectFrame(
         XForm[] locals, SkeletonModel skeleton, FootChain chain, Vector3 anchor, float w,
-        Vector3 bendAxis, FootPlantOptions options, FootPlantFootReport report)
+        Vector3 bendAxis, FootPlantOptions options, FootPlantFootReport report, XForm[] fkScratch)
     {
-        var world = new Pose(locals).ToWorld(skeleton);
+        FkUtil.ToWorld(locals, skeleton, fkScratch);
+        var world = fkScratch;
         var a = world[chain.Hip].Pos;
         var b = world[chain.Knee].Pos;
         var c = world[chain.Ankle].Pos;
@@ -251,7 +255,8 @@ public static class FootPlant
         var dUpper = Quaternion.Slerp(Quaternion.Identity, result.UpperWorldDelta, w);
         var dLower = Quaternion.Slerp(Quaternion.Identity, result.LowerWorldDelta, w);
 
-        EffectorIk.ApplyWorldDeltas(locals, skeleton, chain.Hip, chain.Knee, chain.Ankle, dUpper, dLower);
+        EffectorIk.ApplyWorldDeltas(
+            locals, skeleton, chain.Hip, chain.Knee, chain.Ankle, dUpper, dLower, fkScratch);
 
         // Report bookkeeping: largest joint rotation and ankle displacement applied.
         float deg = MathF.Max(MathQ.AngleBetween(Quaternion.Identity, dUpper),
@@ -374,6 +379,8 @@ public static class FootPlant
         return positions;
     }
 
+    /// <summary>Single ankle world position via ancestor-chain FK (bit-identical to a full
+    /// FK pass, allocation-free).</summary>
     private static Vector3 AnkleWorld(XForm[] locals, SkeletonModel skeleton, int ankle)
-        => new Pose(locals).ToWorld(skeleton)[ankle].Pos;
+        => FkUtil.BoneWorld(locals, skeleton, ankle).Pos;
 }

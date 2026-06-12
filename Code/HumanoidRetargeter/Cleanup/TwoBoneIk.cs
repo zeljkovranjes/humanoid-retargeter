@@ -51,6 +51,11 @@ public static class TwoBoneIk
         float lcb = Vector3.Distance(b, c);
         float maxExt = lab + lcb;
 
+        // Degenerate zero-length chain: nothing can rotate to reach anywhere — report an
+        // identity result instead of letting the reach clamp below throw (min > max).
+        if (maxExt < 1e-4f)
+            return new Result { UpperWorldDelta = Quaternion.Identity, LowerWorldDelta = Quaternion.Identity };
+
         var at = target - a;
         float dist = at.Length();
         if (dist < Eps)
@@ -69,10 +74,10 @@ public static class TwoBoneIk
         Vector3 axis0;
         if (axisRaw.Length() < Eps * lab * lcb || axisRaw.Length() < 1e-8f)
         {
-            var fallback = stableBendAxis ?? PickPerpendicular(ac);
+            var fallback = stableBendAxis ?? MathQ.Perpendicular(Vector3.Normalize(ac));
             // Project to be orthogonal to ac so the hinge is well-defined.
             var proj = fallback - Vector3.Dot(fallback, Vector3.Normalize(ac)) * Vector3.Normalize(ac);
-            axis0 = proj.Length() > 1e-8f ? Vector3.Normalize(proj) : PickPerpendicular(ac);
+            axis0 = proj.Length() > 1e-8f ? Vector3.Normalize(proj) : MathQ.Perpendicular(Vector3.Normalize(ac));
         }
         else
         {
@@ -83,9 +88,10 @@ public static class TwoBoneIk
         if (lac < Eps)
             lac = Eps;
 
-        // Current interior angles.
-        float acAb0 = AngleBetween(ac, ab);
-        float baBc0 = AngleBetween(-ab, bc);
+        // Current interior angles (atan2-based — stays accurate near straight chains
+        // where acos of the dot product is ill-conditioned).
+        float acAb0 = MathQ.AngleBetween(ac, ab);
+        float baBc0 = MathQ.AngleBetween(-ab, bc);
 
         // Desired interior angles from the law of cosines for chain length lat.
         float acAb1 = MathF.Acos(Math.Clamp((lcb * lcb - lab * lab - lat * lat) / (-2f * lab * lat), -1f, 1f));
@@ -118,18 +124,4 @@ public static class TwoBoneIk
         return softStart + range * (1f - MathF.Exp(-(d - softStart) / range));
     }
 
-    private static float AngleBetween(Vector3 u, Vector3 v)
-    {
-        float denom = u.Length() * v.Length();
-        if (denom < 1e-12f)
-            return 0f;
-        return MathF.Acos(Math.Clamp(Vector3.Dot(u, v) / denom, -1f, 1f));
-    }
-
-    private static Vector3 PickPerpendicular(Vector3 v)
-    {
-        var n = Vector3.Normalize(v);
-        var candidate = MathF.Abs(n.Y) < 0.9f ? Vector3.UnitY : Vector3.UnitX;
-        return Vector3.Normalize(Vector3.Cross(n, candidate));
-    }
 }

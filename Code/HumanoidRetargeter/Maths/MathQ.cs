@@ -149,8 +149,9 @@ public static class MathQ
         return Normalize(Quaternion.CreateFromRotationMatrix(m));
     }
 
-    /// <summary>Stable unit vector perpendicular to <paramref name="unit"/> (assumed normalized).</summary>
-    private static Vector3 Perpendicular(Vector3 unit)
+    /// <summary>Stable unit vector perpendicular to <paramref name="unit"/> (assumed normalized).
+    /// Internal so geometry passes (e.g. <c>TwoBoneIk</c>) reuse one implementation.</summary>
+    internal static Vector3 Perpendicular(Vector3 unit)
     {
         var p = Vector3.Cross(unit, Vector3.UnitX);
         if (p.LengthSquared() < 1e-6f)
