@@ -1,0 +1,402 @@
+using System;
+using System.Collections.Generic;
+using System.Numerics;
+using HumanoidRetargeter.Maths;
+using HumanoidRetargeter.Skeleton;
+
+namespace HumanoidRetargeter.Formats.Fbx;
+
+/// <summary>Options for <see cref="FbxImporter.Import"/>.</summary>
+public sealed class FbxImportOptions
+{
+    /// <summary>Fixed resampling rate for all clips, frames per second.</summary>
+    public float SampleFps { get; init; } = 30f;
+
+    /// <summary>
+    /// When the static rest pose is degenerate (Mixamo-style zeroed bind translations) and no
+    /// usable BindPose node exists, sample frame 0 of the first clip as the rest pose.
+    /// </summary>
+    public bool RestFromFrame0WhenBindDegenerate { get; init; } = true;
+}
+
+/// <summary>
+/// FBX → <see cref="SourceScene"/> importer: tokenize → semantic graph → skeleton model
+/// selection → rest pose → clip resampling on a fixed fps grid.
+/// </summary>
+/// <remarks>
+/// Unit policy: all translations are multiplied by GlobalSettings <c>UnitScaleFactor</c>
+/// (source unit expressed in centimeters), producing centimeters. Axes are NOT converted;
+/// the GlobalSettings axes are recorded on the <see cref="SourceScene"/>.
+/// </remarks>
+public static class FbxImporter
+{
+    /// <summary>Parses FBX bytes and builds the source scene.</summary>
+    /// <exception cref="FormatException">Malformed FBX, or no skeleton-like nodes found.</exception>
+    public static SourceScene Import(byte[] data, FbxImportOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(data);
+        options ??= new FbxImportOptions();
+        if (!(options.SampleFps > 0f) || !float.IsFinite(options.SampleFps))
+            throw new ArgumentOutOfRangeException(nameof(options), "SampleFps must be positive.");
+
+        var scene = FbxScene.Build(FbxTokenizer.Parse(data));
+        float unitScale = (float)scene.UnitScaleFactor;
+
+        var bones = SelectSkeletonModels(scene);
+        if (bones.Count == 0)
+            throw new FormatException("FBX contains no skeleton nodes (no LimbNode/Null models).");
+
+        var ctx = new ImportContext(scene, bones, unitScale);
+
+        // ---- rest pose -------------------------------------------------------------
+        var restWorlds = EvaluateWorlds(ctx, null, 0);
+        if (IsRestDegenerate(ctx))
+        {
+            if (TryBindPoseWorlds(ctx, out var bindWorlds))
+                restWorlds = bindWorlds;
+            else if (options.RestFromFrame0WhenBindDegenerate &&
+                     FirstSampleableStack(ctx) is { } stack)
+                restWorlds = EvaluateWorlds(ctx, stack, ClipStartTicks(ctx, stack));
+        }
+
+        var skeleton = BuildSkeleton(ctx, restWorlds);
+
+        // ---- clips -----------------------------------------------------------------
+        var clips = new List<Clip>();
+        foreach (var stack in scene.Stacks)
+        {
+            var clip = SampleClip(ctx, skeleton, stack, options.SampleFps);
+            if (clip is not null)
+                clips.Add(clip);
+        }
+
+        return new SourceScene(
+            skeleton, clips, unitScale,
+            scene.UpAxis, scene.UpAxisSign,
+            scene.FrontAxis, scene.FrontAxisSign,
+            scene.CoordAxis, scene.CoordAxisSign,
+            scene.OriginalUpAxis);
+    }
+
+    // =====================================================================================
+    // skeleton model selection
+    // =====================================================================================
+
+    /// <summary>
+    /// Picks the Models that form the skeleton: every LimbNode plus all of their Model
+    /// ancestors (Null/Root containers included). Mesh leaves and other scene clutter are
+    /// excluded. Fallback when the file has no LimbNodes at all: every non-Mesh model that
+    /// is animated or has animated descendants; last resort, all non-Mesh models.
+    /// Returned in parent-before-child order.
+    /// </summary>
+    private static List<FbxObject> SelectSkeletonModels(FbxScene scene)
+    {
+        var kept = new HashSet<long>();
+
+        foreach (var model in scene.Models)
+        {
+            if (model.SubClass != "LimbNode" && model.SubClass != "Root")
+                continue;
+            // Keep the limb and walk every ancestor into the set.
+            for (var m = model; m is not null && kept.Add(m.Id); m = m.ModelParent)
+            {
+            }
+        }
+
+        if (kept.Count == 0)
+        {
+            // No limbs: keep animated non-Mesh models and their ancestors.
+            var animated = new HashSet<long>();
+            foreach (var stack in scene.Stacks)
+                foreach (var (modelId, _) in stack.Bindings.Keys)
+                    animated.Add(modelId);
+
+            foreach (var model in scene.Models)
+            {
+                if (model.SubClass == "Mesh" || !animated.Contains(model.Id))
+                    continue;
+                for (var m = model; m is not null && kept.Add(m.Id); m = m.ModelParent)
+                {
+                }
+            }
+        }
+
+        if (kept.Count == 0)
+        {
+            foreach (var model in scene.Models)
+                if (model.SubClass != "Mesh")
+                    kept.Add(model.Id);
+        }
+
+        // Parent-before-child order via depth-first traversal from kept roots, following
+        // document order among siblings.
+        var result = new List<FbxObject>(kept.Count);
+        var visited = new HashSet<long>();
+
+        void Visit(FbxObject m)
+        {
+            if (!kept.Contains(m.Id) || !visited.Add(m.Id))
+                return;
+            result.Add(m);
+            foreach (var child in m.ModelChildren)
+                Visit(child);
+        }
+
+        foreach (var model in scene.Models)
+            if (kept.Contains(model.Id) && NearestKeptAncestor(model, kept) is null)
+                Visit(model);
+
+        return result;
+    }
+
+    private static FbxObject? NearestKeptAncestor(FbxObject model, HashSet<long> kept)
+    {
+        for (var m = model.ModelParent; m is not null; m = m.ModelParent)
+            if (kept.Contains(m.Id))
+                return m;
+        return null;
+    }
+
+    // =====================================================================================
+    // evaluation
+    // =====================================================================================
+
+    /// <summary>Per-import precomputed state.</summary>
+    private sealed class ImportContext
+    {
+        public FbxScene Scene { get; }
+        public List<FbxObject> Bones { get; }
+        public float UnitScale { get; }
+        public Dictionary<long, int> BoneIndexById { get; } = new();
+        public FbxTransform[] Transforms { get; }
+        public int[] ParentIndex { get; }     // index into Bones, -1 for roots
+        public string[] BoneNames { get; }    // deduplicated
+
+        public ImportContext(FbxScene scene, List<FbxObject> bones, float unitScale)
+        {
+            Scene = scene;
+            Bones = bones;
+            UnitScale = unitScale;
+            Transforms = new FbxTransform[bones.Count];
+            ParentIndex = new int[bones.Count];
+            BoneNames = new string[bones.Count];
+
+            var keptIds = new HashSet<long>();
+            foreach (var b in bones)
+                keptIds.Add(b.Id);
+
+            var usedNames = new HashSet<string>(StringComparer.Ordinal);
+            for (int i = 0; i < bones.Count; i++)
+            {
+                BoneIndexById[bones[i].Id] = i;
+                Transforms[i] = FbxTransform.FromModel(scene, bones[i]);
+
+                var parent = NearestKeptAncestor(bones[i], keptIds);
+                ParentIndex[i] = parent is null ? -1 : BoneIndexById[parent.Id];
+
+                string name = string.IsNullOrEmpty(bones[i].Name) ? $"bone_{bones[i].Id}" : bones[i].Name;
+                if (!usedNames.Add(name))
+                {
+                    name = $"{name}#{bones[i].Id}";
+                    usedNames.Add(name);
+                }
+                BoneNames[i] = name;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Evaluates world matrices for all skeleton bones — at rest (<paramref name="stack"/> null:
+    /// static Lcl defaults + pivots/pre-rotations) or sampled from a stack at a KTIME tick.
+    /// </summary>
+    private static Matrix4x4[] EvaluateWorlds(ImportContext ctx, FbxAnimStack? stack, long ticks)
+    {
+        var worlds = new Matrix4x4[ctx.Bones.Count];
+        for (int i = 0; i < ctx.Bones.Count; i++)
+        {
+            var xf = ctx.Transforms[i];
+            Matrix4x4 local;
+            if (stack is null)
+            {
+                local = xf.LocalMatrixDefault();
+            }
+            else
+            {
+                long id = ctx.Bones[i].Id;
+                var t = SampleVector(stack, id, "Lcl Translation", ticks, xf.LclTranslation);
+                var r = SampleVector(stack, id, "Lcl Rotation", ticks, xf.LclRotationDeg);
+                var s = SampleVector(stack, id, "Lcl Scaling", ticks, xf.LclScaling);
+                local = xf.LocalMatrix(t, r, s);
+            }
+
+            int parent = ctx.ParentIndex[i];
+            worlds[i] = parent < 0 ? local : local * worlds[parent];
+        }
+        return worlds;
+    }
+
+    private static Vector3 SampleVector(
+        FbxAnimStack stack, long modelId, string property, long ticks, Vector3 fallback)
+    {
+        if (!stack.Bindings.TryGetValue((modelId, property), out var cn))
+            return fallback;
+        return new Vector3(
+            cn.Component('X', ticks, fallback.X),
+            cn.Component('Y', ticks, fallback.Y),
+            cn.Component('Z', ticks, fallback.Z));
+    }
+
+    /// <summary>Derives rigid (cm) parent-relative locals from world matrices, in bone order.</summary>
+    private static XForm[] WorldsToLocals(ImportContext ctx, Matrix4x4[] worlds)
+    {
+        var rigid = new XForm[worlds.Length];
+        for (int i = 0; i < worlds.Length; i++)
+            rigid[i] = FbxTransform.ToRigid(worlds[i]);
+
+        var locals = new XForm[worlds.Length];
+        for (int i = 0; i < worlds.Length; i++)
+        {
+            int parent = ctx.ParentIndex[i];
+            var local = parent < 0 ? rigid[i] : XForm.ToLocal(rigid[parent], rigid[i]);
+            local.Pos *= ctx.UnitScale;
+            locals[i] = local;
+        }
+        return locals;
+    }
+
+    // =====================================================================================
+    // rest pose
+    // =====================================================================================
+
+    /// <summary>
+    /// True when more than half of the non-root bones have near-zero static Lcl Translation —
+    /// the Mixamo-style "zeroed bind" signature that makes the default rest unusable.
+    /// </summary>
+    private static bool IsRestDegenerate(ImportContext ctx)
+    {
+        int nonRoot = 0, zeroed = 0;
+        for (int i = 0; i < ctx.Bones.Count; i++)
+        {
+            if (ctx.ParentIndex[i] < 0)
+                continue;
+            nonRoot++;
+            if (ctx.Transforms[i].LclTranslation.LengthSquared() < 1e-6f)
+                zeroed++;
+        }
+        return nonRoot > 0 && zeroed * 2 > nonRoot;
+    }
+
+    /// <summary>Bind-pose worlds when a Pose/BindPose node covers at least half the bones.</summary>
+    private static bool TryBindPoseWorlds(ImportContext ctx, out Matrix4x4[] worlds)
+    {
+        worlds = Array.Empty<Matrix4x4>();
+        if (ctx.Scene.BindPose.Count == 0)
+            return false;
+
+        int covered = 0;
+        foreach (var b in ctx.Bones)
+            if (ctx.Scene.BindPose.ContainsKey(b.Id))
+                covered++;
+        if (covered * 2 < ctx.Bones.Count)
+            return false;
+
+        // Missing entries fall back to the statically evaluated world.
+        var evaluated = EvaluateWorlds(ctx, null, 0);
+        worlds = new Matrix4x4[ctx.Bones.Count];
+        for (int i = 0; i < ctx.Bones.Count; i++)
+            worlds[i] = ctx.Scene.BindPose.TryGetValue(ctx.Bones[i].Id, out var m) ? m : evaluated[i];
+        return true;
+    }
+
+    private static FbxAnimStack? FirstSampleableStack(ImportContext ctx)
+    {
+        foreach (var stack in ctx.Scene.Stacks)
+            if (KeyRange(ctx, stack) is not null || stack.LocalStop > stack.LocalStart)
+                return stack;
+        return null;
+    }
+
+    private static Skeleton.Skeleton BuildSkeleton(ImportContext ctx, Matrix4x4[] restWorlds)
+    {
+        var locals = WorldsToLocals(ctx, restWorlds);
+        var defs = new List<BoneDefinition>(ctx.Bones.Count);
+        for (int i = 0; i < ctx.Bones.Count; i++)
+        {
+            int parent = ctx.ParentIndex[i];
+            defs.Add(new BoneDefinition(
+                ctx.BoneNames[i],
+                parent < 0 ? null : ctx.BoneNames[parent],
+                locals[i]));
+        }
+        return Skeleton.Skeleton.Create(defs);
+    }
+
+    // =====================================================================================
+    // clips
+    // =====================================================================================
+
+    /// <summary>
+    /// Key-time range (KTIME ticks) over all curves bound to skeleton bones in the stack,
+    /// or null when the stack has no keyed curves.
+    /// </summary>
+    private static (long Start, long Stop)? KeyRange(ImportContext ctx, FbxAnimStack stack)
+    {
+        long min = long.MaxValue, max = long.MinValue;
+        foreach (var ((modelId, _), cn) in stack.Bindings)
+        {
+            if (!ctx.BoneIndexById.ContainsKey(modelId))
+                continue;
+            foreach (var curve in cn.Channels.Values)
+            {
+                if (curve.KeyTimes.Length == 0)
+                    continue;
+                min = Math.Min(min, curve.KeyTimes[0]);
+                max = Math.Max(max, curve.KeyTimes[^1]);
+            }
+        }
+        return min <= max ? (min, max) : null;
+    }
+
+    private static long ClipStartTicks(ImportContext ctx, FbxAnimStack stack)
+        => KeyRange(ctx, stack) is { } range ? range.Start : stack.LocalStart;
+
+    /// <summary>
+    /// Samples one stack on the fps grid. The time range is the bound curves' key range
+    /// (matching how Blender frames the action) with LocalStart/LocalStop as fallback.
+    /// Returns null when the stack drives none of the skeleton bones.
+    /// </summary>
+    private static Clip? SampleClip(
+        ImportContext ctx, Skeleton.Skeleton skeleton, FbxAnimStack stack, float fps)
+    {
+        long start, stop;
+        if (KeyRange(ctx, stack) is { } range)
+            (start, stop) = range;
+        else if (stack.LocalStop > stack.LocalStart)
+            (start, stop) = (stack.LocalStart, stack.LocalStop);
+        else
+            return null;
+
+        double durationSeconds = (stop - start) / (double)FbxAnimCurve.TicksPerSecond;
+        int frameCount = Math.Max(1, (int)Math.Round(durationSeconds * fps) + 1);
+
+        // Skeleton bone order may differ from context bone order (topological sort) — map.
+        var boneToSkeleton = new int[ctx.Bones.Count];
+        for (int i = 0; i < ctx.Bones.Count; i++)
+            boneToSkeleton[i] = skeleton.IndexOf(ctx.BoneNames[i]);
+
+        var frames = new List<XForm[]>(frameCount);
+        for (int f = 0; f < frameCount; f++)
+        {
+            long ticks = start + (long)Math.Round(f * (FbxAnimCurve.TicksPerSecond / (double)fps));
+            var locals = WorldsToLocals(ctx, EvaluateWorlds(ctx, stack, ticks));
+
+            var frame = new XForm[skeleton.Count];
+            for (int i = 0; i < locals.Length; i++)
+                frame[boneToSkeleton[i]] = locals[i];
+            frames.Add(frame);
+        }
+
+        string name = string.IsNullOrEmpty(stack.Object.Name) ? "clip" : stack.Object.Name;
+        return new Clip(name, fps, looping: false, frames);
+    }
+}
