@@ -116,6 +116,16 @@ public sealed class RetargetRequest
     /// </summary>
     public bool ArmEffectorIk { get; init; }
 
+    /// <summary>
+    /// Generate <c>AE_FOOTSTEP</c> AnimEvent nodes on each produced clip's vmdl AnimFile
+    /// entry (default OFF). After solving and cleanup, foot-plant intervals are detected on
+    /// the SOLVED target clip (<see cref="Cleanup.FootPlant.DetectPlantIntervals"/>); each
+    /// plant's start frame is a touchdown and becomes one footstep event, in the exact node
+    /// shape the shipped citizen data uses (see <see cref="Target.FootstepEvents"/>).
+    /// Skipped (with a report note) when the target rig lacks complete leg chains.
+    /// </summary>
+    public bool GenerateFootstepEvents { get; init; }
+
     /// <summary>Output clip name override; with multiple takes an index suffix is appended.
     /// Null = the source take name.</summary>
     public string? ClipNameOverride { get; init; }

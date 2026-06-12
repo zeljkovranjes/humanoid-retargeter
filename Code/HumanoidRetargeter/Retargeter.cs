@@ -422,6 +422,7 @@ public static class Retargeter
         try
         {
             var clip = SolveAndClean(request, target, context, scene, map, report, take, clipName);
+            var events = GenerateFootsteps(request, target, context, report, clip.Frames, clip.Fps);
             var dmxFileName = SanitizeFileName(clipName) + ".dmx";
             var dmx = DmxWriter.Write(target.Rig.Skeleton, clip, new DmxWriteOptions
             {
@@ -447,6 +448,7 @@ public static class Retargeter
                 Fps = clip.Fps,
                 Looping = clip.Looping,
                 ExtractMotion = extractMotion,
+                FootstepEvents = events,
             });
             entries.Add(new AnimEntry
             {
@@ -454,6 +456,7 @@ public static class Retargeter
                 SourceFilename = JoinAssetPath(options.DmxFolderRelative, dmxFileName),
                 Looping = clip.Looping,
                 ExtractMotion = extractMotion,
+                Events = events,
             });
             return mapsPinky;
         }
@@ -470,6 +473,44 @@ public static class Retargeter
             });
             return false;
         }
+    }
+
+    /// <summary>
+    /// Generates the <c>AE_FOOTSTEP</c> events for a solved clip when the request asks for
+    /// them (<see cref="RetargetRequest.GenerateFootstepEvents"/>): plant intervals are
+    /// detected on the SOLVED TARGET frames (this is where the engine plays the clip, so
+    /// touchdowns must be measured here), each interval start = one footstep
+    /// (<see cref="FootstepEvents"/>). Empty when the feature is off or the target rig lacks
+    /// the leg chains / character up (noted on the report then).
+    /// </summary>
+    private static IReadOnlyList<AnimEventEntry> GenerateFootsteps(
+        RetargetRequest request, RetargetTargetSpec target, TargetContext context,
+        MappingReportInfo report, List<XForm[]> frames, float fps)
+    {
+        if (!request.GenerateFootstepEvents)
+            return Array.Empty<AnimEventEntry>();
+        if (context.Up is not { } up || context.FootChains is not { } feet)
+        {
+            AddNote(report, "Footstep events skipped: " + context.UpOrChainProblem);
+            return Array.Empty<AnimEventEntry>();
+        }
+        return FootstepEvents.Generate(
+            frames, target.Rig.Skeleton, feet.Left, feet.Right, up, fps,
+            ScaledPlantOptions(target));
+    }
+
+    /// <summary>Default plant thresholds are cm-tuned; engine-space rigs are in inches, so
+    /// they are scaled by the cm→inch factor to keep the same physical sensitivity (shared by
+    /// the foot-plant cleanup and the footstep-event detection).</summary>
+    private static FootPlantOptions ScaledPlantOptions(RetargetTargetSpec target)
+    {
+        var options = new FootPlantOptions();
+        if (target.UpAxis == TargetUpAxis.ZUpEngine)
+        {
+            options.SpeedThresholdCmPerSec *= RetargetTargetSpec.SboxSourceScale;
+            options.HeightThresholdCm *= RetargetTargetSpec.SboxSourceScale;
+        }
+        return options;
     }
 
     private static bool MapsPinkyRole(MappingResult map)
@@ -514,17 +555,9 @@ public static class Retargeter
                 // foot world rotations).
                 GroundAlignFeet(frames, scene, map, target.Rig.Skeleton, feet, up, solved.Fps, take);
 
-                // Default plant thresholds are cm-tuned; engine-space rigs are in inches, so
-                // scale them by the cm→inch factor to keep the same physical sensitivity.
-                var footPlantOptions = new FootPlantOptions();
-                if (target.UpAxis == TargetUpAxis.ZUpEngine)
-                {
-                    footPlantOptions.SpeedThresholdCmPerSec *= RetargetTargetSpec.SboxSourceScale;
-                    footPlantOptions.HeightThresholdCm *= RetargetTargetSpec.SboxSourceScale;
-                }
                 FootPlant.Apply(
                     frames, target.Rig.Skeleton, feet.Left, feet.Right, up, solved.Fps,
-                    footPlantOptions);
+                    ScaledPlantOptions(target));
             }
             else
             {

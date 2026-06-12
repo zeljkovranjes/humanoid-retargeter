@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using HumanoidRetargeter.Mapping;
 using HumanoidRetargeter.Maths;
+using HumanoidRetargeter.Target;
 
 namespace HumanoidRetargeter;
 
@@ -122,6 +123,14 @@ public sealed class ClipResult
     /// <summary>Whether the clip's vmdl AnimFile entry carries an ExtractMotion node
     /// (request had <c>RootMotion == Extract</c>).</summary>
     public bool ExtractMotion { get; init; }
+
+    /// <summary>
+    /// Generated <c>AE_FOOTSTEP</c> events for this clip, in frame order — the same list
+    /// emitted as AnimEvent children on the clip's vmdl AnimFile entry. Empty unless the
+    /// request set <see cref="RetargetRequest.GenerateFootstepEvents"/> (and detection found
+    /// touchdowns).
+    /// </summary>
+    public IReadOnlyList<AnimEventEntry> FootstepEvents { get; init; } = Array.Empty<AnimEventEntry>();
 }
 
 /// <summary>Result of a single-file <see cref="Retargeter.Convert"/> (all takes in the file).</summary>
