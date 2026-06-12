@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Numerics;
 using HumanoidRetargeter.Maths;
 using SkeletonModel = HumanoidRetargeter.Skeleton.Skeleton;
-using HumanoidRetargeter.Skeleton;
 
 namespace HumanoidRetargeter.Cleanup;
 
@@ -75,15 +74,18 @@ public static class EffectorIk
             throw new ArgumentException(
                 $"Goal count ({goalsWorld.Count}) must match frame count ({frames.Count}).", nameof(goalsWorld));
 
+        // One FK scratch buffer shared across all frames (perf: this pass used to allocate
+        // four world arrays per frame).
+        var world = new XForm[skeleton.Count];
         for (int i = 0; i < frames.Count; i++)
         {
             var locals = frames[i];
-            var world = new Pose(locals).ToWorld(skeleton);
+            FkUtil.ToWorld(locals, skeleton, world);
             var result = TwoBoneIk.Solve(
                 world[chain.Upper].Pos, world[chain.Lower].Pos, world[chain.End].Pos,
                 goalsWorld[i], soften, stableBendAxis);
             ApplyWorldDeltas(locals, skeleton, chain.Upper, chain.Lower, chain.End,
-                result.UpperWorldDelta, result.LowerWorldDelta);
+                result.UpperWorldDelta, result.LowerWorldDelta, world);
         }
     }
 
@@ -92,12 +94,22 @@ public static class EffectorIk
     /// convention) into a frame's local rotations: Upper and Lower world rotations get the
     /// deltas premultiplied and are re-derived as locals; End's local is compensated so its
     /// world rotation stays exactly what it was before the call. Local translations untouched.
+    /// A parentless Lower or End bone breaks the chain assumption (its local IS its world;
+    /// there is no parent frame to re-derive against), so the correction is skipped entirely.
     /// </summary>
+    /// <param name="worldScratch">Caller-owned FK scratch buffer (≥ skeleton bone count);
+    /// overwritten by this call.</param>
     internal static void ApplyWorldDeltas(
         XForm[] locals, SkeletonModel skeleton, int upper, int lower, int end,
-        Quaternion upperDelta, Quaternion lowerDelta)
+        Quaternion upperDelta, Quaternion lowerDelta, XForm[] worldScratch)
     {
-        var world = new Pose(locals).ToWorld(skeleton);
+        // Guard: lower/end without a parent would index world[-1] below — treat the whole
+        // correction as a no-op rather than corrupting part of the chain.
+        if (skeleton[lower].ParentIndex < 0 || skeleton[end].ParentIndex < 0)
+            return;
+
+        var world = worldScratch;
+        FkUtil.ToWorld(locals, skeleton, world);
         var lowerWorldRot0 = world[lower].Rot;
         var endWorldRot0 = world[end].Rot;
 
@@ -109,9 +121,9 @@ public static class EffectorIk
             locals[upper].Pos,
             MathQ.Normalize(Quaternion.Conjugate(upperParentRot) * upperWorldRot1));
 
-        // Lower: same, but its parent's world rotation just changed — re-run FK first.
-        world = new Pose(locals).ToWorld(skeleton);
-        var lowerParentRot = world[skeleton[lower].ParentIndex].Rot;
+        // Lower: same, but its parent's world rotation just changed — ancestor-chain walk
+        // over the updated locals (bit-identical to a full FK re-run, without allocating).
+        var lowerParentRot = FkUtil.BoneWorld(locals, skeleton, skeleton[lower].ParentIndex).Rot;
         var lowerWorldRot1 = MathQ.Normalize(lowerDelta * lowerWorldRot0);
         locals[lower] = new XForm(
             locals[lower].Pos,
@@ -120,8 +132,7 @@ public static class EffectorIk
         // End: counter-rotate so its WORLD rotation is unchanged (effector orientation must
         // not be disturbed by the IK swing). For end.parent == lower this is exactly the
         // inverse of the Lower world delta.
-        world = new Pose(locals).ToWorld(skeleton);
-        var endParentRot = world[skeleton[end].ParentIndex].Rot;
+        var endParentRot = FkUtil.BoneWorld(locals, skeleton, skeleton[end].ParentIndex).Rot;
         locals[end] = new XForm(
             locals[end].Pos,
             MathQ.Normalize(Quaternion.Conjugate(endParentRot) * endWorldRot0));

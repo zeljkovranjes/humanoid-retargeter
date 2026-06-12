@@ -475,15 +475,19 @@ public static class AutoMapper
         }
 
         // The two deepest pairs are the limb attachments (legs at the pelvis region, arms
-        // at the chest). The pair closer to their common ancestor is the leg pair (the
-        // pelvis sits next to the hips; the chest is several spine bones away).
+        // at the chest).
         var primary = pairs
             .OrderByDescending(p => Math.Min(subtreeDepth[p.Left], subtreeDepth[p.Right]))
             .Take(2)
             .ToArray();
-        var lca = LowestCommonAncestor(skeleton, depth, primary[0].Node, primary[1].Node);
-        var legsPair = depth[primary[0].Node] - depth[lca] <= depth[primary[1].Node] - depth[lca]
-            ? primary[0] : primary[1];
+        if (LowestCommonAncestor(skeleton, depth, primary[0].Node, primary[1].Node) is not { } lca)
+        {
+            result.Notes.Add(
+                "Limb pairs share no common ancestor (disconnected skeleton roots); no valid hips.");
+            return result;
+        }
+        var legsPair = PickLegsPair(
+            primary[0], primary[1], children, subtreeDepth, positions, lateralAxis, depth, lca);
         var armsPair = legsPair == primary[0] ? primary[1] : primary[0];
 
         var map = result.RoleToBone;
@@ -572,6 +576,73 @@ public static class AutoMapper
     {
         yield return (pair.Left, "L");
         yield return (pair.Right, "R");
+    }
+
+    /// <summary>
+    /// Decides geometrically which of the two limb pairs is the legs: the legs' chain end
+    /// effectors (feet/toes) sit at the very edge of the skeleton's vertical extent, while
+    /// the arms' ends (hands) lie well inside it in any rest pose (T- or A-pose). The up
+    /// axis is estimated from the rest extents (the non-lateral axis spanning the most);
+    /// comparing each end's distance to the NEAREST extent boundary makes the rule
+    /// independent of the up axis' sign. Near-ties fall back to pair-root extremity and
+    /// finally to hierarchy depth — never to construction order alone.
+    /// </summary>
+    private static SymmetricPair PickLegsPair(
+        SymmetricPair p0, SymmetricPair p1, List<int>[] children, int[] subtreeDepth,
+        Vector3[] positions, int lateralAxis, int[] depth, int lca)
+    {
+        var min = positions.Aggregate(Vector3.Min);
+        var max = positions.Aggregate(Vector3.Max);
+
+        var upAxis = -1;
+        var bestExtent = -1f;
+        for (var axis = 0; axis < 3; axis++)
+        {
+            if (axis == lateralAxis)
+                continue;
+            var extent = Component(max, axis) - Component(min, axis);
+            if (extent > bestExtent)
+            {
+                bestExtent = extent;
+                upAxis = axis;
+            }
+        }
+
+        var lo = Component(min, upAxis);
+        var hi = Component(max, upAxis);
+
+        // Distance of a pair's chain end effectors to the nearest vertical extent boundary.
+        float BoundaryDistance(SymmetricPair p)
+        {
+            var d = float.MaxValue;
+            foreach (var (root, _) in SidedRoots(p))
+            {
+                var chain = PrimaryChain(children, subtreeDepth, root);
+                var e = Component(positions[chain[^1]], upAxis);
+                d = MathF.Min(d, MathF.Min(e - lo, hi - e));
+            }
+            return d;
+        }
+
+        var tie = MathF.Max(1f, 0.02f * bestExtent);
+
+        var d0 = BoundaryDistance(p0);
+        var d1 = BoundaryDistance(p1);
+        if (MathF.Abs(d0 - d1) > tie)
+            return d0 < d1 ? p0 : p1;
+
+        // Near-tie on end effectors: the pelvis attachment sits nearer the feet end of the
+        // extent than the chest does.
+        var n0 = MathF.Min(Component(positions[p0.Node], upAxis) - lo,
+                           hi - Component(positions[p0.Node], upAxis));
+        var n1 = MathF.Min(Component(positions[p1.Node], upAxis) - lo,
+                           hi - Component(positions[p1.Node], upAxis));
+        if (MathF.Abs(n0 - n1) > tie)
+            return n0 < n1 ? p0 : p1;
+
+        // Geometric dead heat (degenerate rig): fall back to the hierarchy heuristic — the
+        // pair attached closer to the common ancestor is the legs.
+        return depth[p0.Node] - depth[lca] <= depth[p1.Node] - depth[lca] ? p0 : p1;
     }
 
     /// <summary>
@@ -787,7 +858,9 @@ public static class AutoMapper
         return nodes.Average(n => Component(positions[n], lateralAxis));
     }
 
-    private static int LowestCommonAncestor(SkeletonModel skeleton, int[] depth, int a, int b)
+    /// <summary>Lowest common ancestor of two bones, or null when they live in different
+    /// trees (multi-root skeletons / disconnected armatures).</summary>
+    private static int? LowestCommonAncestor(SkeletonModel skeleton, int[] depth, int a, int b)
     {
         while (a != b)
         {
@@ -796,7 +869,7 @@ public static class AutoMapper
             else
                 b = skeleton[b].ParentIndex;
             if (a < 0 || b < 0)
-                throw new InvalidOperationException("Bones share no common ancestor.");
+                return null;
         }
         return a;
     }

@@ -91,6 +91,10 @@ public sealed class GeometricSolver : IRetargetSolver
         private readonly CanonicalFrames _tgtCanon;
         private readonly Quaternion _chrSrcInv;
         private readonly Quaternion _chrTgt;
+
+        /// <summary>Premultiplier <c>Q_tgt · Q_src⁻¹</c> (character-frame change of basis) —
+        /// a solve-level constant shared by every direct entry.</summary>
+        private readonly Quaternion _basisChange;
         private readonly float _scaleH;
         private readonly float _scaleV;
         private readonly int _srcHips = -1;
@@ -107,10 +111,9 @@ public sealed class GeometricSolver : IRetargetSolver
 
             public required int TgtBone { get; init; }
 
-            /// <summary>Premultiplier <c>Q_tgt · Q_src⁻¹</c> (character-frame change of basis).</summary>
-            public required Quaternion A { get; init; }
-
-            /// <summary>Postmultiplier <c>C_src · C_tgt⁻¹ · R_tgtNormRest</c>.</summary>
+            /// <summary>Postmultiplier <c>C_src · C_tgt⁻¹ · R_tgtNormRest</c>.
+            /// (The premultiplier <c>Q_tgt · Q_src⁻¹</c> is the Plan-level
+            /// <see cref="_basisChange"/> — constant across entries.)</summary>
             public required Quaternion B { get; init; }
         }
 
@@ -154,6 +157,7 @@ public sealed class GeometricSolver : IRetargetSolver
             _chrSrcInv = Quaternion.Conjugate(
                 MathQ.BasisFromForwardUp(_srcCanon.CharacterForward, _srcCanon.CharacterUp));
             _chrTgt = MathQ.BasisFromForwardUp(_tgtCanon.CharacterForward, _tgtCanon.CharacterUp);
+            _basisChange = MathQ.Normalize(_chrTgt * _chrSrcInv);
 
             var ratio = _srcCanon.HipHeight > 1e-3f ? _tgtCanon.HipHeight / _srcCanon.HipHeight : 1f;
             if (!float.IsFinite(ratio) || ratio <= 0f)
@@ -219,7 +223,6 @@ public sealed class GeometricSolver : IRetargetSolver
             {
                 Slot = RegisterSlot(srcBone),
                 TgtBone = tgtBone,
-                A = MathQ.Normalize(_chrTgt * _chrSrcInv),
                 B = MathQ.Normalize(cs * Quaternion.Conjugate(ct) * _tgtNormRest[tgtBone].Rot),
             });
         }
@@ -347,7 +350,7 @@ public sealed class GeometricSolver : IRetargetSolver
 
             foreach (var d in _direct)
             {
-                _rot[d.TgtBone] = MathQ.Normalize(d.A * _deltas[d.Slot] * d.B);
+                _rot[d.TgtBone] = MathQ.Normalize(_basisChange * _deltas[d.Slot] * d.B);
                 _solved[d.TgtBone] = true;
             }
 
