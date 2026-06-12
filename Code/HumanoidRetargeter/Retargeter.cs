@@ -184,7 +184,8 @@ public static class Retargeter
         for (var take = 0; take < scene.Clips.Count; take++)
         {
             var clipName = UniqueClipName(
-                RequestedClipName(request, scene, take), usedNames, options.AutoSuffixCollisions);
+                SanitizeClipName(RequestedClipName(request, scene, take)),
+                usedNames, options.AutoSuffixCollisions);
             try
             {
                 var clip = SolveAndClean(request, target, context, scene, map, report, take, clipName);
@@ -419,10 +420,12 @@ public static class Retargeter
             return multipleTakes ? $"{request.ClipNameOverride}_{take + 1}" : request.ClipNameOverride!;
 
         var takeName = scene.Clips[take].Name;
-        if (!string.IsNullOrWhiteSpace(takeName) && takeName != "motion")
+        if (!string.IsNullOrWhiteSpace(takeName) && takeName != "motion"
+            && !takeName.Equals("mixamo.com", StringComparison.OrdinalIgnoreCase))
             return takeName;
 
-        // BVH files (clip always named "motion") and unnamed takes use the file stem.
+        // BVH files (clip always named "motion"), Mixamo takes (always named
+        // "mixamo.com") and unnamed takes use the file stem.
         var stem = FileStem(request.SourceFileName);
         return multipleTakes ? $"{stem}_{take + 1}" : stem;
     }
@@ -439,6 +442,33 @@ public static class Retargeter
             if (usedNames.Add(candidate))
                 return candidate;
         }
+    }
+
+    /// <summary>
+    /// Clip names become ModelDoc AnimFile node names and Source 2 sequence names, which
+    /// must stay within <c>[A-Za-z0-9_]</c> — a take name like <c>mixamo.com</c> otherwise
+    /// fails the vmdl compile with "Node 'mixamo.com' resolve failure". Runs of invalid
+    /// characters collapse to a single underscore; case is preserved.
+    /// </summary>
+    private static string SanitizeClipName(string name)
+    {
+        var builder = new StringBuilder(name.Length);
+        var lastWasUnderscore = false;
+        foreach (var c in name)
+        {
+            if (c is (>= 'a' and <= 'z') or (>= 'A' and <= 'Z') or (>= '0' and <= '9') or '_')
+            {
+                builder.Append(c);
+                lastWasUnderscore = c == '_';
+            }
+            else if (!lastWasUnderscore)
+            {
+                builder.Append('_');
+                lastWasUnderscore = true;
+            }
+        }
+        var sanitized = builder.ToString().Trim('_');
+        return sanitized.Length > 0 ? sanitized : "clip";
     }
 
     private static string FileStem(string fileName)

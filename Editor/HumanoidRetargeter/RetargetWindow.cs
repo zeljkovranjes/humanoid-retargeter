@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Editor;
 using HumanoidRetargeter.Cleanup;
 using HumanoidRetargeter.Mapping;
+using Sandbox;
 
 namespace HumanoidRetargeter.Editor;
 
@@ -41,6 +42,8 @@ public sealed class RetargetWindow : Widget
 	bool _augmentMode;
 	Asset _augmentAsset;
 	LineEdit _outputFolderEdit;
+	LineEdit _hipScaleHEdit;
+	LineEdit _hipScaleVEdit;
 
 	// UI
 	Layout _listLayout;
@@ -152,6 +155,14 @@ public sealed class RetargetWindow : Widget
 		armIk.ToolTip = "Pull wrists onto limb-length-normalized source hand positions. "
 			+ "Off by default - only useful for reach-critical clips.";
 		armIk.Clicked = () => _armIk = armIk.Value;
+
+		options.Layout.Add( new Label( this ) { Text = "Hip scale H/V:" } );
+		_hipScaleHEdit = options.Layout.Add( new LineEdit( this ) { PlaceholderText = "auto", FixedWidth = 46 } );
+		_hipScaleHEdit.ToolTip = "Scale of the pelvis translation perpendicular to the character up axis. "
+			+ "Empty = automatic (target hip height / source hip height).";
+		_hipScaleVEdit = options.Layout.Add( new LineEdit( this ) { PlaceholderText = "auto", FixedWidth = 46 } );
+		_hipScaleVEdit.ToolTip = "Scale of the pelvis translation along the character up axis. "
+			+ "Empty = automatic (hip-height ratio).";
 
 		options.Layout.Add( new Label( this ) { Text = "Output folder:" } );
 		_outputFolderEdit = options.Layout.Add( new LineEdit( this ) { Text = "animations/retargeted", MinimumWidth = 180 }, 1 );
@@ -418,7 +429,18 @@ public sealed class RetargetWindow : Widget
 		FootPlantCleanup = _footPlant,
 		ArmEffectorIk = _armIk,
 		LoopingOverride = _loopOverride,
+		Solve = new HumanoidRetargeter.Solve.SolveOptions
+		{
+			HipScaleHorizontal = ParseScale( _hipScaleHEdit ),
+			HipScaleVertical = ParseScale( _hipScaleVEdit ),
+		},
 	};
+
+	/// <summary>Empty / non-numeric / non-positive = null (automatic hip-height ratio).</summary>
+	static float? ParseScale( LineEdit edit )
+		=> float.TryParse( edit?.Text, System.Globalization.NumberStyles.Float,
+			System.Globalization.CultureInfo.InvariantCulture, out var v ) && v > 0f
+			? v : null;
 
 	async Task ConvertEntriesAsync( IReadOnlyList<SourceFileEntry> only )
 	{

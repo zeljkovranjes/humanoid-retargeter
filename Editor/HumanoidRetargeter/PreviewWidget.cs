@@ -150,6 +150,15 @@ public sealed class PreviewWidget : SceneRenderingWidget
 		}
 
 		_sceneModel.Update( RealTime.Delta );
+		ApplyCurrentFrame();
+	}
+
+	/// <summary>Applies the current frame's solved pose to the scene model (no-op without a
+	/// model or clip). Public so the UI smoke gate can drive a frame headlessly.</summary>
+	public void ApplyCurrentFrame()
+	{
+		if ( !_sceneModel.IsValid() || _clip?.SolvedFrames is not { Count: > 0 } frames )
+			return;
 		ApplyFrame( frames[Math.Clamp( CurrentFrame, 0, frames.Count - 1 )] );
 	}
 
