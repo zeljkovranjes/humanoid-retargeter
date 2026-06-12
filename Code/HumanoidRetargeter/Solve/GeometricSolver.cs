@@ -34,24 +34,31 @@ using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global
 /// curled finger rest vs Mixamo's straight fingers. Note ΔR is measured from the
 /// <i>normalized</i> rest, and the source's rest anatomy enters only through <c>C_src</c>,
 /// built on that same normalized rest.</para>
-/// <para><b>Per-role transfer modes.</b> The argument inverts for the shoulder girdle and
-/// neck carriage: a rig's clavicle line and neck-base direction are <i>anatomy</i>, not pose
-/// (Mixamo/UE/CMU rest clavicle directions diverge 6–28° from the s&amp;box rig's), so
-/// absolute matching drags the target's shoulders to the source's rest line and hunches the
-/// neck. Roles marked <see cref="RoleTransferMode.DeltaFromRest"/> (defaults:
-/// Clavicle L/R, Neck — see <see cref="SolveOptions.DefaultTransferModes"/>) instead replay
-/// the source's canonical-space delta from its own normalized rest onto the target's
-/// normalized rest: <c>R_tgtWorld(f) = C_tgt · ΔC(f) · C_tgt⁻¹ · R_tgtNormRest</c> with
-/// <c>ΔC(f) = C_src⁻¹·ΔR(f)·C_src</c>. Both modes share the postmultiplier
-/// <c>C_src·C_tgt⁻¹·R_tgtNormRest</c> and differ only in the premultiplier
-/// (<c>Q_tgt·Q_src⁻¹</c> vs <c>C_tgt·C_src⁻¹</c>); with source == target the two coincide,
-/// so the round-trip identity below holds for every mode. Under the DEFAULT modes
-/// (<see cref="SolveOptions.TransferModes"/> = null) feet additionally fall back to delta
-/// when the source foot direction is a <i>virtual</i> character-forward extension (no
-/// mapped toe) but the target's is real anatomy
+/// <para><b>Per-role transfer modes.</b> The argument inverts for roles whose rest direction
+/// is <i>anatomy</i>, not pose. Shoulder girdle / neck carriage (rest clavicle directions
+/// diverge 6–28° from the s&amp;box rig's): absolute matching drags the target's shoulders to
+/// the source's rest line and hunches the neck, so <see cref="RoleTransferMode.DeltaFromRest"/>
+/// roles instead replay the source's canonical-space delta from its own normalized rest onto
+/// the target's normalized rest: <c>R_tgtWorld(f) = C_tgt · ΔC(f) · C_tgt⁻¹ · R_tgtNormRest</c>
+/// with <c>ΔC(f) = C_src⁻¹·ΔR(f)·C_src</c>. Feet (rest foot→toe directions diverge 11–44°
+/// from the s&amp;box rig's steep ankle): absolute matching pitched/yawed planted feet by
+/// that divergence ("feet bent upward/inward"), while canonical-frame remapping would tilt
+/// the rotation <i>axes</i> by it (measured up to 47° planted-pitch error on a CMU-style
+/// rig) — so feet default to <see cref="RoleTransferMode.CharacterDeltaFromRest"/>, which
+/// replays the delta with its world axes intact:
+/// <c>R_tgtWorld(f) = M · ΔR(f) · M⁻¹ · R_tgtNormRest</c> with <c>M = Q_tgt·Q_src⁻¹</c>.
+/// All three modes differ only in the constant pre/postmultipliers around <c>ΔR(f)</c>
+/// (see <see cref="SolveOptions.DefaultTransferModes"/> for the default role set); with
+/// source == target every mode collapses to <c>ΔR(f)·R_normRest</c>, so the round-trip
+/// identity below holds regardless. Under the DEFAULT modes
+/// (<see cref="SolveOptions.TransferModes"/> = null) feet additionally fall back to
+/// canonical delta when the source foot direction is a <i>virtual</i> character-forward
+/// extension (no mapped toe) but the target's is real anatomy
 /// (<see cref="CanonicalFrames.HasVirtualPrimary"/>). An explicit (non-null) mode map
 /// disables that heuristic along with the defaults: the caller's entries are exact, roles
-/// absent from the map are absolute.</para>
+/// absent from the map are absolute. The residual planted-stance offset a source with a
+/// non-stance rest pose leaves behind (the delta modes reference the REST) is removed by
+/// the <see cref="Cleanup.FootGroundAlign"/> cleanup pass, not the solver.</para>
 /// <para>Identity proof (citizen round-trip): with source == target, <c>Q_tgt = Q_src</c>,
 /// <c>C_tgt = C_src</c> and the normalized rests coincide, so
 /// <c>R_tgt(f) = ΔR(f)·R_normRest = R_src(f)</c> exactly.</para>
@@ -131,12 +138,14 @@ public sealed class GeometricSolver : IRetargetSolver
 
             /// <summary>Premultiplier: <c>Q_tgt · Q_src⁻¹</c> (character-frame change of
             /// basis, the Plan-level <see cref="_basisChange"/>) for
-            /// <see cref="RoleTransferMode.AbsoluteDirection"/> entries,
+            /// <see cref="RoleTransferMode.AbsoluteDirection"/> and
+            /// <see cref="RoleTransferMode.CharacterDeltaFromRest"/> entries,
             /// <c>C_tgt · C_src⁻¹</c> for <see cref="RoleTransferMode.DeltaFromRest"/>.</summary>
             public required Quaternion Pre { get; init; }
 
-            /// <summary>Postmultiplier <c>C_src · C_tgt⁻¹ · R_tgtNormRest</c> (shared by both
-            /// transfer modes).</summary>
+            /// <summary>Postmultiplier: <c>C_src · C_tgt⁻¹ · R_tgtNormRest</c> for the two
+            /// canonical-frame modes, <c>Q_src · Q_tgt⁻¹ · R_tgtNormRest</c> for
+            /// <see cref="RoleTransferMode.CharacterDeltaFromRest"/>.</summary>
             public required Quaternion B { get; init; }
         }
 
@@ -251,15 +260,16 @@ public sealed class GeometricSolver : IRetargetSolver
 
             var cs = _srcCanon.WorldFrameOf(role);
             var ct = _tgtCanon.WorldFrameOf(role);
-            var delta = _modes.TryGetValue(role, out var mode) && mode == RoleTransferMode.DeltaFromRest;
+            if (!_modes.TryGetValue(role, out var mode))
+                mode = RoleTransferMode.AbsoluteDirection;
 
             // Feet whose SOURCE direction is a virtual character-forward extension (no mapped
-            // toe) while the target's is real anatomy fall back to delta transfer: absolute
-            // matching would impose that arbitrary virtual direction on the target's real
-            // ankle→ball chain every frame (measured: constant ~41° dorsiflex / heel-standing
-            // on the toe-less makehuman/daz rig). With real anatomy on both sides feet stay
-            // absolute — foot pitch carries ground-contact meaning. Same-rig round trips have
-            // equal virtual flags on both sides, so this never fires there.
+            // toe) while the target's is real anatomy fall back to canonical delta transfer:
+            // any direction-matching against that arbitrary virtual axis is meaningless
+            // (measured: constant ~41° dorsiflex / heel-standing on the toe-less
+            // makehuman/daz rig under absolute matching). With real anatomy on both sides
+            // feet take the CharacterDeltaFromRest default instead. Same-rig round trips
+            // have equal virtual flags on both sides, so this never fires there.
             // HEURISTIC, defaults only: an explicit TransferModes map is a contract — the
             // caller's entries (and absences = absolute) must win, so the fallback never
             // overrides it (see SolveOptions.TransferModes).
@@ -267,14 +277,20 @@ public sealed class GeometricSolver : IRetargetSolver
                 && role is BoneRole.FootL or BoneRole.FootR
                 && _srcCanon.HasVirtualPrimary(role) && !_tgtCanon.HasVirtualPrimary(role))
             {
-                delta = true;
+                mode = RoleTransferMode.DeltaFromRest;
             }
             _direct.Add(new DirectEntry
             {
                 Slot = RegisterSlot(srcBone),
                 TgtBone = tgtBone,
-                Pre = delta ? MathQ.Normalize(ct * Quaternion.Conjugate(cs)) : _basisChange,
-                B = MathQ.Normalize(cs * Quaternion.Conjugate(ct) * _tgtNormRest[tgtBone].Rot),
+                Pre = mode switch
+                {
+                    RoleTransferMode.DeltaFromRest => MathQ.Normalize(ct * Quaternion.Conjugate(cs)),
+                    _ => _basisChange,
+                },
+                B = mode == RoleTransferMode.CharacterDeltaFromRest
+                    ? MathQ.Normalize(Quaternion.Conjugate(_basisChange) * _tgtNormRest[tgtBone].Rot)
+                    : MathQ.Normalize(cs * Quaternion.Conjugate(ct) * _tgtNormRest[tgtBone].Rot),
             });
         }
 
