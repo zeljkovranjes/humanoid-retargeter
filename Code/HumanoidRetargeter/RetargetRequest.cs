@@ -136,6 +136,19 @@ public sealed class RetargetRequest
     /// </summary>
     public bool CreateMirroredVariant { get; init; }
 
+    /// <summary>
+    /// Additionally register an additive (delta) twin of every converted clip in the
+    /// generated/augmented vmdl (default OFF), named <c>&lt;clip&gt;_delta</c> (the shipped
+    /// citizen naming; collision-suffixed across the batch as usual). The twin is a second
+    /// AnimFile entry REUSING the clip's DMX with an <c>AnimSubtract</c> child
+    /// (<c>anim_name</c> = the base sequence, <c>frame</c> = 0) — exactly the shipped
+    /// <c>IdleLayer_01</c>/<c>IdleLayer_01_delta</c> pattern, where resourcecompiler
+    /// subtracts the reference frame at compile time (no frame math happens here). The
+    /// resulting <c>_delta</c> sequence is what s&amp;box layered animation additively
+    /// blends on top of a base pose.
+    /// </summary>
+    public bool CreateAdditiveVariant { get; init; }
+
     /// <summary>Output clip name override; with multiple takes an index suffix is appended.
     /// Null = the source take name.</summary>
     public string? ClipNameOverride { get; init; }

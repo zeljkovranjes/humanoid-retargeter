@@ -53,6 +53,24 @@ public sealed class AnimEntry
     /// <summary>AnimEvent children to emit on the AnimFile node (e.g. generated
     /// <c>AE_FOOTSTEP</c> events); empty = no event nodes.</summary>
     public IReadOnlyList<AnimEventEntry> Events { get; set; } = Array.Empty<AnimEventEntry>();
+
+    /// <summary>
+    /// When set, the AnimFile node gets an <c>AnimSubtract</c> child (first child, like the
+    /// shipped citizen data orders it) making the sequence an additive delta at compile time:
+    /// <c>anim_name</c> = this value (the sequence whose reference frame is subtracted —
+    /// the shipped <c>IdleLayer_01_delta</c> names its base sequence; other shipped entries
+    /// self-reference), <c>frame</c> = <see cref="SubtractFrame"/>. The animation source is
+    /// reused verbatim (<see cref="SourceFilename"/> points at the SAME file as the base
+    /// entry) — resourcecompiler performs the per-frame subtraction; no frame math happens
+    /// here. The AnimFile's own <c>delta</c> attribute stays <c>false</c>, exactly like every
+    /// shipped <c>_delta</c> sequence. Null = plain (non-additive) sequence.
+    /// </summary>
+    public string? SubtractAnimName { get; set; }
+
+    /// <summary>Reference frame index the AnimSubtract child subtracts (the shipped data uses
+    /// 0 for loops and mid-clip indices for aim matrices); ignored while
+    /// <see cref="SubtractAnimName"/> is null.</summary>
+    public int SubtractFrame { get; set; }
 }
 
 /// <summary>
@@ -136,7 +154,9 @@ public static class VmdlWriter
     /// requests motion extraction, an ExtractMotion child extracting ground-plane translation
     /// on <paramref name="motionRootBone"/> is included; <see cref="AnimEntry.Events"/>
     /// become AnimEvent children (shipped-prefab node shape, see
-    /// <see cref="AnimEventEntry"/>).
+    /// <see cref="AnimEventEntry"/>); <see cref="AnimEntry.SubtractAnimName"/> adds the
+    /// AnimSubtract FIRST child the shipped <c>_delta</c> sequences carry
+    /// (<c>_class</c>/<c>anim_name</c>/<c>frame</c>, nothing else).
     /// </summary>
     internal static KvObject BuildAnimFileNode(AnimEntry entry, string motionRootBone)
     {
@@ -149,6 +169,15 @@ public static class VmdlWriter
         };
 
         var nodeChildren = new KvArray();
+        if (entry.SubtractAnimName is not null)
+        {
+            nodeChildren.Items.Add(new KvObject
+            {
+                ["_class"] = new KvString("AnimSubtract"),
+                ["anim_name"] = new KvString(entry.SubtractAnimName),
+                ["frame"] = new KvLong(entry.SubtractFrame),
+            });
+        }
         if (entry.ExtractMotion)
         {
             var extract = new KvObject

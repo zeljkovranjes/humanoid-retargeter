@@ -429,8 +429,8 @@ public static class Retargeter
         try
         {
             clip = SolveAndClean(request, target, context, scene, map, report, take, clipName);
-            EmitClip(request, target, context, options, clips, entries, report, sourceId,
-                clipName, clip.Frames, clip.Fps, clip.Looping, isMirrored: false);
+            EmitClip(request, target, context, options, usedNames, clips, entries, report,
+                sourceId, clipName, clip.Frames, clip.Fps, clip.Looping, isMirrored: false);
         }
         catch (Exception e)
         {
@@ -459,8 +459,8 @@ public static class Retargeter
                 // (their mirrored channels are placeholders the baker overwrites).
                 if (context.HasIkBakedBones)
                     IkBoneBaker.Bake(mirroredFrames, target.Rig);
-                EmitClip(request, target, context, options, clips, entries, report, sourceId,
-                    mirroredName, mirroredFrames, clip.Fps, clip.Looping, isMirrored: true);
+                EmitClip(request, target, context, options, usedNames, clips, entries, report,
+                    sourceId, mirroredName, mirroredFrames, clip.Fps, clip.Looping, isMirrored: true);
             }
             catch (Exception e)
             {
@@ -481,10 +481,14 @@ public static class Retargeter
 
     /// <summary>Shared tail of clip production (primary and mirrored twin): optional footstep
     /// events, DMX serialization, the <see cref="ClipResult"/> and the vmdl
-    /// <see cref="AnimEntry"/>.</summary>
+    /// <see cref="AnimEntry"/> — plus the additive (<c>_delta</c>) companion entry when
+    /// <see cref="RetargetRequest.CreateAdditiveVariant"/> is on (a second AnimFile REUSING
+    /// the clip's DMX with an AnimSubtract child, shipped-citizen shape; no separate
+    /// <see cref="ClipResult"/> since no separate DMX exists).</summary>
     private static void EmitClip(
         RetargetRequest request, RetargetTargetSpec target, TargetContext context,
-        BatchOptions options, List<ClipResult> clips, List<AnimEntry> entries,
+        BatchOptions options, HashSet<string> usedNames,
+        List<ClipResult> clips, List<AnimEntry> entries,
         MappingReportInfo report, string sourceId,
         string clipName, List<XForm[]> frames, float fps, bool looping, bool isMirrored)
     {
@@ -502,6 +506,15 @@ public static class Retargeter
             });
 
         var extractMotion = request.RootMotion == RootMotionMode.Extract;
+
+        // Additive variant: '<clip>_delta' (shipped naming), collision-suffixed like every
+        // other batch name. Only the NAME is produced here — the vmdl entry below reuses
+        // the base clip's DMX (resourcecompiler does the reference-frame subtraction).
+        var deltaName = request.CreateAdditiveVariant
+            ? UniqueClipName(
+                SanitizeClipName(clipName + "_delta"), usedNames, options.AutoSuffixCollisions)
+            : null;
+
         clips.Add(new ClipResult
         {
             ClipName = clipName,
@@ -517,15 +530,32 @@ public static class Retargeter
             ExtractMotion = extractMotion,
             FootstepEvents = events,
             IsMirroredVariant = isMirrored,
+            HasAdditiveVariant = deltaName is not null,
+            AdditiveVariantName = deltaName,
         });
+        var sourceFilename = JoinAssetPath(options.DmxFolderRelative, dmxFileName);
         entries.Add(new AnimEntry
         {
             Name = clipName,
-            SourceFilename = JoinAssetPath(options.DmxFolderRelative, dmxFileName),
+            SourceFilename = sourceFilename,
             Looping = looping,
             ExtractMotion = extractMotion,
             Events = events,
         });
+        if (deltaName is not null)
+        {
+            // The shipped _delta sequences carry the AnimSubtract child and nothing else
+            // (no motion extraction, no events) — an additive layer fires no footsteps and
+            // extracting root motion from a delta makes no sense.
+            entries.Add(new AnimEntry
+            {
+                Name = deltaName,
+                SourceFilename = sourceFilename,
+                Looping = looping,
+                SubtractAnimName = clipName,
+                SubtractFrame = 0,
+            });
+        }
     }
 
     /// <summary>

@@ -138,6 +138,18 @@ public sealed class ClipResult
     /// collision-suffixed as usual).
     /// </summary>
     public bool IsMirroredVariant { get; init; }
+
+    /// <summary>
+    /// True when <see cref="RetargetRequest.CreateAdditiveVariant"/> registered a companion
+    /// additive (<c>_delta</c>) AnimFile entry for this clip in the generated/augmented vmdl
+    /// (an AnimSubtract sequence reusing this clip's DMX — no separate clip result exists,
+    /// since no separate DMX is produced).
+    /// </summary>
+    public bool HasAdditiveVariant { get; init; }
+
+    /// <summary>Name of the additive variant sequence (<c>&lt;clip&gt;_delta</c>,
+    /// collision-suffixed); null when <see cref="HasAdditiveVariant"/> is false.</summary>
+    public string? AdditiveVariantName { get; init; }
 }
 
 /// <summary>Result of a single-file <see cref="Retargeter.Convert"/> (all takes in the file).</summary>
