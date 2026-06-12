@@ -259,9 +259,11 @@ public sealed class SourceTakeEntry
 	/// index: file names AND take names may collide across the session).</summary>
 	public string SourceId => $"{File.FilePath}::take:{TakeIndex}";
 
-	/// <summary>Row label: <c>"file.fbx · TakeName"</c> for multi-take files, the bare file
-	/// name otherwise.</summary>
-	public string DisplayName => File.Takes.Count > 1 ? $"{File.FileName} · {TakeName}" : File.FileName;
+	/// <summary>Row label. Files with several animations list the ANIMATIONS, not the
+	/// container: each row shows the actual clip name (e.g. <c>Defense0</c>), with the file
+	/// it came from relegated to the row tooltip. Single-animation files keep the file name
+	/// (their take name is often exporter junk like <c>mixamo.com</c>).</summary>
+	public string DisplayName => File.Takes.Count > 1 ? TakeName : File.FileName;
 
 	/// <summary>What the row shows: the take's conversion status when one ran, else the
 	/// file's mapping status.</summary>

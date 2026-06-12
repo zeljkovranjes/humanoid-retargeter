@@ -939,7 +939,8 @@ public sealed class RetargetWindow : Widget
 			{
 				var takeLabel = Layout.Add( new Label( this )
 				{
-					Text = $"take {take.TakeIndex + 1}/{entry.ClipCount}",
+					// rows are the ANIMATIONS; this secondary label says which file they came from
+					Text = $"{entry.FileName} · {take.TakeIndex + 1}/{entry.ClipCount}",
 				} );
 				takeLabel.SetStyles( $"color: {Theme.TextLight.Hex};" );
 			}
