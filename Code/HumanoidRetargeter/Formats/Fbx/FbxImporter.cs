@@ -61,7 +61,9 @@ public static class FbxImporter
                 restWorlds = EvaluateWorlds(ctx, stack, ClipStartTicks(ctx, stack));
         }
 
-        var skeleton = BuildSkeleton(ctx, restWorlds);
+        var restLocals = WorldsToLocals(ctx, restWorlds);
+        ApplyStaticTranslationChannels(ctx, restLocals);
+        var skeleton = BuildSkeleton(ctx, restLocals);
 
         // ---- clips -----------------------------------------------------------------
         var clips = new List<Clip>();
@@ -318,9 +320,99 @@ public static class FbxImporter
         return null;
     }
 
-    private static Skeleton.Skeleton BuildSkeleton(ImportContext ctx, Matrix4x4[] restWorlds)
+    /// <summary>
+    /// Overrides rest local translation components with the animation's STATIC translation
+    /// channel values: a translation curve that is constant across its keys (or single-keyed)
+    /// is the rig geometry the animation actually plays, so the rest must use it — otherwise
+    /// canonical chain directions are built from one geometry while the clip drives the bone
+    /// with another.
+    /// </summary>
+    /// <remarks>
+    /// <para>Evidence: UE Mannequin animation FBX files (dev/corpus/ue_mannequin,
+    /// ThirdPersonWalk/Run) carry a BindPose whose foot→ball local offset disagrees with the
+    /// clip's static ball translation channels by 7.938° on both feet (every other bone pair
+    /// agrees to 0.000°). Building the rest from bind data alone produced a constant ~7.9°
+    /// toe-pitch error in retargeted output (dev/verification/RESULTS.md, 2026-06 corpus run).</para>
+    /// <para>Rules: only STATIC curves override — VARYING translation channels (e.g. hips
+    /// trajectories) never touch the rest, so a clip starting mid-pose cannot corrupt rest hip
+    /// height. FBX channels are per-axis (<c>d|X/Y/Z</c>); only the components that have a
+    /// static curve are overridden, others keep the bind/Lcl-derived value. Rotations are
+    /// untouched. A curve is static when its value range satisfies
+    /// <c>max−min &lt; max(1e-3, 1e-5·max|value|)</c> in native file units (cm for these rigs).</para>
+    /// </remarks>
+    private static void ApplyStaticTranslationChannels(ImportContext ctx, XForm[] restLocals)
     {
-        var locals = WorldsToLocals(ctx, restWorlds);
+        Span<float> statics = stackalloc float[3];
+        Span<bool> hasStatic = stackalloc bool[3];
+
+        for (int i = 0; i < ctx.Bones.Count; i++)
+        {
+            long id = ctx.Bones[i].Id;
+            FbxAnimCurveNode? cn = null;
+            foreach (var stack in ctx.Scene.Stacks)
+                if (stack.Bindings.TryGetValue((id, "Lcl Translation"), out cn))
+                    break;
+            if (cn is null)
+                continue;
+
+            hasStatic.Clear();
+            bool any = false;
+            for (int axis = 0; axis < 3; axis++)
+            {
+                if (cn.Channels.TryGetValue("XYZ"[axis], out var curve) &&
+                    TryGetStaticValue(curve, out statics[axis]))
+                {
+                    hasStatic[axis] = true;
+                    any = true;
+                }
+            }
+            if (!any)
+                continue;
+
+            // The Lcl translation enters the FBX local matrix purely additively after the
+            // pivot/offset terms (see FbxTransform.LocalMatrix), so the parent-frame rest
+            // position component is base + t. Rebuild the overridden components from the
+            // static channel value on top of the pivot base; others keep the bind-derived pos.
+            var xf = ctx.Transforms[i];
+            var basePos = xf.LocalMatrix(Vector3.Zero, xf.LclRotationDeg, xf.LclScaling)
+                .Translation;
+            var pos = restLocals[i].Pos; // centimeters
+            if (hasStatic[0]) pos.X = (basePos.X + statics[0]) * ctx.UnitScale;
+            if (hasStatic[1]) pos.Y = (basePos.Y + statics[1]) * ctx.UnitScale;
+            if (hasStatic[2]) pos.Z = (basePos.Z + statics[2]) * ctx.UnitScale;
+            restLocals[i].Pos = pos;
+        }
+    }
+
+    /// <summary>
+    /// True when the curve is effectively constant: single-keyed, or its value range is below
+    /// <c>max(1e-3, 1e-5·max|value|)</c> (native units). Returns the first key's value.
+    /// </summary>
+    private static bool TryGetStaticValue(FbxAnimCurve curve, out float value)
+    {
+        value = 0f;
+        var values = curve.KeyValues;
+        if (values.Length == 0)
+            return false;
+
+        float min = values[0], max = values[0], maxAbs = 0f;
+        foreach (float v in values)
+        {
+            if (!float.IsFinite(v))
+                return false;
+            min = MathF.Min(min, v);
+            max = MathF.Max(max, v);
+            maxAbs = MathF.Max(maxAbs, MathF.Abs(v));
+        }
+
+        if (max - min >= MathF.Max(1e-3f, 1e-5f * maxAbs))
+            return false;
+        value = values[0];
+        return true;
+    }
+
+    private static Skeleton.Skeleton BuildSkeleton(ImportContext ctx, XForm[] locals)
+    {
         var defs = new List<BoneDefinition>(ctx.Bones.Count);
         for (int i = 0; i < ctx.Bones.Count; i++)
         {
