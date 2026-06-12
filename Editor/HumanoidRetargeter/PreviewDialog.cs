@@ -1,0 +1,162 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Editor;
+using HumanoidRetargeter.Mapping;
+
+namespace HumanoidRetargeter.Editor;
+
+/// <summary>
+/// Modal preview + confirmation step (design §6 "Preview + preset learning"): shows the
+/// retargeted clip on the skinned <see cref="PreviewWidget"/> with play/pause + frame
+/// scrubbing, then either confirms ("Looks good - Convert", which also offers saving the
+/// mapping as a user preset when it came from manual edits or the blind auto-mapper) or
+/// cancels. The conversion itself is the caller's job - this dialog only decides.
+/// </summary>
+public sealed class PreviewDialog : Dialog
+{
+	readonly PreviewWidget _preview;
+	readonly FloatSlider _scrubber;
+	readonly Label _frameLabel;
+	readonly Button _playButton;
+	readonly Checkbox _savePresetCheckbox;
+	readonly List<HumanoidRetargeter.ClipResult> _clips;
+
+	/// <summary>Invoked on confirm with whether "Save as profile for this rig" was checked.</summary>
+	public Action<bool> Confirmed { get; set; }
+
+	/// <summary>Invoked when the user cancels (closes without converting).</summary>
+	public Action Cancelled { get; set; }
+
+	bool _confirmed;
+
+	/// <summary>
+	/// Creates the dialog over already-solved clips of one source file.
+	/// <paramref name="target"/> supplies the rig + preview model;
+	/// <paramref name="mappingSource"/> controls the preset-saving checkbox (shown for
+	/// Manual / AutoName / AutoTopology mappings, checked by default).
+	/// </summary>
+	public PreviewDialog(
+		Widget parent, string fileName, IReadOnlyList<HumanoidRetargeter.ClipResult> clips,
+		TargetPickers.ResolvedTarget target, MappingSource mappingSource ) : base( parent )
+	{
+		_clips = clips.Where( c => c.Success && c.SolvedFrames is { Count: > 0 } ).ToList();
+
+		Window.WindowTitle = $"Preview - {fileName}";
+		Window.SetWindowIcon( "preview" );
+		Window.SetModal( true, true );
+		Window.MinimumWidth = 560;
+		Window.MinimumHeight = 560;
+
+		Layout = Layout.Column();
+		Layout.Margin = 12;
+		Layout.Spacing = 8;
+
+		// ---- preview viewport ----------------------------------------------------------
+		_preview = new PreviewWidget( this, target.Spec.Rig, target.PreviewModelPath, target.PreviewPositionScale );
+		Layout.Add( _preview, 1 );
+
+		if ( !_preview.HasModel )
+		{
+			Layout.Add( new Label( this )
+			{
+				Text = "No compiled preview model exists for this target - the clip was solved, but cannot be shown skinned.",
+				WordWrap = true,
+			} );
+		}
+
+		// ---- clip picker (multi-take files) ---------------------------------------------
+		if ( _clips.Count > 1 )
+		{
+			var clipRow = Layout.AddRow();
+			clipRow.Spacing = 8;
+			clipRow.Add( new Label( this ) { Text = "Clip:" } );
+			var combo = clipRow.Add( new ComboBox( this ) { MinimumWidth = 220 } );
+			for ( var i = 0; i < _clips.Count; i++ )
+			{
+				var clip = _clips[i];
+				combo.AddItem( clip.ClipName, "movie", () => SelectClip( clip ), selected: i == 0 );
+			}
+			clipRow.AddStretchCell();
+		}
+
+		// ---- transport ------------------------------------------------------------------
+		var transport = Layout.AddRow();
+		transport.Spacing = 8;
+
+		_playButton = transport.Add( new Button( "", "pause" ) { FixedWidth = 28, FixedHeight = 24 } );
+		_playButton.Clicked = TogglePlay;
+
+		_scrubber = transport.Add( new FloatSlider( this ), 1 );
+		_scrubber.Minimum = 0;
+		_scrubber.OnValueEdited = () => _preview.Scrub( (int)_scrubber.Value );
+
+		_frameLabel = transport.Add( new Label( this ) { Text = "0 / 0", FixedWidth = 80 } );
+
+		_preview.FrameChanged = frame =>
+		{
+			_scrubber.Value = frame;
+			UpdateFrameLabel();
+		};
+
+		// ---- confirm row ------------------------------------------------------------------
+		var confirm = Layout.AddRow();
+		confirm.Spacing = 8;
+
+		if ( mappingSource is MappingSource.Manual or MappingSource.AutoName or MappingSource.AutoTopology )
+		{
+			_savePresetCheckbox = confirm.Add( new Checkbox( "Save as profile for this rig" ) { Value = true } );
+			_savePresetCheckbox.ToolTip =
+				"Stores the confirmed mapping as a user preset (keyed by the skeleton's signature), "
+				+ "so this rig is recognized automatically next time.";
+		}
+
+		confirm.AddStretchCell();
+
+		var cancel = confirm.Add( new Button( "Cancel" ) );
+		cancel.Clicked = Close;
+
+		var ok = confirm.Add( new Button.Primary( "Looks good - Convert" ) { Icon = "check" } );
+		ok.Tint = Theme.Green;
+		ok.Enabled = _clips.Count > 0;
+		ok.Clicked = () =>
+		{
+			_confirmed = true;
+			Confirmed?.Invoke( _savePresetCheckbox?.Value ?? false );
+			Close();
+		};
+
+		if ( _clips.Count > 0 )
+			SelectClip( _clips[0] );
+
+		Window.Size = new Vector2( 640, 720 );
+	}
+
+	void SelectClip( HumanoidRetargeter.ClipResult clip )
+	{
+		_preview.SetClip( clip );
+		_preview.Playing = true;
+		_playButton.Icon = "pause";
+		_scrubber.Maximum = Math.Max( _preview.FrameCount - 1, 0 );
+		_scrubber.Value = 0;
+		UpdateFrameLabel();
+	}
+
+	void TogglePlay()
+	{
+		_preview.Playing = !_preview.Playing;
+		_playButton.Icon = _preview.Playing ? "pause" : "play_arrow";
+	}
+
+	void UpdateFrameLabel()
+	{
+		_frameLabel.Text = $"{_preview.CurrentFrame + 1} / {_preview.FrameCount}";
+	}
+
+	public override void OnDestroyed()
+	{
+		base.OnDestroyed();
+		if ( !_confirmed )
+			Cancelled?.Invoke();
+	}
+}
