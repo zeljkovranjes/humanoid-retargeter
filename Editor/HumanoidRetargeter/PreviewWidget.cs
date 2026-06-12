@@ -1,8 +1,13 @@
 using System;
+using System.Collections.Generic;
 using Editor;
+using HumanoidRetargeter.Mapping;
 using HumanoidRetargeter.Maths;
 using HumanoidRetargeter.Target;
 using Sandbox;
+using SourceClip = HumanoidRetargeter.Skeleton.Clip;
+using SourceSkeleton = HumanoidRetargeter.Skeleton.Skeleton;
+using VecN = System.Numerics.Vector3;
 
 namespace HumanoidRetargeter.Editor;
 
@@ -50,6 +55,25 @@ public sealed class PreviewWidget : SceneRenderingWidget
 	float _time;
 	float _yaw = 35f;
 	Vector2 _lastMouse;
+
+	// ---- source ghost (stick-skeleton overlay of the SOURCE clip) -----------------------
+	SceneLineObject _ghost;
+	SourceSkeleton _ghostSkeleton;
+	SourceClip _ghostClip;
+	XForm[] _ghostScratch;
+	bool _showSourceGhost;
+
+	// source-side alignment (fixed once per SetSourceGhost)
+	VecN _srcAnchor, _srcLat, _srcUp, _srcFwd;
+	float _srcHipHeight;
+
+	// target-side alignment (lazy, recomputed when the previewed clip changes)
+	HumanoidRetargeter.ClipResult _ghostAlignedClip;
+	VecN _tgtAnchor, _tgtLat, _tgtUp, _tgtFwd;
+	float _ghostScale = 1f;
+
+	static readonly Color GhostBoneColor = new( 1f, 0.75f, 0.25f, 0.5f );   // amber, ~50%
+	static readonly Color GhostJointColor = new( 1f, 0.8f, 0.35f, 0.65f );
 
 	/// <summary>Whether playback advances (play/pause).</summary>
 	public bool Playing { get; set; } = true;
@@ -119,6 +143,7 @@ public sealed class PreviewWidget : SceneRenderingWidget
 		_clip = clip;
 		_time = 0;
 		CurrentFrame = 0;
+		_ghostAlignedClip = null; // ghost anchor depends on this clip's frame 0 - recompute
 	}
 
 	/// <summary>Jumps to a frame (scrubber); pauses playback.</summary>
@@ -152,7 +177,7 @@ public sealed class PreviewWidget : SceneRenderingWidget
 		Scene.EditorTick( RealTime.Now, RealTime.Delta );
 		UpdateCamera();
 
-		if ( !_sceneModel.IsValid() || _clip?.SolvedFrames is not { Count: > 0 } frames )
+		if ( _clip?.SolvedFrames is not { Count: > 0 } frames )
 			return;
 
 		if ( Playing )
@@ -168,17 +193,19 @@ public sealed class PreviewWidget : SceneRenderingWidget
 			}
 		}
 
-		_sceneModel.Update( RealTime.Delta );
+		if ( _sceneModel.IsValid() )
+			_sceneModel.Update( RealTime.Delta );
 		ApplyCurrentFrame();
 	}
 
 	/// <summary>Applies the current frame's solved pose to the scene model (no-op without a
-	/// model or clip). Public so the UI smoke gate can drive a frame headlessly.</summary>
+	/// model or clip), then syncs the source ghost overlay to the same normalized time.
+	/// Public so the UI smoke gate can drive a frame headlessly.</summary>
 	public void ApplyCurrentFrame()
 	{
-		if ( !_sceneModel.IsValid() || _clip?.SolvedFrames is not { Count: > 0 } frames )
-			return;
-		ApplyPose( frames[Math.Clamp( CurrentFrame, 0, frames.Count - 1 )] );
+		if ( _sceneModel.IsValid() && _clip?.SolvedFrames is { Count: > 0 } frames )
+			ApplyPose( frames[Math.Clamp( CurrentFrame, 0, frames.Count - 1 )] );
+		UpdateGhost();
 	}
 
 	/// <summary>
@@ -246,6 +273,235 @@ public sealed class PreviewWidget : SceneRenderingWidget
 		if ( bone is null )
 			return null;
 		return _sceneModel.GetBoneWorldTransform( bone.Index );
+	}
+
+	// ============================================================================ source ghost
+
+	/// <summary>True when source-ghost data was installed (drives the dialog's toggle).</summary>
+	public bool HasSourceGhost => _ghostClip is not null;
+
+	/// <summary>Show the source clip as a semi-transparent stick-skeleton overlay (off by
+	/// default; the preview dialog's "Show source" toggle drives this).</summary>
+	public bool ShowSourceGhost
+	{
+		get => _showSourceGhost;
+		set
+		{
+			_showSourceGhost = value;
+			if ( _ghost is not null )
+				_ghost.RenderingEnabled = value && HasSourceGhost;
+		}
+	}
+
+	/// <summary>Line segments the ghost drew on its last update (bones + joint ticks).
+	/// Exposed for the UI smoke gate's headless assertion.</summary>
+	public int GhostLineCount { get; private set; }
+
+	/// <summary>
+	/// Installs the SOURCE clip for the ghost overlay: <paramref name="skeleton"/> /
+	/// <paramref name="clip"/> are the imported source scene's (cm, native axes);
+	/// <paramref name="mapping"/> locates hips/legs/shoulders for the alignment. The ghost is
+	/// root-aligned to the target (the source's hips ground-projection is moved onto the
+	/// target's hips ground-projection at frame 0) and scaled by the hip-height ratio so the
+	/// two rigs compare at the same size. No-op (ghost unavailable) when the mapping lacks
+	/// the bones the character frame needs.
+	/// </summary>
+	public void SetSourceGhost( SourceSkeleton skeleton, SourceClip clip, MappingResult mapping )
+	{
+		if ( skeleton is null || clip is null || clip.Frames.Count == 0 || mapping is null )
+			return;
+
+		int? SrcBone( BoneRole role )
+			=> mapping.RoleToBone.TryGetValue( role, out var index ) ? index : null;
+
+		if ( !TryCharacterBasis( SrcBone, skeleton.RestWorld, out _srcLat, out _srcUp, out _srcFwd,
+			out _srcHipHeight, out var srcGround ) )
+		{
+			Log.Info( "[humanoid-retargeter] preview: source ghost unavailable (mapping lacks the hips/legs/shoulder bones the alignment needs)." );
+			return;
+		}
+
+		_ghostSkeleton = skeleton;
+		_ghostClip = clip;
+		_ghostScratch = new XForm[skeleton.Count];
+		_ghostAlignedClip = null;
+
+		// Anchor = the source hips' ground projection at frame 0 (clips that start offset
+		// from the origin - BVH mocap especially - must not push the ghost away).
+		var hipsIndex = SrcBone( BoneRole.Hips ) ?? 0;
+		var hips0 = FkPosition( skeleton, clip.Frames[0], _ghostScratch, hipsIndex );
+		_srcAnchor = hips0 + _srcUp * (srcGround - VecN.Dot( hips0, _srcUp ));
+
+		if ( _ghost is null )
+		{
+			_ghost = new SceneLineObject( Scene.SceneWorld );
+			_ghost.Opaque = false;     // vertex alpha = the ~50% ghost dimming
+			_ghost.Lighting = false;
+		}
+		_ghost.RenderingEnabled = _showSourceGhost;
+	}
+
+	/// <summary>Target-side alignment: anchor on the TARGET's hips ground-projection at
+	/// frame 0 of the previewed clip, hip-height-ratio scale. Lazy - both clips must be
+	/// known; recomputed when the previewed clip changes.</summary>
+	bool EnsureGhostAlignment()
+	{
+		if ( _clip?.SolvedFrames is not { Count: > 0 } frames )
+			return false;
+		if ( ReferenceEquals( _ghostAlignedClip, _clip ) )
+			return true;
+
+		int? TgtBone( BoneRole role ) => _rig.BoneForRole( role );
+
+		if ( !TryCharacterBasis( TgtBone, _rig.Skeleton.RestWorld, out _tgtLat, out _tgtUp, out _tgtFwd,
+			out var tgtHipHeight, out var tgtGround ) )
+			return false;
+
+		var hipsIndex = _rig.BoneForRole( BoneRole.Hips ) ?? 0;
+		var hips0 = FkPosition( _rig.Skeleton, frames[0], _worldScratch, hipsIndex );
+		_tgtAnchor = hips0 + _tgtUp * (tgtGround - VecN.Dot( hips0, _tgtUp ));
+		_ghostScale = _srcHipHeight > 1e-3f ? tgtHipHeight / _srcHipHeight : 1f;
+		_ghostAlignedClip = _clip;
+		return true;
+	}
+
+	/// <summary>Redraws the ghost at the scrub position: the source frame is picked by
+	/// NORMALIZED time (source and target clips may differ in frame count), FK'd, mapped
+	/// through the character-basis alignment into target rig space and drawn as parent→child
+	/// line segments plus small joint ticks.</summary>
+	void UpdateGhost()
+	{
+		if ( _ghost is null || _ghostClip is null )
+			return;
+
+		if ( !_showSourceGhost || !EnsureGhostAlignment() )
+		{
+			_ghost.RenderingEnabled = false;
+			return;
+		}
+		_ghost.RenderingEnabled = true;
+
+		// Normalized-time sync (fence-post frames: first→first, last→last).
+		var ghostFrames = _ghostClip.Frames;
+		var t = FrameCount > 1 ? CurrentFrame / (float)(FrameCount - 1) : 0f;
+		var gi = Math.Clamp( (int)MathF.Round( t * (ghostFrames.Count - 1) ), 0, ghostFrames.Count - 1 );
+
+		var skeleton = _ghostSkeleton;
+		var locals = ghostFrames[gi];
+		var count = Math.Min( locals.Length, skeleton.Count );
+		for ( var i = 0; i < count; i++ )
+		{
+			var parent = skeleton[i].ParentIndex;
+			_ghostScratch[i] = parent < 0 ? locals[i] : XForm.Compose( _ghostScratch[parent], locals[i] );
+		}
+
+		_ghost.Clear();
+		GhostLineCount = 0;
+		for ( var i = 0; i < count; i++ )
+		{
+			var pos = GhostToEngine( _ghostScratch[i].Pos );
+
+			var parent = skeleton[i].ParentIndex;
+			if ( parent >= 0 && parent < count )
+			{
+				var parentPos = GhostToEngine( _ghostScratch[parent].Pos );
+				_ghost.StartLine();
+				_ghost.AddLinePoint( parentPos, GhostBoneColor, 0.5f );
+				_ghost.AddLinePoint( pos, GhostBoneColor, 0.5f );
+				_ghost.EndLine();
+				GhostLineCount++;
+			}
+
+			// Joint marker: a stubby wide segment reads as a small sphere at preview scale.
+			_ghost.StartLine();
+			_ghost.AddLinePoint( pos - Vector3.Up * 0.4f, GhostJointColor, 1.2f );
+			_ghost.AddLinePoint( pos + Vector3.Up * 0.4f, GhostJointColor, 1.2f );
+			_ghost.EndLine();
+			GhostLineCount++;
+		}
+	}
+
+	/// <summary>Source world position (cm, native axes) → engine space: express the offset
+	/// from the source anchor in the source character basis, re-emit it in the target's
+	/// character basis at the target anchor (hip-ratio scaled), then run the widget's normal
+	/// rig→engine conversion.</summary>
+	Vector3 GhostToEngine( VecN p )
+	{
+		var d = p - _srcAnchor;
+		var a = new VecN( VecN.Dot( d, _srcLat ), VecN.Dot( d, _srcUp ), VecN.Dot( d, _srcFwd ) ) * _ghostScale;
+		var rigPos = _tgtAnchor + _tgtLat * a.X + _tgtUp * a.Y + _tgtFwd * a.Z;
+		return RigWorldToEngine( new XForm( rigPos, System.Numerics.Quaternion.Identity ) ).Position;
+	}
+
+	/// <summary>FK of one frame down to every bone, returning <paramref name="boneIndex"/>'s
+	/// world position (scratch is filled as a side effect).</summary>
+	static VecN FkPosition( SourceSkeleton skeleton, XForm[] locals, XForm[] scratch, int boneIndex )
+	{
+		var count = Math.Min( locals.Length, skeleton.Count );
+		for ( var i = 0; i < count; i++ )
+		{
+			var parent = skeleton[i].ParentIndex;
+			scratch[i] = parent < 0 ? locals[i] : XForm.Compose( scratch[parent], locals[i] );
+		}
+		return scratch[Math.Clamp( boneIndex, 0, count - 1 )].Pos;
+	}
+
+	/// <summary>
+	/// Character-level basis of a rig from rest GEOMETRY (the same definition the solver's
+	/// CharacterFrame uses, duplicated here because that type is internal to the core
+	/// assembly): up = mid-hips→mid-shoulders, lateral = left-positive hip line ⊥ up,
+	/// forward = cross(lateral, up); hip height/ground measured along up over the mapped
+	/// feet (all bones when no feet are mapped). False when the rig lacks the needed bones.
+	/// </summary>
+	static bool TryCharacterBasis(
+		Func<BoneRole, int?> boneOf, IReadOnlyList<XForm> restWorld,
+		out VecN lateral, out VecN up, out VecN forward, out float hipHeight, out float ground )
+	{
+		lateral = up = forward = default;
+		hipHeight = ground = 0f;
+
+		VecN? Pos( BoneRole role ) => boneOf( role ) is { } index && index >= 0 && index < restWorld.Count
+			? restWorld[index].Pos : null;
+		VecN? Mid( VecN? a, VecN? b ) => a is not null && b is not null ? (a.Value + b.Value) * 0.5f : null;
+
+		var legL = Pos( BoneRole.UpperLegL );
+		var legR = Pos( BoneRole.UpperLegR );
+		if ( legL is null || legR is null )
+			return false;
+		var midHips = (legL.Value + legR.Value) * 0.5f;
+
+		var midShoulders = Mid( Pos( BoneRole.UpperArmL ), Pos( BoneRole.UpperArmR ) )
+			?? Mid( Pos( BoneRole.ClavicleL ), Pos( BoneRole.ClavicleR ) )
+			?? Pos( BoneRole.Neck );
+		if ( midShoulders is null )
+			return false;
+
+		var upRaw = midShoulders.Value - midHips;
+		if ( upRaw.LengthSquared() < 1e-8f )
+			return false;
+		up = VecN.Normalize( upRaw );
+
+		var acrossHips = legL.Value - legR.Value;
+		var latRaw = acrossHips - up * VecN.Dot( acrossHips, up );
+		if ( latRaw.LengthSquared() < 1e-8f )
+			return false;
+		lateral = VecN.Normalize( latRaw );
+		forward = VecN.Normalize( VecN.Cross( lateral, up ) );
+
+		ground = float.PositiveInfinity;
+		foreach ( var role in new[] { BoneRole.FootL, BoneRole.FootR, BoneRole.ToeL, BoneRole.ToeR } )
+		{
+			if ( Pos( role ) is { } foot )
+				ground = MathF.Min( ground, VecN.Dot( foot, up ) );
+		}
+		if ( float.IsPositiveInfinity( ground ) )
+		{
+			foreach ( var world in restWorld )
+				ground = MathF.Min( ground, VecN.Dot( world.Pos, up ) );
+		}
+
+		hipHeight = VecN.Dot( midHips, up ) - ground;
+		return hipHeight > 1e-3f;
 	}
 
 	void UpdateCamera()

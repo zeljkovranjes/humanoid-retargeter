@@ -10,7 +10,10 @@
 //      -> auto map) - plus Retargeter.Inspect for the report
 //   3. resolves the s&box default target via TargetPickers.SboxDefault (window path)
 //   4. Retargeter.ConvertBatch with the entry's mapping as override (window path)
-//   5. constructs a PreviewWidget on the result and applies a solved frame headlessly
+//   4.5 constructs the RetargetWindow itself (stacked options layout) and asserts the
+//      footstep-events / mirrored-variants checkboxes reach BuildRequest
+//   5. constructs a PreviewWidget on the result, applies a solved frame headlessly and
+//      draws the source-ghost overlay (the preview's "Show source" toggle)
 //   6. round-trips a user preset (UserPresets.Save -> TryLoad) for the fixture rig
 //   7. EditorPipeline.WriteAndCompileAsync: DMX + standalone vmdl into Assets,
 //      RegisterFile + Compile, polls the .vmdl_c
@@ -84,6 +87,7 @@ public static class UiSmokeGate
 		Result.passed = Result.dmxVmdlCompiled && Result.compiledFileFresh
 			&& Result.sequenceVisible
 			&& Result.previewWidgetOk && Result.userPresetRoundTrip
+			&& Result.windowConstructed && Result.optionsPlumbingOk
 			&& Result.dlSolverOk && Result.citizenTargetOk
 			&& (!Result.augmentMode || Result.augmentOk);
 		Flush();
@@ -215,6 +219,35 @@ public static class UiSmokeGate
 		if ( Result.solvedClipCount == 0 )
 			return;
 
+		// ---- 4.5 RetargetWindow construction + options plumbing ------------------
+		// Constructs the dock window headlessly (the BuildUi stacked-columns layout must
+		// never throw) and asserts the footstep-events / mirrored-variants checkboxes
+		// reach the facade request via BuildRequest (internal gate hook).
+		try
+		{
+			var window = new RetargetWindow( null );
+			Result.windowConstructed = true;
+
+			var take = entry.Takes[0];
+			var defaults = window.BuildRequestForGate( take, footstepEvents: false, mirroredVariants: false );
+			var flipped = window.BuildRequestForGate( take, footstepEvents: true, mirroredVariants: true );
+			Result.optionsPlumbingOk =
+				!defaults.GenerateFootstepEvents && !defaults.CreateMirroredVariant
+				&& flipped.GenerateFootstepEvents && flipped.CreateMirroredVariant;
+			Note( $"RetargetWindow: constructed, options plumbing ok={Result.optionsPlumbingOk} "
+				+ $"(defaults footsteps={defaults.GenerateFootstepEvents} mirror={defaults.CreateMirroredVariant}; "
+				+ $"flipped footsteps={flipped.GenerateFootstepEvents} mirror={flipped.CreateMirroredVariant})" );
+
+			window.Destroy();
+		}
+		catch ( Exception e )
+		{
+			Result.windowConstructed = false;
+			Result.optionsPlumbingOk = false;
+			Note( $"RetargetWindow construction/plumbing FAILED: {e}" );
+		}
+		Flush();
+
 		// ---- 5. preview widget on the solved frames (headless) -----------------
 		try
 		{
@@ -228,6 +261,24 @@ public static class UiSmokeGate
 			preview.ApplyCurrentFrame();
 			Result.previewWidgetOk = true;
 			Note( $"PreviewWidget: hasModel={preview.HasModel} frames={preview.FrameCount} frame applied OK" );
+
+			// Source ghost (the preview dialog's "Show source" toggle): install the source
+			// clip, enable, re-apply the frame and require the overlay to have drawn lines.
+			try
+			{
+				preview.SetSourceGhost( entry.Scene.Skeleton, entry.Scene.Clips[0], entry.Mapping );
+				preview.ShowSourceGhost = true;
+				preview.ApplyCurrentFrame();
+				Result.previewGhostOk = preview.HasSourceGhost && preview.GhostLineCount > 0;
+				Note( $"source ghost: hasGhost={preview.HasSourceGhost} lines={preview.GhostLineCount} "
+					+ $"ok={Result.previewGhostOk}" );
+			}
+			catch ( Exception e )
+			{
+				Result.previewGhostOk = false;
+				Note( $"source ghost FAILED: {e}" );
+			}
+			Result.previewWidgetOk &= Result.previewGhostOk;
 
 			// Axis-conversion assertions (Y-up cm rig → Z-up inch engine model). Without the
 			// conversion the preview lies on its back; these pin it upright.
@@ -610,7 +661,10 @@ public static class UiSmokeGate
 		public bool previewModelLoaded { get; set; }
 		public bool previewWidgetOk { get; set; }
 		public bool previewPoseUpright { get; set; }
+		public bool previewGhostOk { get; set; }
 		public string previewPelvisRest { get; set; }
+		public bool windowConstructed { get; set; }
+		public bool optionsPlumbingOk { get; set; }
 		public bool userPresetRoundTrip { get; set; }
 		public bool dlSolverOk { get; set; }
 		public bool citizenTargetOk { get; set; }

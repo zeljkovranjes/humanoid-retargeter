@@ -11,8 +11,8 @@ using Sandbox;
 namespace HumanoidRetargeter.Editor;
 
 /// <summary>
-/// The Humanoid Retargeter dock window (design §7): add .fbx/.bvh files (file dialog or
-/// asset-browser context menu), see each file's detected profile as a colored chip
+/// The Humanoid Retargeter dock window (design §7): add .fbx/.bvh/.glb/.gltf/.vrm files
+/// (file dialog or asset-browser context menu), see each file's detected profile as a colored chip
 /// (green = preset/user preset, amber = auto-mapped/needs review, red = failed), fix
 /// mappings manually, preview the retargeted clip on the skinned target model, and batch
 /// convert everything into one animation vmdl (standalone or augmenting an existing one).
@@ -39,6 +39,8 @@ public sealed class RetargetWindow : Widget
 	bool _footPlant = true;
 	bool _armIk;
 	bool _naturalCarriage = true;
+	bool _footstepEvents;
+	bool _mirroredVariants;
 	bool? _loopOverride;
 
 	// Output
@@ -100,7 +102,7 @@ public sealed class RetargetWindow : Widget
 		top.Spacing = 8;
 
 		var add = top.Add( new Button.Primary( "Add Files…" ) { Icon = "add" } );
-		add.ToolTip = "Add .fbx / .bvh / .glb / .gltf animation files to convert";
+		add.ToolTip = "Add .fbx / .bvh / .glb / .gltf / .vrm animation files to convert";
 		add.Clicked = AddFilesViaDialog;
 
 		top.AddSpacingCell( 8 );
@@ -136,27 +138,30 @@ public sealed class RetargetWindow : Widget
 		_listLayout = scroll.Canvas.Layout;
 
 		// ---- options ---------------------------------------------------------------------
+		// Three stacked COLUMNS, not one ever-wider row: new toggles grow DOWN their column,
+		// so the window stays narrow as options accumulate.
 		var options = Layout.Add( new Group( this ) { Title = "Options", Icon = "tune" } );
 		options.Layout = Layout.Row();
 		options.Layout.Margin = new Sandbox.UI.Margin( 14, 30, 14, 12 );
-		options.Layout.Spacing = 16;
+		options.Layout.Spacing = 24;
 
-		options.Layout.Add( new Label( this ) { Text = "Root motion:" } );
-		var rootCombo = options.Layout.Add( new ComboBox( this ) { MinimumWidth = 150 } );
+		// -- column 1: root motion + motion-quality / output-variant toggles ---------------
+		var col1 = options.Layout.AddColumn();
+		col1.Spacing = 6;
+
+		var rootRow = col1.AddRow();
+		rootRow.Spacing = 8;
+		rootRow.Add( new Label( this ) { Text = "Root motion:" } );
+		var rootCombo = rootRow.Add( new ComboBox( this ) { MinimumWidth = 150 } );
 		rootCombo.AddItem( "Keep as authored", null, () => _rootMotion = RootMotionMode.Off, selected: true );
 		rootCombo.AddItem( "In place (strip)", null, () => _rootMotion = RootMotionMode.InPlace );
 		rootCombo.AddItem( "Extract to root", null, () => _rootMotion = RootMotionMode.Extract );
+		rootRow.AddStretchCell();
 
-		options.Layout.Add( new Label( this ) { Text = "Looping:" } );
-		var loopCombo = options.Layout.Add( new ComboBox( this ) { MinimumWidth = 120 } );
-		loopCombo.AddItem( "From source", null, () => _loopOverride = null, selected: true );
-		loopCombo.AddItem( "Force on", null, () => _loopOverride = true );
-		loopCombo.AddItem( "Force off", null, () => _loopOverride = false );
-
-		var footPlant = options.Layout.Add( new Checkbox( "Foot-plant cleanup" ) { Value = _footPlant } );
+		var footPlant = col1.Add( new Checkbox( "Foot-plant cleanup" ) { Value = _footPlant } );
 		footPlant.Clicked = () => _footPlant = footPlant.Value;
 
-		var carriage = options.Layout.Add( new Checkbox( "Natural shoulder/neck/head/foot carriage" ) { Value = _naturalCarriage } );
+		var carriage = col1.Add( new Checkbox( "Natural shoulder/neck/head/foot carriage" ) { Value = _naturalCarriage } );
 		carriage.ToolTip = "Keep the s&box body's own shoulder line, neck posture, skull attitude and ankle anatomy, transferring only the "
 			+ "source's motion (a source whose bind pose is itself posed - e.g. a fighting-stance rest - automatically keeps the head "
 			+ "following the source's gaze instead). "
@@ -164,27 +169,68 @@ public sealed class RetargetWindow : Widget
 			+ "planted feet upward on differently-proportioned rigs).";
 		carriage.Clicked = () => _naturalCarriage = carriage.Value;
 
-		var armIk = options.Layout.Add( new Checkbox( "Arm effector IK" ) { Value = _armIk } );
+		var footsteps = col1.Add( new Checkbox( "Footstep events" ) { Value = _footstepEvents } );
+		footsteps.ToolTip = "Generates AE_FOOTSTEP events from detected foot plants.";
+		footsteps.Clicked = () => _footstepEvents = footsteps.Value;
+
+		var mirrored = col1.Add( new Checkbox( "Mirrored variants" ) { Value = _mirroredVariants } );
+		mirrored.ToolTip = "Also produce a left/right-mirrored twin of every clip, named <clip>_M.";
+		mirrored.Clicked = () => _mirroredVariants = mirrored.Value;
+
+		col1.AddStretchCell();
+
+		// -- column 2: looping + arm IK + output folder -------------------------------------
+		var col2 = options.Layout.AddColumn();
+		col2.Spacing = 6;
+
+		var loopRow = col2.AddRow();
+		loopRow.Spacing = 8;
+		loopRow.Add( new Label( this ) { Text = "Looping:" } );
+		var loopCombo = loopRow.Add( new ComboBox( this ) { MinimumWidth = 120 } );
+		loopCombo.AddItem( "From source", null, () => _loopOverride = null, selected: true );
+		loopCombo.AddItem( "Force on", null, () => _loopOverride = true );
+		loopCombo.AddItem( "Force off", null, () => _loopOverride = false );
+		loopRow.AddStretchCell();
+
+		var armIk = col2.Add( new Checkbox( "Arm effector IK" ) { Value = _armIk } );
 		armIk.ToolTip = "Pull wrists onto limb-length-normalized source hand positions. "
 			+ "Off by default - only useful for reach-critical clips.";
 		armIk.Clicked = () => _armIk = armIk.Value;
 
-		options.Layout.Add( new Label( this ) { Text = "Hip scale H/V:" } );
-		_hipScaleHEdit = options.Layout.Add( new LineEdit( this ) { PlaceholderText = "auto", FixedWidth = 46 } );
+		var outputRow = col2.AddRow();
+		outputRow.Spacing = 8;
+		outputRow.Add( new Label( this ) { Text = "Output folder:" } );
+		_outputFolderEdit = outputRow.Add( new LineEdit( this ) { Text = "animations/retargeted", MinimumWidth = 140 }, 1 );
+		_outputFolderEdit.ToolTip = "Assets-relative folder the DMX files (and the standalone vmdl) are written to.";
+
+		col2.AddStretchCell();
+
+		// -- column 3: numeric tunables ------------------------------------------------------
+		var col3 = options.Layout.AddColumn();
+		col3.Spacing = 6;
+
+		var hipRow = col3.AddRow();
+		hipRow.Spacing = 8;
+		hipRow.Add( new Label( this ) { Text = "Hip scale H/V:" } );
+		_hipScaleHEdit = hipRow.Add( new LineEdit( this ) { PlaceholderText = "auto", FixedWidth = 46 } );
 		_hipScaleHEdit.ToolTip = "Scale of the pelvis translation perpendicular to the character up axis. "
 			+ "Empty = automatic (target hip height / source hip height).";
-		_hipScaleVEdit = options.Layout.Add( new LineEdit( this ) { PlaceholderText = "auto", FixedWidth = 46 } );
+		_hipScaleVEdit = hipRow.Add( new LineEdit( this ) { PlaceholderText = "auto", FixedWidth = 46 } );
 		_hipScaleVEdit.ToolTip = "Scale of the pelvis translation along the character up axis. "
 			+ "Empty = automatic (hip-height ratio).";
+		hipRow.AddStretchCell();
 
-		options.Layout.Add( new Label( this ) { Text = "Sample fps:" } );
-		_sampleFpsEdit = options.Layout.Add( new LineEdit( this ) { PlaceholderText = "30", FixedWidth = 46 } );
+		var fpsRow = col3.AddRow();
+		fpsRow.Spacing = 8;
+		fpsRow.Add( new Label( this ) { Text = "Sample fps:" } );
+		_sampleFpsEdit = fpsRow.Add( new LineEdit( this ) { PlaceholderText = "30", FixedWidth = 46 } );
 		_sampleFpsEdit.ToolTip = "Sample rate the source clips are resampled to on import. "
 			+ "Empty or 0 = default (30 fps).";
+		fpsRow.AddStretchCell();
 
-		options.Layout.Add( new Label( this ) { Text = "Output folder:" } );
-		_outputFolderEdit = options.Layout.Add( new LineEdit( this ) { Text = "animations/retargeted", MinimumWidth = 180 }, 1 );
-		_outputFolderEdit.ToolTip = "Assets-relative folder the DMX files (and the standalone vmdl) are written to.";
+		col3.AddStretchCell();
+
+		options.Layout.AddStretchCell();
 
 		// ---- status strip -----------------------------------------------------------------
 		var strip = Layout.AddRow();
@@ -308,7 +354,7 @@ public sealed class RetargetWindow : Widget
 		var fd = new FileDialog( null ) { Title = "Add animation files…" };
 		fd.SetFindExistingFiles();
 		fd.SetModeOpen();
-		fd.SetNameFilter( "Animation Files (*.fbx *.bvh *.glb *.gltf)" );
+		fd.SetNameFilter( "Animation Files (*.fbx *.bvh *.glb *.gltf *.vrm)" );
 		if ( !fd.Execute() )
 			return;
 
@@ -466,7 +512,11 @@ public sealed class RetargetWindow : Widget
 
 		RefreshStatus();
 
-		var dialog = new PreviewDialog( this, take.DisplayName, result.Clips, target, entry.Mapping.Source )
+		// Source-ghost data for the dialog's "Show source" overlay: the imported scene's
+		// clip for THIS take (definition rows get their sliced range so the ghost matches
+		// what was solved).
+		var dialog = new PreviewDialog( this, take.DisplayName, result.Clips, target, entry.Mapping.Source,
+			entry.Scene.Skeleton, SourceClipFor( take ), entry.Mapping )
 		{
 			Confirmed = savePreset =>
 			{
@@ -489,6 +539,38 @@ public sealed class RetargetWindow : Widget
 			},
 		};
 		dialog.Show();
+	}
+
+	/// <summary>The imported source clip a take row represents, for the preview's ghost
+	/// overlay: definition rows (Unity sidecar) locate their take by name (the facade's rule:
+	/// match <see cref="HumanoidRetargeter.Formats.ExternalClipDef.TakeName"/>, else the first
+	/// take) and slice it to the definition's range; plain rows take the scene clip at the
+	/// take index. Null when nothing sensible exists (the ghost toggle then stays disabled).</summary>
+	static HumanoidRetargeter.Skeleton.Clip SourceClipFor( SourceTakeEntry take )
+	{
+		var entry = take.File;
+		var scene = entry.Scene;
+		if ( scene is null || scene.Clips.Count == 0 )
+			return null;
+
+		if ( entry.ClipDefinitions is not null )
+		{
+			if ( take.TakeIndex >= entry.ClipDefinitions.Count )
+				return null;
+			var def = entry.ClipDefinitions[take.TakeIndex];
+			var clip = scene.Clips.FirstOrDefault( c => string.Equals( c.Name, def.TakeName, StringComparison.Ordinal ) )
+				?? scene.Clips[0];
+			try
+			{
+				return HumanoidRetargeter.Formats.UnityMeta.Slice( clip, def );
+			}
+			catch ( Exception )
+			{
+				return clip; // unsliceable definition: the whole take still beats no ghost
+			}
+		}
+
+		return scene.Clips[Math.Clamp( take.TakeIndex, 0, scene.Clips.Count - 1 )];
 	}
 
 	void TrySaveUserPreset( SourceFileEntry entry )
@@ -598,6 +680,8 @@ public sealed class RetargetWindow : Widget
 		RootMotion = _rootMotion,
 		FootPlantCleanup = _footPlant,
 		ArmEffectorIk = _armIk,
+		GenerateFootstepEvents = _footstepEvents,
+		CreateMirroredVariant = _mirroredVariants,
 		LoopingOverride = _loopOverride,
 		SampleFps = ParsePositive( _sampleFpsEdit ),
 		Solve = new HumanoidRetargeter.Solve.SolveOptions
@@ -612,6 +696,17 @@ public sealed class RetargetWindow : Widget
 				: new Dictionary<HumanoidRetargeter.Mapping.BoneRole, HumanoidRetargeter.Solve.RoleTransferMode>(),
 		},
 	};
+
+	/// <summary>UI smoke gate hook: flips the two output-variant checkboxes' backing fields
+	/// and returns what <see cref="BuildRequest"/> produces, so the gate can assert the
+	/// footstep-events / mirrored-variants plumbing end to end.</summary>
+	internal HumanoidRetargeter.RetargetRequest BuildRequestForGate(
+		SourceTakeEntry take, bool footstepEvents, bool mirroredVariants )
+	{
+		_footstepEvents = footstepEvents;
+		_mirroredVariants = mirroredVariants;
+		return BuildRequest( take );
+	}
 
 	/// <summary>Empty / non-numeric / non-positive = null (use the automatic default).</summary>
 	static float? ParsePositive( LineEdit edit )
@@ -865,7 +960,7 @@ public sealed class RetargetWindow : Widget
 		{
 			var empty = _listLayout.Add( new Label( this )
 			{
-				Text = "No files yet. Use \"Add Files…\" or right-click .fbx/.bvh/.glb/.gltf files in the "
+				Text = "No files yet. Use \"Add Files…\" or right-click .fbx/.bvh/.glb/.gltf/.vrm files in the "
 					+ "Asset Browser and choose \"Retarget to s&box rig…\".",
 				WordWrap = true,
 			} );

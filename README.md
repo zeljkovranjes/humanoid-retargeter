@@ -18,7 +18,7 @@ Drop in Mixamo, ActorCore/Character Creator, UE Mannequin, BVH mocap, or glTF an
 | **s&box** (editor) | A current s&box install with the editor (`sbox-dev`). The library is editor-side; nothing runs at game runtime. |
 | **A game project** | Conversions write into your project's `Assets/` folder. Any project works — including the shipped samples. The library refuses to modify engine-owned content (`addons/`, `core/`). |
 | **This library installed** | Copy or clone this repository into your project's `Libraries/` folder (e.g. `Libraries/local.humanoid_retargeter/`). Only `Code/`, `Editor/`, `Assets/` and the `.sbproj` are needed. |
-| Source animations | `.fbx` (binary or ASCII, FBX 7.x), `.bvh`, `.glb`, or `.gltf` files. FBX 6.x is rejected with a clear message — re-export from your DCC. |
+| Source animations | `.fbx` (binary or ASCII, FBX 7.x), `.bvh`, `.glb`, `.gltf`, or `.vrm` files. FBX 6.x is rejected with a clear message — re-export from your DCC. |
 
 No NuGet packages, no native DLLs, no Python, no external tools.
 
@@ -30,7 +30,9 @@ No NuGet packages, no native DLLs, no Python, no external tools.
 - **FBX** — own managed parser (binary + ASCII, v7000–7700): full pivot/PreRotation
   transform evaluation, all rotation orders, multi-take files, zlib-compressed curves.
 - **BVH** — mocap files with any channel ordering; unit heuristics for meter/cm exports.
-- **glTF / GLB** — node hierarchies, skins, animation samplers (linear/step/cubic-spline).
+- **glTF / GLB / VRM** — node hierarchies, skins, animation samplers
+  (linear/step/cubic-spline); a VRM's authored `humanoid.humanBones` map is used as the
+  ground-truth mapping.
 - **Multi-take unpacking** — a file containing many animations expands into one list entry
   per take, each independently previewable, removable, and convertible.
 
@@ -93,14 +95,21 @@ No NuGet packages, no native DLLs, no Python, no external tools.
     pinky animation is present.
 - **Batch conversion** — N files × all takes in one click, per-clip failure isolation,
   name-collision auto-suffixing, one combined vmdl.
+- **Footstep events** (option) — `AE_FOOTSTEP` AnimEvents generated from the detected foot
+  plants of each converted clip, in the exact node shape the shipped citizen data uses.
+- **Mirrored variants** (option) — a left/right-mirrored twin of every clip (`<clip>_M`),
+  mirrored in target space with IK helper bones re-baked from the mirrored body.
 
 ### Editor experience
 - Dockable **Humanoid Retargeter** window (View menu): colored profile/status chips with
-  confidence badges, per-row Mapping / Preview / Remove, options panel (root motion,
-  looping, foot-plant, carriage, arm IK, hip scales, sample fps), progress + per-clip
-  compile status with real compiler errors surfaced.
+  confidence badges, per-row Mapping / Preview / Remove, compact stacked options panel
+  (root motion, looping, foot-plant, carriage, footstep events, mirrored variants, arm IK,
+  hip scales, sample fps), progress + per-clip compile status with real compiler errors
+  surfaced.
 - **Live preview** before anything is written — the actual skinned s&box model playing the
-  retargeted clip, with play/pause/scrub. Confirming offers **"Save as profile"**.
+  retargeted clip, with play/pause/scrub and a **"Show source"** ghost overlay (the source
+  clip as a semi-transparent stick skeleton, root-aligned and hip-height-scaled onto the
+  target). Confirming offers **"Save as profile"**.
 - **Asset browser integration** — right-click animation files → *Retarget Animation*.
 - Code API: `Retargeter.Convert` / `ConvertBatch` / `Inspect` (engine-agnostic, bytes in,
   strings out).

@@ -6,7 +6,7 @@ using Sandbox;
 namespace HumanoidRetargeter.Editor;
 
 /// <summary>
-/// Asset-browser integration: right-clicking .fbx/.bvh/.glb/.gltf files offers
+/// Asset-browser integration: right-clicking .fbx/.bvh/.glb/.gltf/.vrm files offers
 /// "Retarget to s&amp;box rig…", which opens the <see cref="RetargetWindow"/> pre-loaded
 /// with the selected files.
 /// </summary>
@@ -18,6 +18,7 @@ public static class RetargeterAssetContextMenu
 		"bvh",
 		"glb",
 		"gltf",
+		"vrm",
 	};
 
 	[Event( "asset.contextmenu", Priority = 60 )]

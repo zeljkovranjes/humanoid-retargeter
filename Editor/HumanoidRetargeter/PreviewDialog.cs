@@ -19,6 +19,7 @@ public sealed class PreviewDialog : Dialog
 	readonly FloatSlider _scrubber;
 	readonly Label _frameLabel;
 	readonly Button _playButton;
+	readonly Button _ghostButton;
 	readonly Checkbox _savePresetCheckbox;
 	readonly List<HumanoidRetargeter.ClipResult> _clips;
 
@@ -35,10 +36,16 @@ public sealed class PreviewDialog : Dialog
 	/// <paramref name="target"/> supplies the rig + preview model;
 	/// <paramref name="mappingSource"/> controls the preset-saving checkbox (shown for
 	/// Manual / AutoName / AutoTopology mappings, checked by default).
+	/// <paramref name="sourceSkeleton"/>/<paramref name="sourceClip"/>/<paramref name="sourceMapping"/>
+	/// (all optional) feed the "Show source" stick-skeleton ghost overlay - the toggle is
+	/// disabled when they are absent or the mapping cannot anchor the ghost.
 	/// </summary>
 	public PreviewDialog(
 		Widget parent, string fileName, IReadOnlyList<HumanoidRetargeter.ClipResult> clips,
-		TargetPickers.ResolvedTarget target, MappingSource mappingSource ) : base( parent )
+		TargetPickers.ResolvedTarget target, MappingSource mappingSource,
+		HumanoidRetargeter.Skeleton.Skeleton sourceSkeleton = null,
+		HumanoidRetargeter.Skeleton.Clip sourceClip = null,
+		MappingResult sourceMapping = null ) : base( parent )
 	{
 		_clips = clips.Where( c => c.Success && c.SolvedFrames is { Count: > 0 } ).ToList();
 
@@ -57,6 +64,9 @@ public sealed class PreviewDialog : Dialog
 			this, target.Spec.Rig, target.PreviewModelPath, target.PreviewPositionScale,
 			target.Spec.UpAxis );
 		Layout.Add( _preview, 1 );
+
+		if ( sourceSkeleton is not null && sourceClip is not null && sourceMapping is not null )
+			_preview.SetSourceGhost( sourceSkeleton, sourceClip, sourceMapping );
 
 		if ( !_preview.HasModel )
 		{
@@ -94,6 +104,14 @@ public sealed class PreviewDialog : Dialog
 		_scrubber.OnValueEdited = () => _preview.Scrub( (int)_scrubber.Value );
 
 		_frameLabel = transport.Add( new Label( this ) { Text = "0 / 0", FixedWidth = 80 } );
+
+		// Source-ghost toggle lives ON the preview (transport bar), not under Options:
+		// it is a per-preview inspection aid, not a conversion setting.
+		_ghostButton = transport.Add( new Button( "Show source", "compare" ) { IsToggle = true, FixedHeight = 24 } );
+		_ghostButton.ToolTip = "Overlay the SOURCE clip as a semi-transparent stick skeleton, "
+			+ "root-aligned and hip-height-scaled onto the target, synced to the scrub position.";
+		_ghostButton.Enabled = _preview.HasSourceGhost;
+		_ghostButton.Clicked = () => _preview.ShowSourceGhost = _ghostButton.IsChecked;
 
 		_preview.FrameChanged = frame =>
 		{
