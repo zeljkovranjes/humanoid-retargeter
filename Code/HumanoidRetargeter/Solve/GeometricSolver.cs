@@ -20,7 +20,11 @@ using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global
 /// <remarks>
 /// <para><b>Formulation: absolute canonical-orientation matching.</b> Both rests are first
 /// T-pose-normalized (<see cref="RestNormalizer"/>) and canonical frames are built on the
-/// <i>normalized</i> rests. Per frame and mapped role, the source bone's <i>current</i>
+/// <i>normalized</i> rests. A source bind that is not an anatomical pose (SOMA-style
+/// uniform-skeleton stick binds) is first rebuilt from the clip's first frame — the solver
+/// passes that frame as the reference pose, so deltas (and the pelvis travel) are then
+/// measured from the normalized first-frame rest instead; anatomical binds ignore it
+/// (see <see cref="RestNormalizer"/> remarks). Per frame and mapped role, the source bone's <i>current</i>
 /// canonical frame orientation is <c>ΔR(f) · C_src</c> with
 /// <c>ΔR(f) = R_srcWorld(f) · R_srcNormRest⁻¹</c> (the canonical frame rides the bone). The
 /// target bone is rotated so its current canonical frame has the <b>same orientation in
@@ -100,7 +104,11 @@ public sealed class GeometricSolver : IRetargetSolver
                 $"ClipIndex out of range; the source has {source.Clips.Count} clip(s).");
         var clip = source.Clips[options.ClipIndex];
 
-        var plan = new Plan(source.Skeleton, sourceMap, target, options);
+        // Non-anatomical binds (SOMA uniform-skeleton sticks — see RestNormalizer remarks)
+        // carry their real rest orientation in the motion data, so the clip's first frame
+        // serves as the rest reference; anatomical binds ignore it.
+        var referencePose = clip.Frames.Count > 0 ? clip.Frames[0] : null;
+        var plan = new Plan(source.Skeleton, sourceMap, target, options, referencePose);
         var output = new Clip(options.ClipName ?? clip.Name, clip.Fps, clip.Looping);
         foreach (var frame in clip.Frames)
             output.Frames.Add(plan.SolveFrame(frame));
@@ -190,7 +198,9 @@ public sealed class GeometricSolver : IRetargetSolver
         /// fallback below) is disabled — see <see cref="SolveOptions.TransferModes"/>.</summary>
         private readonly bool _explicitModes;
 
-        public Plan(SkeletonModel src, MappingResult srcMap, TargetRig rig, SolveOptions options)
+        public Plan(
+            SkeletonModel src, MappingResult srcMap, TargetRig rig, SolveOptions options,
+            IReadOnlyList<XForm>? srcReferencePose = null)
         {
             _src = src;
             _tgt = rig.Skeleton;
@@ -198,7 +208,7 @@ public sealed class GeometricSolver : IRetargetSolver
             _modes = options.TransferModes ?? SolveOptions.DefaultTransferModes;
 
             var tgtMap = rig.ToMappingResult();
-            var (srcNorm, _) = RestNormalizer.Normalize(src, srcMap);
+            var (srcNorm, _) = RestNormalizer.Normalize(src, srcMap, srcReferencePose);
             var (tgtNorm, _) = RestNormalizer.Normalize(_tgt, tgtMap);
             _srcNormRest = srcNorm.WorldRest;
             _tgtNormRest = tgtNorm.WorldRest;

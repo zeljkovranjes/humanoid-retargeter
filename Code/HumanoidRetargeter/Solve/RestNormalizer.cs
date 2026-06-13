@@ -21,17 +21,32 @@ public sealed class RestPose
 }
 
 /// <summary>
-/// Rest-pose detection (T-pose / A-pose) and normalization to a canonical T-pose.
+/// Rest-pose detection (T-pose / A-pose / I-pose) and normalization to a canonical T-pose.
 /// Runs on <b>both</b> source and target rests before canonical frames are built, so deltas
 /// measured against the normalized source rest apply cleanly to the normalized target rest
 /// (the s&amp;box human rig itself rests in a strong A-pose, ~52° below horizontal).
 /// </summary>
 /// <remarks>
+/// <para><b>Non-anatomical binds:</b> some exports (NVIDIA SOMA uniform-skeleton BVH) carry
+/// a bind that is bone-length encoding, not a pose — every OFFSET runs along ±X, so identity
+/// rest rotations collapse the figure into a stick (measured on the SOMA repro: character up
+/// = world +X, thigh·up = +1.00/−1.00, thighs 180° apart — a thigh pointing at the
+/// shoulders). Every anatomical bind in the corpus measures thigh·up ≤ −0.75 and ≤ 46°
+/// between thighs (the posed Defenses.fbx stance included), so
+/// <see cref="IsAnatomicalRest"/> separates the two with a wide margin. When the bind fails
+/// the check, <see cref="Normalize(SkeletonModel, MappingResult, IReadOnlyList{XForm})"/>
+/// rebuilds the rest from the supplied reference pose (the clip's first frame — a real pose
+/// whose rotations carry the missing rest orientation); without a reference pose
+/// normalization throws <see cref="ArgumentException"/> rather than build canonical frames
+/// on a non-pose (callers that probe rest geometry already treat that as "skip").</para>
 /// <para><b>Detection:</b> the angle of each (LowerArm.head − UpperArm.head) rest segment
 /// against the character's horizontal lateral direction (per side, then averaged):
 /// 0–15° → <see cref="DetectedPose.TPose"/>; 15–60° with the arm <i>below</i> horizontal →
-/// <see cref="DetectedPose.APose"/>; anything else → <see cref="DetectedPose.Other"/>.
-/// Legs are checked analogously against vertical for wide stances.</para>
+/// <see cref="DetectedPose.APose"/>; 60–95° with the arms hanging predominantly <i>down</i>
+/// (arm·up ≤ −0.5) → <see cref="DetectedPose.IPose"/> (relaxed N-pose rests — first-frame
+/// rebuilt rests measure 64–88° below horizontal at arm·up −0.90…−1.00 across the corpus);
+/// anything else → <see cref="DetectedPose.Other"/>. Legs are checked analogously against
+/// vertical for wide stances.</para>
 /// <para><b>Normalization (swing-only, hierarchical, per limb chain — never the spine):</b>
 /// each arm segment is swung about its joint so the chain matches the canonical T-pose:
 /// upper arm → ±lateral (exactly horizontal), forearm → ±lateral (straight arm), hand →
@@ -53,6 +68,10 @@ public static class RestNormalizer
         /// <summary>Arms 15–60° below horizontal.</summary>
         APose,
 
+        /// <summary>Arms hanging 60–95° below horizontal, predominantly downward (relaxed
+        /// N-pose; typical for rests rebuilt from a clip's first frame).</summary>
+        IPose,
+
         /// <summary>Anything else (arms raised, missing, or extreme poses).</summary>
         Other,
     }
@@ -67,21 +86,51 @@ public static class RestNormalizer
         /// degrees (0 = perfect T-pose).</summary>
         public float UpperArmAngleDeg { get; set; } = float.NaN;
 
+        /// <summary>True when the bind rest failed <see cref="IsAnatomicalRest"/> and the
+        /// normalized rest was rebuilt from the caller's reference pose instead.</summary>
+        public bool RebuiltFromReferencePose { get; set; }
+
         /// <summary>Human-readable notes: corrections applied, skipped steps, oddities.</summary>
         public List<string> Notes { get; } = new();
     }
 
     private const float TPoseMaxDeg = 15f;
     private const float APoseMaxDeg = 60f;
+    private const float IPoseMaxDeg = 95f;
+    private const float IPoseMaxUpDot = -0.5f;
     private const float WideStanceMinDeg = 15f;
+
+    /// <summary>Plausibility cap on thigh·characterUp: a rest thigh pointing less than ~78°
+    /// away from the shoulder direction is anatomically impossible. Corpus anatomical binds
+    /// measure ≤ −0.75; the SOMA stick bind +1.00.</summary>
+    private const float ThighMaxUpDot = 0.2f;
+
+    /// <summary>Plausibility floor on thighL·thighR (cos 120°): rest thighs more than 120°
+    /// apart are anatomically impossible. Corpus anatomical binds measure ≤ 46° apart
+    /// (cos ≥ 0.69); the SOMA stick bind 180° (−1.00).</summary>
+    private const float ThighPairMinDot = -0.5f;
 
     /// <summary>
     /// Detects the rest pose of <paramref name="skeleton"/> and returns a T-pose-normalized
     /// copy of its rest world transforms plus a report. The skeleton itself is not modified.
     /// </summary>
     /// <exception cref="ArgumentException">Thrown when the mapping lacks the bones the
-    /// character frame needs (see <see cref="CharacterFrame.Compute"/>).</exception>
+    /// character frame needs (see <see cref="CharacterFrame.Compute"/>), or when the bind
+    /// rest is not an anatomical pose (see <see cref="IsAnatomicalRest"/>) — without a
+    /// reference pose there is nothing valid to normalize.</exception>
     public static (RestPose Normalized, RestReport Report) Normalize(SkeletonModel skeleton, MappingResult map)
+        => Normalize(skeleton, map, referencePoseLocals: null);
+
+    /// <summary>
+    /// Like <see cref="Normalize(SkeletonModel, MappingResult)"/>, but when the bind rest is
+    /// not an anatomical pose (see <see cref="IsAnatomicalRest"/> and the class remarks) the
+    /// rest is rebuilt from <paramref name="referencePoseLocals"/> (parent-relative locals,
+    /// indexed like the skeleton — pass the clip's first frame) before normalization.
+    /// </summary>
+    /// <exception cref="ArgumentException">As the two-argument overload; a non-anatomical
+    /// bind only throws when <paramref name="referencePoseLocals"/> is null.</exception>
+    public static (RestPose Normalized, RestReport Report) Normalize(
+        SkeletonModel skeleton, MappingResult map, IReadOnlyList<XForm>? referencePoseLocals)
     {
         ArgumentNullException.ThrowIfNull(skeleton);
         ArgumentNullException.ThrowIfNull(map);
@@ -90,10 +139,40 @@ public static class RestNormalizer
         for (var i = 0; i < skeleton.Count; i++)
             world[i] = skeleton.RestWorld[i];
 
+        var report = new RestReport();
+        if (!IsAnatomicalRest(skeleton, map, world))
+        {
+            if (referencePoseLocals is null)
+            {
+                throw new ArgumentException(
+                    "Bind rest is not an anatomical humanoid pose (a rest thigh points toward "
+                    + "the shoulders or the thighs are anti-parallel — e.g. a bone-length "
+                    + "'stick' bind with identity rotations) and no reference pose is "
+                    + "available to rebuild it.");
+            }
+            if (referencePoseLocals.Count != skeleton.Count)
+            {
+                throw new ArgumentException(
+                    $"referencePoseLocals has {referencePoseLocals.Count} entries for a "
+                    + $"{skeleton.Count}-bone skeleton.", nameof(referencePoseLocals));
+            }
+
+            for (var i = 0; i < skeleton.Count; i++)
+            {
+                var parent = skeleton[i].ParentIndex;
+                world[i] = parent < 0
+                    ? referencePoseLocals[i]
+                    : XForm.Compose(world[parent], referencePoseLocals[i]);
+            }
+            report.RebuiltFromReferencePose = true;
+            report.Notes.Add(
+                "Bind rest is not an anatomical pose (bone-length stick bind); rest rebuilt "
+                + "from the reference pose (clip first frame).");
+        }
+
         // Arm/leg normalization never moves the hip or shoulder joints, so the character
         // frame computed on the input rest stays valid throughout.
         var cf = CharacterFrame.Compute(skeleton, map, world);
-        var report = new RestReport();
 
         DetectArms(map, world, cf, report);
         NormalizeArms(skeleton, map, world, cf, report);
@@ -102,11 +181,72 @@ public static class RestNormalizer
         return (new RestPose { WorldRest = world }, report);
     }
 
+    // ---------------------------------------------------------------- plausibility
+
+    /// <summary>
+    /// True when <paramref name="worldRest"/> is plausible as an anatomical humanoid pose:
+    /// both rest thighs must point away from the shoulder line (thigh·up ≤
+    /// <see cref="ThighMaxUpDot"/>) and be no more than 120° apart. Rigs without both
+    /// complete thighs (or a shoulder anchor) are unjudgeable and pass. Measured margins:
+    /// every anatomical corpus bind (T-pose, A-pose and the posed Defenses.fbx stance)
+    /// scores thigh·up ≤ −0.75 / thighs ≤ 46° apart; the SOMA uniform-skeleton stick bind
+    /// scores thigh·up +1.00 / 180° apart.
+    /// </summary>
+    public static bool IsAnatomicalRest(
+        SkeletonModel skeleton, MappingResult map, IReadOnlyList<XForm> worldRest)
+    {
+        ArgumentNullException.ThrowIfNull(skeleton);
+        ArgumentNullException.ThrowIfNull(map);
+        ArgumentNullException.ThrowIfNull(worldRest);
+
+        Vector3? Pos(BoneRole role)
+            => map.RoleToBone.TryGetValue(role, out var i) && i < worldRest.Count
+                ? worldRest[i].Pos
+                : null;
+
+        Vector3? Dir(BoneRole from, BoneRole to)
+        {
+            var a = Pos(from);
+            var b = Pos(to);
+            if (a is null || b is null)
+                return null;
+            var d = b.Value - a.Value;
+            return d.LengthSquared() < 1e-8f ? null : Vector3.Normalize(d);
+        }
+
+        var hipL = Pos(BoneRole.UpperLegL);
+        var hipR = Pos(BoneRole.UpperLegR);
+        var thighL = Dir(BoneRole.UpperLegL, BoneRole.LowerLegL);
+        var thighR = Dir(BoneRole.UpperLegR, BoneRole.LowerLegR);
+        if (hipL is null || hipR is null || thighL is null || thighR is null)
+            return true; // legs unmapped/degenerate: cannot judge, preserve behavior
+
+        var midHips = (hipL.Value + hipR.Value) * 0.5f;
+        var midShoulders = Midpoint(Pos(BoneRole.UpperArmL), Pos(BoneRole.UpperArmR))
+            ?? Midpoint(Pos(BoneRole.ClavicleL), Pos(BoneRole.ClavicleR))
+            ?? Pos(BoneRole.Neck);
+        if (midShoulders is null)
+            return true; // no shoulder anchor: cannot judge
+
+        var upRaw = midShoulders.Value - midHips;
+        if (upRaw.LengthSquared() < 1e-8f)
+            return true;
+        var up = Vector3.Normalize(upRaw);
+
+        return Vector3.Dot(thighL.Value, up) <= ThighMaxUpDot
+            && Vector3.Dot(thighR.Value, up) <= ThighMaxUpDot
+            && Vector3.Dot(thighL.Value, thighR.Value) >= ThighPairMinDot;
+    }
+
+    private static Vector3? Midpoint(Vector3? a, Vector3? b)
+        => a is not null && b is not null ? (a.Value + b.Value) * 0.5f : null;
+
     // ---------------------------------------------------------------- detection
 
     private static void DetectArms(MappingResult map, XForm[] world, CharacterFrame cf, RestReport report)
     {
         var angleSum = 0f;
+        var upDotSum = 0f;
         var count = 0;
         var allBelowOrLevel = true;
 
@@ -121,8 +261,10 @@ public static class RestNormalizer
             var dir = world[l].Pos - world[u].Pos;
             angleSum += Deg(MathQ.AngleBetween(dir, cf.Lateral * sign));
             count++;
+            var upDot = Vector3.Dot(Vector3.Normalize(dir), cf.Up);
+            upDotSum += upDot;
             // "Below horizontal" with a small tolerance so a T-pose arm 1° above still counts.
-            allBelowOrLevel &= Vector3.Dot(Vector3.Normalize(dir), cf.Up) < 0.05f;
+            allBelowOrLevel &= upDot < 0.05f;
         }
 
         if (count == 0)
@@ -136,7 +278,13 @@ public static class RestNormalizer
         report.UpperArmAngleDeg = angle;
         report.Detected = angle <= TPoseMaxDeg
             ? DetectedPose.TPose
-            : angle <= APoseMaxDeg && allBelowOrLevel ? DetectedPose.APose : DetectedPose.Other;
+            : angle <= APoseMaxDeg && allBelowOrLevel
+                ? DetectedPose.APose
+                // Hanging arms read ~90° from lateral whether they point down OR forward;
+                // the up-dot cap keeps forward-reaching binds out of the I-pose class.
+                : angle <= IPoseMaxDeg && allBelowOrLevel && upDotSum / count <= IPoseMaxUpDot
+                    ? DetectedPose.IPose
+                    : DetectedPose.Other;
         report.Notes.Add(
             $"Arm rest angle {angle:F1} deg from horizontal -> {report.Detected}.");
     }
