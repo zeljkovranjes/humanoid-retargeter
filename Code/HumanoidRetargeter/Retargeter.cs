@@ -151,6 +151,10 @@ public static class Retargeter
                         // channels get overridden at runtime.
                         NeutralizePinkyConstraints = mappedPinky,
                         LocomotionSets = locomotionSets,
+                        // Same ownership rule the name seeding above used: pipeline-owned
+                        // locomotion folders (every AnimFile sourced under our DMX folder)
+                        // are replaceable wholesale on re-runs.
+                        DmxFolderRelative = options.DmxFolderRelative,
                     });
             }
             catch (Exception e)
@@ -1088,9 +1092,12 @@ public static class Retargeter
     /// Clip names become ModelDoc AnimFile node names and Source 2 sequence names, which
     /// must stay within <c>[A-Za-z0-9_]</c> — a take name like <c>mixamo.com</c> otherwise
     /// fails the vmdl compile with "Node 'mixamo.com' resolve failure". Runs of invalid
-    /// characters collapse to a single underscore; case is preserved.
+    /// characters collapse to a single underscore; case is preserved. Public so UIs that
+    /// dry-run name-based detection (e.g. the locomotion-set scan over raw take names) see
+    /// the SAME spelling conversion will produce — a take named <c>Walk N</c> becomes the
+    /// clip <c>Walk_N</c>.
     /// </summary>
-    private static string SanitizeClipName(string name)
+    public static string SanitizeClipName(string name)
     {
         var builder = new StringBuilder(name.Length);
         var lastWasUnderscore = false;

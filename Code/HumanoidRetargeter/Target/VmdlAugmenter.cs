@@ -47,12 +47,24 @@ public sealed class AugmentOptions
     /// Detected locomotion families to splice as Folder + 2DBlend groups (see
     /// <see cref="LocomotionSetDetector"/>). Each set's member entries are grouped under a
     /// Folder named <see cref="LocomotionSetSpec.FolderName"/> instead of being spliced at
-    /// the AnimationList top level; a previous run's same-named folder is replaced in place
-    /// (idempotent) — but only when ALL of its AnimFiles belong to this batch, so a
-    /// hand-edited or foreign folder is never destroyed (it throws
-    /// <see cref="VmdlAugmentException"/> instead). Null/empty = no grouping.
+    /// the AnimationList top level. Pipeline-owned locomotion folders are rebuilt AS A UNIT:
+    /// a previous run's same-named folder is replaced wholesale when every AnimFile inside
+    /// it is pipeline-owned per <see cref="DmxFolderRelative"/> — even when the new batch is
+    /// a SHRUNKEN family (e.g. 8-way re-run as 4-way), whose stale members are simply
+    /// dropped with the old folder. A hand-edited or foreign folder is never destroyed (it
+    /// throws <see cref="VmdlAugmentException"/> instead). Null/empty = no grouping.
     /// </summary>
     public IReadOnlyList<LocomotionSetSpec>? LocomotionSets { get; init; }
+
+    /// <summary>
+    /// Assets-relative folder this batch's DMX files live in (back- or forward slashes,
+    /// trailing slash ignored). Decides which existing nodes are PIPELINE-OWNED — an
+    /// AnimFile whose <c>source_filename</c> sits under this folder — mirroring the
+    /// name-seeding ownership rules in <c>Retargeter.ConvertBatch</c>, so a folder the
+    /// batch's collision seeding treated as replaceable is also replaceable here. Empty
+    /// (default) = only sources with no directory component count as ours.
+    /// </summary>
+    public string DmxFolderRelative { get; init; } = "";
 }
 
 /// <summary>
@@ -127,7 +139,7 @@ public static class VmdlAugmenter
             foreach (var member in set.MemberNames)
                 groupedNames.Add(member);
         }
-        var entryNames = new HashSet<string>(entries.Select(e => e.Name), StringComparer.Ordinal);
+        var dmxFolder = options.DmxFolderRelative.Replace('\\', '/').TrimEnd('/');
 
         // Validate all entries and set names first so a collision throws before any mutation.
         var collisions = new List<string>();
@@ -143,12 +155,12 @@ public static class VmdlAugmenter
         foreach (var set in sets)
         {
             if (FindByName(listChildren, set.FolderName) is { } folderNode
-                && !IsReplaceableLocomotionFolder(folderNode, entryNames))
+                && !IsReplaceableLocomotionFolder(folderNode, dmxFolder))
             {
                 collisions.Add(
                     $"'{set.FolderName}' already exists as "
                     + $"{folderNode.GetString("_class") ?? "<unknown class>"} whose content was "
-                    + "not produced by this batch");
+                    + "not produced by this pipeline");
             }
             if (FindByName(listChildren, set.BlendName) is { } blendNode
                 && blendNode.GetString("_class") != "2DBlend")
@@ -200,32 +212,50 @@ public static class VmdlAugmenter
 
     /// <summary>
     /// Whether an existing node may be replaced by a locomotion folder splice: it must be a
-    /// Folder and every AnimFile anywhere inside it must carry a name this batch produced —
-    /// i.e. the folder holds nothing of the user's own.
+    /// Folder containing at least one AnimFile, and every AnimFile anywhere inside it must
+    /// be pipeline-owned (<c>source_filename</c> under <paramref name="dmxFolder"/>) — i.e.
+    /// the folder holds nothing of the user's own. Ownership deliberately ignores
+    /// current-batch membership: a previous run's 8-way family re-run as a 4-way batch is
+    /// still OUR folder, rebuilt as a unit with its stale members dropped. This mirrors
+    /// <c>Retargeter</c>'s name-seeding ownership rules so a folder whose name the seeding
+    /// released to this batch is never refused here.
     /// </summary>
-    private static bool IsReplaceableLocomotionFolder(KvObject node, IReadOnlySet<string> entryNames)
+    private static bool IsReplaceableLocomotionFolder(KvObject node, string dmxFolder)
     {
         if (node.GetString("_class") != "Folder")
             return false;
-        return AllAnimFilesKnown(node);
+        var sawAnimFile = false;
+        return AllAnimFilesOurs(node) && sawAnimFile;
 
-        bool AllAnimFilesKnown(KvObject current)
+        bool AllAnimFilesOurs(KvObject current)
         {
-            if (current.GetString("_class") == "AnimFile"
-                && !entryNames.Contains(current.GetString("name") ?? ""))
+            if (current.GetString("_class") == "AnimFile")
             {
-                return false;
+                sawAnimFile = true;
+                if (!IsPipelineAnimFile(current, dmxFolder))
+                    return false;
             }
             if (current.GetOrNull("children") is KvArray children)
             {
                 foreach (var child in children.Items.OfType<KvObject>())
                 {
-                    if (!AllAnimFilesKnown(child))
+                    if (!AllAnimFilesOurs(child))
                         return false;
                 }
             }
             return true;
         }
+    }
+
+    /// <summary>Whether an AnimFile was written by this pipeline: its
+    /// <c>source_filename</c> sits inside the batch's DMX folder (empty folder = a source
+    /// with no directory component). Same rule <c>Retargeter</c> seeds collision names with.</summary>
+    private static bool IsPipelineAnimFile(KvObject node, string dmxFolder)
+    {
+        var source = (node.GetString("source_filename") ?? "").Replace('\\', '/');
+        return dmxFolder.Length == 0
+            ? !source.Contains('/')
+            : source.StartsWith(dmxFolder + "/", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>Removes the Folder named <paramref name="name"/>; returns its top-level

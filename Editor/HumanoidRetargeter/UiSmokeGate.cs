@@ -310,17 +310,23 @@ public static class UiSmokeGate
 
 			// Smart-disable of the locomotion toggle: no complete directional family among
 			// the take rows → disabled AND forced off with the explainer tooltip; a complete
-			// 4-way family → enabled with a "Detected: …" tooltip naming the stem.
+			// 4-way family → enabled with a "Detected: …" tooltip naming the stem. Space-named
+			// takes ("Walk N" …) sanitize into a complete Walk_N family during conversion, so
+			// the scan must treat them the same and ENABLE the checkbox.
 			var none = window.ApplyLocomotionScan( new[] { entry.Takes[0].TakeName } );
 			var fourWay = window.ApplyLocomotionScan(
 				new[] { "Walk_N", "Walk_E", "Walk_S", "Walk_W" } );
+			var spaced = window.ApplyLocomotionScan(
+				new[] { "Walk N", "Walk E", "Walk S", "Walk W" } );
 			var emptied = window.ApplyLocomotionScan( Array.Empty<string>() );
 			Result.locomotionSmartDisableOk =
 				!none.Enabled && !none.Value && none.ToolTip.Contains( "No directional animation set" )
 				&& fourWay.Enabled && fourWay.ToolTip.Contains( "Walk (4-way)" )
+				&& spaced.Enabled && spaced.ToolTip.Contains( "Walk (4-way)" )
 				&& !emptied.Enabled && !emptied.Value;
 			Note( $"locomotion smart-disable: none=({none.Enabled},{none.Value},'{none.ToolTip}') "
 				+ $"fourWay=({fourWay.Enabled},'{fourWay.ToolTip}') "
+				+ $"spaced=({spaced.Enabled},'{spaced.ToolTip}') "
 				+ $"emptied=({emptied.Enabled},{emptied.Value}) ok={Result.locomotionSmartDisableOk}" );
 
 			window.Destroy();

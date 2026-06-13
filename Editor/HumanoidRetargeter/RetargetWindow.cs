@@ -976,8 +976,9 @@ public sealed class RetargetWindow : Widget
 
 	/// <summary>
 	/// Smart-disable for the "Detect locomotion sets" toggle, run on every list refresh
-	/// (files/takes added or removed): dry-run scans ALL current take-row clip names
-	/// (<see cref="HumanoidRetargeter.Target.LocomotionSetDetector.ScanNames"/>). No
+	/// (files/takes added or removed): dry-run scans ALL current take-row clip names —
+	/// sanitized exactly the way conversion names the clips — through
+	/// <see cref="HumanoidRetargeter.Target.LocomotionSetDetector.ScanNames"/>. No
 	/// complete directional family → the toggle is disabled AND forced off (the batch
 	/// could not emit any blend, so a stale tick must not linger); otherwise it is enabled
 	/// and the tooltip names every detected family.
@@ -993,7 +994,13 @@ public sealed class RetargetWindow : Widget
 		if ( !_locomotionCheckbox.IsValid() )
 			return (false, false, "");
 
-		var complete = HumanoidRetargeter.Target.LocomotionSetDetector.ScanNames( clipNames )
+		// Conversion detects families on SANITIZED clip names (Retargeter.SanitizeClipName
+		// maps runs of non-[A-Za-z0-9_] to '_'), so this dry-run must scan the same
+		// spelling: takes named "Walk N"/"Walk Forward" convert into a complete Walk_N
+		// family and must enable the toggle, not trip "no set detected".
+		var complete = HumanoidRetargeter.Target.LocomotionSetDetector.ScanNames(
+				clipNames.Select( n => string.IsNullOrEmpty( n )
+					? n : HumanoidRetargeter.Retargeter.SanitizeClipName( n ) ) )
 			.Where( f => f.Complete ).ToList();
 		if ( complete.Count == 0 )
 		{
