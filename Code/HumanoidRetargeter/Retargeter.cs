@@ -570,7 +570,10 @@ public static class Retargeter
                 Name = clipName,
                 SourceNote = isMirrored ? request.SourceFileName + " (mirrored)" : request.SourceFileName,
                 // Design §3: ConstraintDriven (twist/helper) bones keep their joints +
-                // bind in the DMX but get NO channels — the engine drives them.
+                // bind in the DMX but get NO channels — the model's AnimConstraintList
+                // drives them. Face bones are exempt from the exclusion (rest-local
+                // channels): nothing drives them in a compiled sequence, and channel-less
+                // face joints bake statically (eyes out of sockets in ModelDoc).
                 ChannelExcludedBones = context.ConstraintDrivenBones,
                 UpAxisY = target.UpAxis == TargetUpAxis.YUpCm,
             });
@@ -1182,7 +1185,11 @@ public static class Retargeter
         public bool HasIkBakedBones { get; }
 
         /// <summary>ConstraintDriven bone indices (twist/helper) — excluded from DMX
-        /// channels per design §3; null when the rig has none.</summary>
+        /// channels per design §3; null when the rig has none. Face bones
+        /// (<see cref="SboxBoneClassifier.IsFaceBone"/>) are NOT in this set even though
+        /// their class is ConstraintDriven: they keep rest-local channels, because no
+        /// constraint re-drives them in a compiled sequence (channel-less face joints
+        /// bake statically — eyes detach from the moving head in ModelDoc).</summary>
         public IReadOnlySet<int>? ConstraintDrivenBones { get; }
 
         private Dl.DlSolver? _dlSolver;
@@ -1206,6 +1213,14 @@ public static class Retargeter
             }
 
             var constraintDriven = new HashSet<int>(rig.BonesOfClass(BoneClass.ConstraintDriven));
+            // Face bones (eye_/ear_/face_) are ConstraintDriven by class but, unlike the
+            // twist/helper bones, nothing re-drives them when a compiled sequence plays:
+            // the model's AnimConstraintList never references them and the engine's eye
+            // look-at / blinking only runs in game. They must KEEP their rest-local DMX
+            // channels (the shipped fbx2dmx clips carry them too) or ModelDoc bakes the
+            // channel-less joints statically and the eyes detach from the moving head
+            // (see SboxBoneClassifier.IsFaceBone).
+            constraintDriven.RemoveWhere(i => SboxBoneClassifier.IsFaceBone(rig.Skeleton[i].Name));
             ConstraintDrivenBones = constraintDriven.Count > 0 ? constraintDriven : null;
 
             try

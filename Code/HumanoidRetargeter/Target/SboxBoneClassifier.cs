@@ -29,11 +29,34 @@ public static partial class SboxBoneClassifier
     private static readonly Regex AimMatrixPrefixRegex = new(@"^aim_matrix_");
     private static Regex AimMatrixPrefix() => AimMatrixPrefixRegex;
 
-    // Face bones on the classic citizen rig (eye_L/R, ear_L/R, face_lid_*): the engine
-    // drives them at runtime (eye look-at, blinking) — the retargeter must not write
-    // channels for them, exactly like the twist/helper bones.
+    // Face bones on the classic citizen rig (eye_L/R, ear_L/R, face_lid_*): no canonical
+    // role exists for them, the solver never retargets them, and the engine's procedural
+    // systems (eye look-at, blinking) pose them in game.
     private static readonly Regex FacePrefixRegex = new(@"^(eye|ear|face)_");
     private static Regex FacePrefix() => FacePrefixRegex;
+
+    // Case-insensitive twin of FacePrefixRegex for IsFaceBone: custom rigs classified by
+    // BoneClassRules match face names case-insensitively, and the channel decision must
+    // agree with that classification.
+    private static readonly Regex FacePrefixAnyCaseRegex = new(@"^(eye|ear|face)_", RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// True for face bones (<c>eye_*</c>, <c>ear_*</c>, <c>face_*</c>). Unlike the
+    /// twist/helper <see cref="BoneClass.ConstraintDriven"/> bones — which the model's
+    /// AnimConstraintList re-drives on every evaluated frame — NOTHING drives face bones in
+    /// a compiled sequence: the constraint list never references them and the engine's eye
+    /// look-at / blinking only runs in game. A face joint left channel-less in the DMX is
+    /// baked statically by resourcecompiler, so the eyes detach from the moving head in
+    /// ModelDoc ("eyes out of their sockets"). Retargeted clips must therefore carry
+    /// rest-local channels for them — exactly what the shipped fbx2dmx clips do
+    /// (reference: <c>dev/m0/ref_idlepose.dmx</c> carries <c>eye_L_p/_o</c>,
+    /// <c>face_lid_*_p/_o</c> channels).
+    /// </summary>
+    public static bool IsFaceBone(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        return FacePrefixAnyCaseRegex.IsMatch(name);
+    }
 
     /// <summary>Classifies an s&amp;box rig bone by name.</summary>
     public static BoneClass Classify(string name)

@@ -480,7 +480,18 @@ public static class UiSmokeGate
 			var citizenClip = citizenBatch.Clips.FirstOrDefault( c => c.Success );
 			Result.citizenTargetOk = citizenClip is not null
 				&& citizenClip.DmxContent.Contains( "spine_0_p" )      // citizen channel pair present
-				&& !citizenClip.DmxContent.Contains( "finger_pinky" ); // no pinky bones on this rig
+				&& !citizenClip.DmxContent.Contains( "finger_pinky" )  // no pinky bones on this rig
+				// Eyes-out-of-sockets regression guard: face bones must carry rest-local
+				// channel pairs (nothing re-drives channel-less face joints in a compiled
+				// sequence - ModelDoc bakes them statically and the eyes detach from the
+				// moving head), while twist/helper bones stay channel-less joints (the
+				// model's AnimConstraintList drives those on every evaluated frame).
+				&& citizenClip.DmxContent.Contains( "\"eye_L_p\"" )
+				&& citizenClip.DmxContent.Contains( "\"eye_L_o\"" )
+				&& citizenClip.DmxContent.Contains( "\"eye_R_p\"" )
+				&& citizenClip.DmxContent.Contains( "\"face_lid_upper_L_o\"" )
+				&& !citizenClip.DmxContent.Contains( "\"arm_upper_L_twist1_p\"" )
+				&& !citizenClip.DmxContent.Contains( "\"neck_clothing_o\"" );
 			Note( $"citizen target: '{citizen.Description}' clips={citizenBatch.Clips.Count} "
 				+ $"errors={citizenBatch.Errors.Count} ok={Result.citizenTargetOk}" );
 		}
