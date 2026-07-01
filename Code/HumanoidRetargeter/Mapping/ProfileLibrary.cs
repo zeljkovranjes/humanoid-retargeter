@@ -64,11 +64,13 @@ public static class ProfileLibrary
 
     /// <summary>
     /// NVIDIA SOMA uniform-proportion skeleton (SOMA/SEED BVH exports, e.g.
-    /// github.com/NVIDIA/soma-retargeter <c>assets/motions/bvh</c>). Mixamo-identical
-    /// upper-body and finger names, but: spine is <c>Spine1→Spine2→Chest</c> (no plain
-    /// "Spine"), neck is <c>Neck1→Neck2</c>, and the legs are <c>LeftLeg→LeftShin</c> —
-    /// SOMA's <c>LeftLeg</c> is the THIGH (mixamo's is the calf), which is exactly why the
-    /// mixamo preset must never claim these rigs.
+    /// github.com/NVIDIA/soma-retargeter <c>assets/motions/bvh</c>). Mixamo-like upper-body
+    /// names, but: spine is <c>Spine1→Spine2→Chest</c> (no plain "Spine"), neck is
+    /// <c>Neck1→Neck2</c>, the legs are <c>LeftLeg→LeftShin</c> — SOMA's <c>LeftLeg</c> is
+    /// the THIGH (mixamo's is the calf), which is exactly why the mixamo preset must never
+    /// claim these rigs — and the four fingers have FOUR segments where segment 1 is a
+    /// metacarpal (<c>LeftHandIndex1..4</c>; mixamo's 1..3 are the phalanges), so the
+    /// phalanx roles map to segments 2/3/4.
     /// </summary>
     public static Profile SomaBvh { get; } = BuildSomaBvh();
 
@@ -157,13 +159,70 @@ public static class ProfileLibrary
     /// </summary>
     public static Profile AutoRigPro { get; } = BuildAutoRigPro();
 
+    /// <summary>
+    /// Xsens MVN exports (23-segment MVN body model; MVN Animate/Analyze FBX and BVH):
+    /// anatomical vertebra names for the spine chain <c>Pelvis→L5→L3→T12→T8</c> (the four
+    /// exported lumbar/thoracic segments of the MVN model), <c>Neck→Head</c>, arms
+    /// <c>RightShoulder→RightUpperArm→RightForeArm→RightHand</c> and legs
+    /// <c>RightUpperLeg→RightLowerLeg→RightFoot→RightToe</c>. Body-suit capture only — no
+    /// finger segments (Xsens gloves ship as separate data), so the hands are chain tips.
+    /// </summary>
+    public static Profile XsensMvn { get; } = BuildXsensMvn();
+
+    /// <summary>
+    /// Perception Neuron / Axis Neuron BVH exports: mixamo-like limb and finger names
+    /// (<c>RightArm→RightForeArm→RightHand</c>, <c>RightUpLeg→RightLeg→RightFoot</c>,
+    /// <c>RightHandThumb1..3</c>) but a FOUR-bone spine (<c>Spine→Spine1..Spine3</c>), no
+    /// toe joints (the feet are chain tips), and per-finger <c>RightInHandIndex</c>-style
+    /// metacarpal helpers between the hand and the <c>RightHandIndex1..3</c> phalanges.
+    /// The InHand metacarpals carry no aliases (barely animated palm helpers; mapping them
+    /// as phalanges would shift every curl one joint outward — the SOMA finger bug class).
+    /// The extra Spine3 is what lets this preset outscore mixamo on Neuron rigs (and
+    /// mixamo's toes keep mixamo ahead on real Mixamo rigs).
+    /// </summary>
+    public static Profile PerceptionNeuron { get; } = BuildPerceptionNeuron();
+
+    /// <summary>
+    /// Source engine ValveBiped skeletons (HL2/GMod humanoids, playermodels):
+    /// <c>ValveBiped.Bip01_*</c> names — 3ds-Max-Biped-derived parts behind the fixed
+    /// namespace, with underscores and a spine chain that SKIPS Spine3
+    /// (<c>Spine→Spine1→Spine2→Spine4</c>), <c>Neck1</c>/<c>Head1</c>, arms
+    /// <c>L_Clavicle→L_UpperArm→L_Forearm→L_Hand</c>, legs
+    /// <c>L_Thigh→L_Calf→L_Foot→L_Toe0</c> and numbered finger chains
+    /// <c>L_Finger0/01/02</c> (0 = thumb) … <c>L_Finger4/41/42</c> (pinky). Evaluated
+    /// before <see cref="Biped"/> (same Bip01 ancestry; the plain-Biped preset must never
+    /// claim a ValveBiped rig). Attachment/weapon helpers (<c>ValveBiped.forward</c>,
+    /// <c>ValveBiped.Anim_Attachment_*</c>) have no aliases and are never mapped.
+    /// </summary>
+    public static Profile ValveBiped { get; } = BuildValveBiped();
+
+    /// <summary>
+    /// DAZ Genesis 3/8(.1) figures: renamed Genesis skeleton (NOT covered by
+    /// <see cref="DazPoser"/>) — <c>hip</c> is the translating root and the LCA of the
+    /// <c>pelvis</c> leg branch and the <c>abdomenLower→abdomenUpper→chestLower→chestUpper</c>
+    /// spine (so <c>hip</c> carries <see cref="BoneRole.Hips"/> and <c>pelvis</c> stays
+    /// unmapped, same policy as ActorCore's Hip/Pelvis pair). Neck chain
+    /// <c>neckLower→neckUpper→head</c> (neckUpper unmapped, NeckTwist02 policy). Limbs use
+    /// Bend/Twist pairs: the Bend bones (<c>lShldrBend</c>, <c>lForearmBend</c>,
+    /// <c>lThighBend</c>) are the primary limb bones; the co-linear Twist roll helpers
+    /// (<c>lShldrTwist</c>, <c>lForearmTwist</c>, <c>lThighTwist</c>) carry no aliases and
+    /// are never mapped. Legs <c>lThighBend→lShin→lFoot→lToe</c> (<c>lMetatarsals</c> is an
+    /// arch helper between foot and toe, unmapped). Fingers are the classic DAZ
+    /// <c>lThumb1..3/lIndex1..3/lMid1..3/lRing1..3/lPinky1..3</c>. Genesis 9 renamed the
+    /// skeleton again (<c>l_upperarm</c>, …) and is NOT covered by this preset.
+    /// </summary>
+    public static Profile DazGenesis { get; } = BuildDazGenesis();
+
     /// <summary>All built-in presets, in detection order (first wins score ties — see
-    /// <see cref="SmplX"/> vs <see cref="Smpl"/>).</summary>
+    /// <see cref="SmplX"/> vs <see cref="Smpl"/>; <see cref="ValveBiped"/> is evaluated
+    /// before <see cref="Biped"/> and <see cref="DazGenesis"/> before
+    /// <see cref="DazPoser"/> within their families).</summary>
     public static IReadOnlyList<Profile> All { get; } =
         new[]
         {
-            Mixamo, ActorCoreCc, UeMannequin, RokokoBvh, SmplX, Smpl, SomaBvh, ClassicBvh,
-            Biped, DazPoser, Rigify, Vrm, AutoRigPro,
+            Mixamo, ActorCoreCc, UeMannequin, XsensMvn, PerceptionNeuron, RokokoBvh,
+            SmplX, Smpl, SomaBvh, ClassicBvh, ValveBiped, Biped, DazGenesis, DazPoser,
+            Rigify, Vrm, AutoRigPro,
         };
 
     // ---------------------------------------------------------------- mixamo
@@ -314,6 +373,168 @@ public static class ProfileLibrary
         return new Profile("rokoko_bvh", new string[0], aliases);
     }
 
+    // ---------------------------------------------------------------- xsens mvn
+
+    private static Profile BuildXsensMvn()
+    {
+        var aliases = new Dictionary<BoneRole, string[]>
+        {
+            [BoneRole.Hips] = new[] { "Pelvis" },
+            // MVN's exported spine segments are the anatomical vertebra levels L5/L3/T12/T8.
+            [BoneRole.Spine0] = new[] { "L5" },
+            [BoneRole.Spine1] = new[] { "L3" },
+            [BoneRole.Spine2] = new[] { "T12" },
+            [BoneRole.Spine3] = new[] { "T8" },
+            [BoneRole.Neck] = new[] { "Neck" },
+            [BoneRole.Head] = new[] { "Head" },
+        };
+        foreach (var (roleSide, nameSide) in Sides())
+        {
+            aliases[Role("Clavicle", roleSide)] = new[] { $"{nameSide}Shoulder" };
+            aliases[Role("UpperArm", roleSide)] = new[] { $"{nameSide}UpperArm" };
+            aliases[Role("LowerArm", roleSide)] = new[] { $"{nameSide}ForeArm" };
+            aliases[Role("Hand", roleSide)] = new[] { $"{nameSide}Hand" };
+            aliases[Role("UpperLeg", roleSide)] = new[] { $"{nameSide}UpperLeg" };
+            aliases[Role("LowerLeg", roleSide)] = new[] { $"{nameSide}LowerLeg" };
+            aliases[Role("Foot", roleSide)] = new[] { $"{nameSide}Foot" };
+            aliases[Role("Toe", roleSide)] = new[] { $"{nameSide}Toe" };
+        }
+        // Body-suit capture: no finger segments (see the property remarks).
+        return new Profile("xsens_mvn", new string[0], aliases);
+    }
+
+    // ---------------------------------------------------------------- perception neuron
+
+    private static Profile BuildPerceptionNeuron()
+    {
+        var aliases = new Dictionary<BoneRole, string[]>
+        {
+            [BoneRole.Hips] = new[] { "Hips" },
+            [BoneRole.Spine0] = new[] { "Spine" },
+            [BoneRole.Spine1] = new[] { "Spine1" },
+            [BoneRole.Spine2] = new[] { "Spine2" },
+            [BoneRole.Spine3] = new[] { "Spine3" },
+            [BoneRole.Neck] = new[] { "Neck" },
+            [BoneRole.Head] = new[] { "Head" },
+        };
+        foreach (var (roleSide, nameSide) in Sides())
+        {
+            aliases[Role("Clavicle", roleSide)] = new[] { $"{nameSide}Shoulder" };
+            aliases[Role("UpperArm", roleSide)] = new[] { $"{nameSide}Arm" };
+            aliases[Role("LowerArm", roleSide)] = new[] { $"{nameSide}ForeArm" };
+            aliases[Role("Hand", roleSide)] = new[] { $"{nameSide}Hand" };
+            aliases[Role("UpperLeg", roleSide)] = new[] { $"{nameSide}UpLeg" };
+            aliases[Role("LowerLeg", roleSide)] = new[] { $"{nameSide}Leg" };
+            aliases[Role("Foot", roleSide)] = new[] { $"{nameSide}Foot" };
+            // No toe joints in Axis Neuron exports; the feet are chain tips.
+
+            // Phalanges only: the LeftInHandIndex-style metacarpal helpers between hand
+            // and phalanges carry no role (see the property remarks).
+            foreach (var finger in new[] { "Thumb", "Index", "Middle", "Ring", "Pinky" })
+            {
+                aliases[Role($"{finger}Prox", roleSide)] = new[] { $"{nameSide}Hand{finger}1" };
+                aliases[Role($"{finger}Mid", roleSide)] = new[] { $"{nameSide}Hand{finger}2" };
+                aliases[Role($"{finger}Dist", roleSide)] = new[] { $"{nameSide}Hand{finger}3" };
+            }
+        }
+        return new Profile("perception_neuron", new string[0], aliases);
+    }
+
+    // ---------------------------------------------------------------- valvebiped
+
+    private static Profile BuildValveBiped()
+    {
+        var aliases = new Dictionary<BoneRole, string[]>
+        {
+            [BoneRole.Hips] = new[] { "Pelvis" },
+            [BoneRole.Spine0] = new[] { "Spine" },
+            [BoneRole.Spine1] = new[] { "Spine1" },
+            [BoneRole.Spine2] = new[] { "Spine2" },
+            // The stock HL2 chain skips Spine3 (Spine2's child IS Spine4, the chest);
+            // ordered preference + used-bone exclusion also absorbs a variant that has
+            // both: Spine3→Spine3 and Spine4→Spine4.
+            [BoneRole.Spine3] = new[] { "Spine3", "Spine4" },
+            [BoneRole.Spine4] = new[] { "Spine4" },
+            [BoneRole.Neck] = new[] { "Neck1" },
+            [BoneRole.Head] = new[] { "Head1" },
+        };
+        foreach (var s in new[] { "L", "R" })
+        {
+            aliases[Role("Clavicle", s)] = new[] { $"{s}_Clavicle" };
+            aliases[Role("UpperArm", s)] = new[] { $"{s}_UpperArm" };
+            aliases[Role("LowerArm", s)] = new[] { $"{s}_Forearm" };
+            aliases[Role("Hand", s)] = new[] { $"{s}_Hand" };
+            aliases[Role("UpperLeg", s)] = new[] { $"{s}_Thigh" };
+            aliases[Role("LowerLeg", s)] = new[] { $"{s}_Calf" };
+            aliases[Role("Foot", s)] = new[] { $"{s}_Foot" };
+            aliases[Role("Toe", s)] = new[] { $"{s}_Toe0" };
+
+            // Biped-style numbered finger chains behind the ValveBiped namespace:
+            // Finger0 is the thumb; segments append the phalanx digit (Finger0 →
+            // Finger01 → Finger02, Finger1 → Finger11 → …).
+            foreach (var (finger, n) in new[]
+            {
+                ("Thumb", 0), ("Index", 1), ("Middle", 2), ("Ring", 3), ("Pinky", 4),
+            })
+            {
+                aliases[Role($"{finger}Prox", s)] = new[] { $"{s}_Finger{n}" };
+                aliases[Role($"{finger}Mid", s)] = new[] { $"{s}_Finger{n}1" };
+                aliases[Role($"{finger}Dist", s)] = new[] { $"{s}_Finger{n}2" };
+            }
+        }
+        // The fixed "ValveBiped.Bip01_" namespace: anchored, so plain "Bip01 ..." Character
+        // Studio rigs never strip it (and the Biped preset's "^Bip\d+[ _]" never matches
+        // the ValveBiped prefix — the two families cannot cross-claim).
+        return new Profile("valvebiped", new[] { @"^ValveBiped\.Bip01_" }, aliases);
+    }
+
+    // ---------------------------------------------------------------- daz genesis 3/8
+
+    private static Profile BuildDazGenesis()
+    {
+        var aliases = new Dictionary<BoneRole, string[]>
+        {
+            // "hip" is the translating root and LCA of the pelvis (leg branch) and the
+            // abdomen (spine branch); "pelvis" is a leg-branch intermediate and stays
+            // unmapped — same policy as ActorCore's CC_Base_Hip/CC_Base_Pelvis pair.
+            [BoneRole.Hips] = new[] { "hip" },
+            [BoneRole.Spine0] = new[] { "abdomenLower" },
+            [BoneRole.Spine1] = new[] { "abdomenUpper" },
+            [BoneRole.Spine2] = new[] { "chestLower" },
+            [BoneRole.Spine3] = new[] { "chestUpper" },
+            // neckLower→neckUpper→head: neckLower IS the neck; neckUpper stays unmapped
+            // (same policy as ActorCore's NeckTwist02 / rigify's spine.005).
+            [BoneRole.Neck] = new[] { "neckLower" },
+            [BoneRole.Head] = new[] { "head" },
+        };
+        foreach (var s in new[] { "L", "R" })
+        {
+            var p = s == "L" ? "l" : "r"; // lower-case side prefix: lShldrBend, rThighBend
+            aliases[Role("Clavicle", s)] = new[] { $"{p}Collar" };
+            // Bend bones are the primary limb bones; the co-linear *Twist roll helpers
+            // have no aliases and are never mapped.
+            aliases[Role("UpperArm", s)] = new[] { $"{p}ShldrBend" };
+            aliases[Role("LowerArm", s)] = new[] { $"{p}ForearmBend" };
+            aliases[Role("Hand", s)] = new[] { $"{p}Hand" };
+            aliases[Role("UpperLeg", s)] = new[] { $"{p}ThighBend" };
+            aliases[Role("LowerLeg", s)] = new[] { $"{p}Shin" };
+            aliases[Role("Foot", s)] = new[] { $"{p}Foot" };
+            // lMetatarsals sits between foot and toe (arch helper, unmapped).
+            aliases[Role("Toe", s)] = new[] { $"{p}Toe" };
+
+            foreach (var (role, daz) in new[]
+            {
+                ("Thumb", "Thumb"), ("Index", "Index"), ("Middle", "Mid"), ("Ring", "Ring"), ("Pinky", "Pinky"),
+            })
+            {
+                aliases[Role($"{role}Prox", s)] = new[] { $"{p}{daz}1" };
+                aliases[Role($"{role}Mid", s)] = new[] { $"{p}{daz}2" };
+                aliases[Role($"{role}Dist", s)] = new[] { $"{p}{daz}3" };
+            }
+        }
+        return new Profile("daz_genesis", new string[0], aliases);
+    }
+
     // ---------------------------------------------------------------- smpl / smpl-x
 
     private static Profile BuildSmpl(bool withFingers)
@@ -382,13 +603,23 @@ public static class ProfileLibrary
             aliases[Role("Foot", roleSide)] = new[] { $"{nameSide}Foot" };
             aliases[Role("Toe", roleSide)] = new[] { $"{nameSide}ToeBase" };
 
-            // Mixamo-style finger names; segment 4 ("LeftHandIndex4") and the *End markers
-            // carry no role.
-            foreach (var finger in new[] { "Thumb", "Index", "Middle", "Ring", "Pinky" })
+            // Mixamo-style finger NAMES but not mixamo segmentation: SOMA fingers have four
+            // segments where segment 1 is a metacarpal (measured on the repro BVH: Index1
+            // sits 3.2 cm from the wrist at the palm base, then a 6.4 cm metacarpal to the
+            // Index2 knuckle, then 3.7/2.3 cm phalanges to Index3/Index4) — so 2/3/4 are the
+            // phalanges. Mapping 1..3 as Prox/Mid/Dist (mixamo's segmentation) shifted every
+            // curl one joint outward and dropped the distal curl entirely (frozen fingers).
+            // The thumb is three segments plus *End, mapped 1..3 like mixamo's; *End tip
+            // markers carry no role.
+            aliases[Role("ThumbProx", roleSide)] = new[] { $"{nameSide}HandThumb1" };
+            aliases[Role("ThumbMid", roleSide)] = new[] { $"{nameSide}HandThumb2" };
+            aliases[Role("ThumbDist", roleSide)] = new[] { $"{nameSide}HandThumb3" };
+            foreach (var finger in new[] { "Index", "Middle", "Ring", "Pinky" })
             {
-                aliases[Role($"{finger}Prox", roleSide)] = new[] { $"{nameSide}Hand{finger}1" };
-                aliases[Role($"{finger}Mid", roleSide)] = new[] { $"{nameSide}Hand{finger}2" };
-                aliases[Role($"{finger}Dist", roleSide)] = new[] { $"{nameSide}Hand{finger}3" };
+                aliases[Role($"{finger}Meta", roleSide)] = new[] { $"{nameSide}Hand{finger}1" };
+                aliases[Role($"{finger}Prox", roleSide)] = new[] { $"{nameSide}Hand{finger}2" };
+                aliases[Role($"{finger}Mid", roleSide)] = new[] { $"{nameSide}Hand{finger}3" };
+                aliases[Role($"{finger}Dist", roleSide)] = new[] { $"{nameSide}Hand{finger}4" };
             }
         }
         return new Profile("soma_bvh", new string[0], aliases);
