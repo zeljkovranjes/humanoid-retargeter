@@ -33,9 +33,8 @@ No NuGet packages, no native DLLs, no Python, no external tools.
 - **glTF / GLB / VRM** — node hierarchies, skins, animation samplers
   (linear/step/cubic-spline); a VRM's authored `humanoid.humanBones` map is used as the
   ground-truth mapping.
-- **RenderWare `.anm` / `.an5`** — RW 3.x animation streams (verified against
-  FreeStyle 2 game data): single clips and multi-take `.an5` banks, uncompressed and
-  rotation-only keyframe layouts. The animation carries no skeleton — place the
+- **RenderWare `.anm` / `.an5`** — RW 3.x animation streams: single clips and
+  multi-take `.an5` banks, uncompressed and rotation-only keyframe layouts. The animation carries no skeleton — place the
   character's model `.dff` next to the animation (or in its parent folder) and it is
   matched automatically by node count, or pick it explicitly on the file row.
 - **Multi-take unpacking** — a file containing many animations expands into one list entry
