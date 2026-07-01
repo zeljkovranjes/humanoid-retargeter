@@ -791,12 +791,36 @@ public sealed class RetargetWindow : Widget
 			string augmentVmdlPath,
 			Action<HumanoidRetargeter.RetargetBatchResult> batchReady = null )
 	{
+		// Stale-entry preflight (MAIN thread - engine asset lookups): probe every existing
+		// AnimFile source of the augment target against the project + mounted content and
+		// hand the missing ones to the facade, which prunes those entries from the augmented
+		// vmdl. Left in, ONE deleted/moved DMX fails the entire model recompile
+		// ("Node 'X' resolve failure") and every animation the batch just added with it -
+		// the exact user-reported "vmdl did not compile: citizen_human_male.vmdl".
+		if ( options.AugmentVmdlText is not null && options.MissingAnimSources is null )
+		{
+			var missing = FindMissingAnimSources( options.AugmentVmdlText );
+			if ( missing.Count > 0 )
+			{
+				options = new HumanoidRetargeter.BatchOptions
+				{
+					AugmentVmdlText = options.AugmentVmdlText,
+					DmxFolderRelative = options.DmxFolderRelative,
+					AutoSuffixCollisions = options.AutoSuffixCollisions,
+					DetectLocomotionSets = options.DetectLocomotionSets,
+					MissingAnimSources = missing,
+				};
+			}
+		}
+
 		// Heavy, engine-free math: off the main thread so the editor stays responsive.
 		var batch = await Task.Run( () => Retargeter.ConvertBatch( requests, target.Spec, options ) );
 
 		// Task.Run continuations are not guaranteed to resume on the editor main thread;
 		// everything from here on may touch widgets/assets, so hop explicitly.
 		await EditorPipeline.SwitchToMainThread();
+		foreach ( var warning in batch.Warnings )
+			Log.Warning( $"[humanoid-retargeter] {warning}" );
 		batchReady?.Invoke( batch );
 
 		// Augment requested but no augmented vmdl produced: fail before anything is written.
@@ -807,6 +831,47 @@ public sealed class RetargetWindow : Widget
 			batch, options.DmxFolderRelative, augmentVmdlPath );
 		await EditorPipeline.SwitchToMainThread();
 		return (batch, write);
+	}
+
+	/// <summary>
+	/// Existing AnimFile sources of an augment target that resolve NEITHER as a file under
+	/// the open project's Assets NOR through the asset system (mounted content - the citizen
+	/// addon's shipped DMX, library assets, ...). Uncertainty (no project, lookup throw)
+	/// reports the source as present - a kept stale entry fails one recompile, a wrongly
+	/// pruned sequence destroys user data. MAIN THREAD ONLY (asset-system lookups).
+	/// </summary>
+	internal static IReadOnlyList<string> FindMissingAnimSources( string augmentVmdlText )
+	{
+		var missing = new List<string>();
+		try
+		{
+			var assetsPath = Project.Current?.GetAssetsPath();
+			foreach ( var source in HumanoidRetargeter.Target.VmdlAugmenter
+				.CollectAnimSourcePaths( augmentVmdlText ) )
+			{
+				try
+				{
+					var relative = source.Replace( '\\', '/' );
+					if ( assetsPath is not null && File.Exists( System.IO.Path.Combine(
+						assetsPath, relative.Replace( '/', System.IO.Path.DirectorySeparatorChar ) ) ) )
+					{
+						continue;
+					}
+					if ( AssetSystem.FindByPath( relative ) is not null )
+						continue;
+					missing.Add( source );
+				}
+				catch ( Exception )
+				{
+					// uncertain: treat as present, never prune on doubt
+				}
+			}
+		}
+		catch ( Exception e )
+		{
+			Log.Warning( $"[humanoid-retargeter] stale-entry preflight failed: {e.Message}" );
+		}
+		return missing;
 	}
 
 	async Task ConvertEntriesAsync( IReadOnlyList<SourceTakeEntry> only )

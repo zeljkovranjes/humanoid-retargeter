@@ -65,6 +65,19 @@ public sealed class AugmentOptions
     /// (default) = only sources with no directory component count as ours.
     /// </summary>
     public string DmxFolderRelative { get; init; } = "";
+
+    /// <summary>
+    /// Animation source paths (<c>source_filename</c> values, assets-relative, either slash
+    /// direction) the IO-owning caller knows are MISSING on disk. Existing AnimFile nodes
+    /// referencing them are removed from the augmented output — a single unresolvable source
+    /// fails the whole vmdl recompile (<c>Node 'X' resolve failure</c>), so a stale entry
+    /// left over from an earlier batch (its DMX deleted or moved) would take every animation
+    /// in the model down with it. Nodes whose name this batch (re)writes are exempt — their
+    /// DMX is about to exist. 2DBlend nodes referencing a pruned sequence and Folder nodes
+    /// emptied by the pruning are removed with it. Null/empty = keep everything (default;
+    /// the augmenter itself never touches the filesystem).
+    /// </summary>
+    public IReadOnlyCollection<string>? MissingSourceFiles { get; init; }
 }
 
 /// <summary>
@@ -86,12 +99,16 @@ public static class VmdlAugmenter
     /// <param name="backupOfOriginal">Receives <paramref name="vmdlText"/> verbatim so
     /// callers can write a backup before overwriting the file.</param>
     /// <param name="options">Optional behavior knobs; null = defaults.</param>
+    /// <param name="removedSequences">Optional sink receiving the names of stale nodes
+    /// removed because their animation source is gone
+    /// (<see cref="AugmentOptions.MissingSourceFiles"/>).</param>
     /// <exception cref="FormatException">Thrown when the text is not parseable KV3 or has no
     /// rootNode object.</exception>
     /// <exception cref="VmdlAugmentException">Thrown on name collisions with non-AnimFile
     /// nodes.</exception>
     public static string Augment(string vmdlText, IEnumerable<AnimEntry> anims,
-        out string backupOfOriginal, AugmentOptions? options = null)
+        out string backupOfOriginal, AugmentOptions? options = null,
+        ICollection<string>? removedSequences = null)
     {
         ArgumentNullException.ThrowIfNull(vmdlText);
         ArgumentNullException.ThrowIfNull(anims);
@@ -202,10 +219,187 @@ public static class VmdlAugmenter
                 listChildren.Items.Add(folder);
         }
 
+        // Stale entries whose animation source is gone from disk: prune them (plus blends
+        // referencing them and folders they empty) — the compiler otherwise fails the WHOLE
+        // vmdl on the first "Node 'X' resolve failure", newly added sequences included.
+        if (options.MissingSourceFiles is { Count: > 0 })
+        {
+            var missing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var path in options.MissingSourceFiles)
+            {
+                if (!string.IsNullOrWhiteSpace(path))
+                    missing.Add(path.Replace('\\', '/'));
+            }
+            var batchNames = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var entry in entries)
+                batchNames.Add(entry.Name);
+
+            var pruned = new List<string>();
+            var touched = new HashSet<KvArray>();
+            PruneMissingSourceAnimFiles(listChildren, missing, batchNames, pruned, touched);
+            if (pruned.Count > 0)
+            {
+                var prunedSet = new HashSet<string>(pruned, StringComparer.Ordinal);
+                PruneBlendsReferencing(listChildren, prunedSet, pruned, touched);
+                PruneEmptiedFolders(listChildren, pruned, touched);
+                if (removedSequences is not null)
+                {
+                    foreach (var name in pruned)
+                        removedSequences.Add(name);
+                }
+            }
+        }
+
         if (options.NeutralizePinkyConstraints)
             NeutralizePinky(rootNode);
 
         return Kv3.Serialize(doc);
+    }
+
+    /// <summary>
+    /// Every distinct AnimFile <c>source_filename</c> in the vmdl's own AnimationList
+    /// (recursively through Folder nodes; prefab-provided entries are not part of this
+    /// document and are not reported). IO-owning callers probe these against their content
+    /// roots to build <see cref="AugmentOptions.MissingSourceFiles"/> /
+    /// <see cref="BatchOptions.MissingAnimSources"/>. Unparseable text yields an empty list —
+    /// the augmentation itself surfaces the parse error.
+    /// </summary>
+    public static IReadOnlyList<string> CollectAnimSourcePaths(string vmdlText)
+    {
+        ArgumentNullException.ThrowIfNull(vmdlText);
+
+        Kv3Document doc;
+        try
+        {
+            doc = Kv3.Parse(vmdlText);
+        }
+        catch (FormatException)
+        {
+            return Array.Empty<string>();
+        }
+
+        if (doc.Root is not KvObject root || root.GetOrNull("rootNode") is not KvObject rootNode
+            || rootNode.GetOrNull("children") is not KvArray children)
+            return Array.Empty<string>();
+        var animList = children.Items.OfType<KvObject>()
+            .FirstOrDefault(o => o.GetString("_class") == "AnimationList");
+        if (animList?.GetOrNull("children") is not KvArray items)
+            return Array.Empty<string>();
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var paths = new List<string>();
+        Collect(items);
+        return paths;
+
+        void Collect(KvArray array)
+        {
+            foreach (var node in array.Items.OfType<KvObject>())
+            {
+                if (node.GetString("_class") == "AnimFile")
+                {
+                    var source = node.GetString("source_filename") ?? "";
+                    if (source.Length > 0 && seen.Add(source.Replace('\\', '/')))
+                        paths.Add(source);
+                }
+                if (node.GetOrNull("children") is KvArray nested)
+                    Collect(nested);
+            }
+        }
+    }
+
+    // ------------------------------------------------------- missing-source pruning
+
+    /// <summary>Removes every AnimFile (recursively through Folders) whose
+    /// <c>source_filename</c> is in <paramref name="missing"/>, except nodes named by this
+    /// batch (their DMX is about to be written). Removed names collect in
+    /// <paramref name="pruned"/>; arrays a node was removed from in <paramref name="touched"/>.</summary>
+    private static void PruneMissingSourceAnimFiles(
+        KvArray items, HashSet<string> missing, HashSet<string> batchNames,
+        List<string> pruned, HashSet<KvArray> touched)
+    {
+        for (var i = items.Items.Count - 1; i >= 0; i--)
+        {
+            if (items.Items[i] is not KvObject node)
+                continue;
+            if (node.GetString("_class") == "AnimFile")
+            {
+                var name = node.GetString("name") ?? "";
+                var source = (node.GetString("source_filename") ?? "").Replace('\\', '/');
+                if (source.Length > 0 && missing.Contains(source) && !batchNames.Contains(name))
+                {
+                    items.Items.RemoveAt(i);
+                    touched.Add(items);
+                    if (name.Length > 0)
+                        pruned.Add(name);
+                }
+                continue;
+            }
+            if (node.GetOrNull("children") is KvArray nested)
+                PruneMissingSourceAnimFiles(nested, missing, batchNames, pruned, touched);
+        }
+    }
+
+    /// <summary>Removes 2DBlend nodes whose <c>blend_anim_list</c> references a sequence
+    /// pruned by the missing-source pass — the blend cannot resolve its member either. Blends
+    /// referencing only intact sequences (including prefab-provided ones) are untouched.</summary>
+    private static void PruneBlendsReferencing(
+        KvArray items, HashSet<string> prunedSet, List<string> pruned, HashSet<KvArray> touched)
+    {
+        for (var i = items.Items.Count - 1; i >= 0; i--)
+        {
+            if (items.Items[i] is not KvObject node)
+                continue;
+            if (node.GetString("_class") == "2DBlend" && BlendReferencesAny(node, prunedSet))
+            {
+                items.Items.RemoveAt(i);
+                touched.Add(items);
+                var name = node.GetString("name") ?? "";
+                if (name.Length > 0)
+                    pruned.Add(name);
+                continue;
+            }
+            if (node.GetOrNull("children") is KvArray nested)
+                PruneBlendsReferencing(nested, prunedSet, pruned, touched);
+        }
+    }
+
+    /// <summary>Whether any non-empty cell of the blend's grid names a pruned sequence.</summary>
+    private static bool BlendReferencesAny(KvObject blendNode, HashSet<string> prunedSet)
+    {
+        if (blendNode.GetOrNull("blend_anim_list") is not KvArray grid)
+            return false;
+        foreach (var row in grid.Items.OfType<KvArray>())
+        {
+            foreach (var cell in row.Items.OfType<KvString>())
+            {
+                if (cell.Value.Length > 0 && prunedSet.Contains(cell.Value))
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>Removes Folder nodes the pruning EMPTIED (children array now empty AND a
+    /// node was actually removed from it — pre-existing empty folders are user data and
+    /// survive). Removing an inner folder marks the outer array touched, so folders that
+    /// emptied transitively fall too.</summary>
+    private static void PruneEmptiedFolders(KvArray items, List<string> pruned, HashSet<KvArray> touched)
+    {
+        for (var i = items.Items.Count - 1; i >= 0; i--)
+        {
+            if (items.Items[i] is not KvObject node || node.GetString("_class") != "Folder")
+                continue;
+            if (node.GetOrNull("children") is not KvArray nested)
+                continue;
+            PruneEmptiedFolders(nested, pruned, touched);
+            if (nested.Items.Count > 0 || !touched.Contains(nested))
+                continue;
+            items.Items.RemoveAt(i);
+            touched.Add(items);
+            var name = node.GetString("name") ?? "";
+            if (name.Length > 0)
+                pruned.Add(name);
+        }
     }
 
     // ---------------------------------------------------------------- locomotion folders
