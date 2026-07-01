@@ -855,6 +855,41 @@ public sealed class RetargetWindow : Widget
 				return;
 			}
 		}
+		else
+		{
+			// Standalone output ACCUMULATES. Every conversion regenerating
+			// retargeted_animations.vmdl from ONLY the current batch clobbered everything
+			// earlier runs had written (user report: convert a large batch, then convert
+			// one more row - the vmdl ends up with just that row). When the output vmdl
+			// already exists, run the batch through the augment machinery against it
+			// instead: same-named pipeline-owned AnimFiles are replaced (idempotent
+			// re-runs), everything else is appended. An unparseable existing file falls
+			// back to a fresh standalone write (pipeline-owned - never fail the batch on
+			// our own artifact).
+			var assetsPath = Project.Current?.GetAssetsPath();
+			if ( assetsPath is not null )
+			{
+				var standalonePath = System.IO.Path.Combine(
+					assetsPath,
+					NormalizedOutputFolder().Replace( '/', System.IO.Path.DirectorySeparatorChar ),
+					"retargeted_animations.vmdl" );
+				if ( File.Exists( standalonePath ) )
+				{
+					try
+					{
+						var text = File.ReadAllText( standalonePath );
+						HumanoidRetargeter.Target.Kv3.Parse( text ); // reject corrupt files up front
+						augmentPath = standalonePath;
+						augmentText = text;
+					}
+					catch ( Exception e )
+					{
+						Log.Warning( $"[humanoid-retargeter] Existing {standalonePath} could not be "
+							+ $"parsed ({FirstLine( e.Message )}) - regenerating it from this batch only." );
+					}
+				}
+			}
+		}
 
 		_converting = true;
 		_progress = 0.05f;
@@ -901,7 +936,7 @@ public sealed class RetargetWindow : Widget
 					take.StatusDetail = detail;
 				}
 				RefreshAll();
-				SetStatus( $"Augmenting {_augmentAsset?.Name} failed - nothing written. {detail}", Theme.Red );
+				SetStatus( $"Augmenting {System.IO.Path.GetFileName( augmentPath )} failed - nothing written. {detail}", Theme.Red );
 				return;
 			}
 
