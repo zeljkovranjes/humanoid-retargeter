@@ -165,6 +165,18 @@ public sealed class GeometricSolver : IRetargetSolver
             /// canonical-frame modes, <c>Q_src · Q_tgt⁻¹ · R_tgtNormRest</c> for
             /// <see cref="RoleTransferMode.CharacterDeltaFromRest"/>.</summary>
             public required Quaternion B { get; init; }
+
+            /// <summary>Slot of the source HIPS ΔR when this entry replays body-frame-aware
+            /// (the <see cref="RoleTransferMode.CharacterDeltaFromRest"/> head), else null
+            /// and the entry is the constant-folded product above.</summary>
+            public int? HeadingSlot { get; init; }
+
+            /// <summary>Constant head-carriage divergence <c>D = C_tgt · (Q · C_src)⁻¹</c>
+            /// (target world, ≈ a lateral-axis pitch: how much more/less the target's neutral
+            /// head leans than the source's). Re-applied per frame in the current body frame
+            /// — see the body-frame comment in <see cref="TryAddDirect"/>. Identity when
+            /// <see cref="HeadingSlot"/> is null.</summary>
+            public Quaternion Div { get; init; }
         }
 
         private readonly struct SpineEntry
@@ -317,6 +329,37 @@ public sealed class GeometricSolver : IRetargetSolver
             {
                 mode = RoleTransferMode.AbsoluteDirection;
             }
+            // Heading-aware head replay. The plain CharacterDeltaFromRest product
+            // Q·ΔR·Q⁻¹·R_tgtRest applies the constant source↔target head-carriage
+            // divergence (the rigs' differing neutral neck→head lean, D below) in the
+            // REST heading's frame — it rides along with the world delta, so when the
+            // clip holds a pitch while the character faces away from its rest heading
+            // the divergence counter-rotates and reflects into a real pitch error of up
+            // to 2×D (measured −26.6° chin-up plateaus on a tumbling clip whose rig
+            // diverges 13.4° from the citizen; pure yaw is exact, error 0 at rest
+            // facing). Fix: transport D with the body — conjugate it by the HIPS ΔR
+            // mapped to the target side, so it is re-applied in the CURRENT body frame:
+            //     W_t = H·D·H⁻¹ · Q·ΔR · C_src·C_tgt⁻¹·R_tgtRest,  H = Q·ΔR_hips·Q⁻¹
+            // Properties: exact at ΔR=I (rest preserved, D cancels), identical to the
+            // old product for pure yaw (head turning with the body) and for pitches at
+            // rest facing (D is lateral and commutes with lateral-axis rotations),
+            // collapses to the same round-trip identity when source==target (D=I),
+            // removes the 2× reflection at turned facings, and stays well-defined
+            // through inversions (a yaw-twist extraction is degenerate mid-somersault
+            // — measured: yaw-conjugation left the inverted-tuck plateau at −26.8°,
+            // body transport is the form that clears it). Feet share the world-axes
+            // replay but their pitch/roll is re-anchored by FootGroundAlign/FootPlant
+            // cleanups — left as is.
+            int? headingSlot = null;
+            var div = Quaternion.Identity;
+            if (role == BoneRole.Head
+                && mode == RoleTransferMode.CharacterDeltaFromRest
+                && srcMap.RoleToBone.TryGetValue(BoneRole.Hips, out var srcHipsBone))
+            {
+                headingSlot = RegisterSlot(srcHipsBone);
+                div = MathQ.Normalize(ct * Quaternion.Conjugate(cs) * Quaternion.Conjugate(_basisChange));
+            }
+
             _direct.Add(new DirectEntry
             {
                 Slot = RegisterSlot(srcBone),
@@ -326,9 +369,11 @@ public sealed class GeometricSolver : IRetargetSolver
                     RoleTransferMode.DeltaFromRest => MathQ.Normalize(ct * Quaternion.Conjugate(cs)),
                     _ => _basisChange,
                 },
-                B = mode == RoleTransferMode.CharacterDeltaFromRest
+                B = mode == RoleTransferMode.CharacterDeltaFromRest && headingSlot is null
                     ? MathQ.Normalize(Quaternion.Conjugate(_basisChange) * _tgtNormRest[tgtBone].Rot)
                     : MathQ.Normalize(cs * Quaternion.Conjugate(ct) * _tgtNormRest[tgtBone].Rot),
+                HeadingSlot = headingSlot,
+                Div = div,
             });
         }
 
@@ -486,7 +531,16 @@ public sealed class GeometricSolver : IRetargetSolver
 
             foreach (var d in _direct)
             {
-                _rot[d.TgtBone] = MathQ.Normalize(d.Pre * _deltas[d.Slot] * d.B);
+                var r = d.Pre * _deltas[d.Slot] * d.B;
+                if (d.HeadingSlot is int headingSlot)
+                {
+                    // Body-frame head replay (see TryAddDirect): re-apply the constant
+                    // carriage divergence in the CURRENT body frame (hips ΔR transported
+                    // to the target side) instead of the rest heading's frame.
+                    var body = _basisChange * _deltas[headingSlot] * Quaternion.Conjugate(_basisChange);
+                    r = body * d.Div * Quaternion.Conjugate(body) * r;
+                }
+                _rot[d.TgtBone] = MathQ.Normalize(r);
                 _solved[d.TgtBone] = true;
             }
 
