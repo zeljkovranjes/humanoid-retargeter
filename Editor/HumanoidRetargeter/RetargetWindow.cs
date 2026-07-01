@@ -11,8 +11,8 @@ using Sandbox;
 namespace HumanoidRetargeter.Editor;
 
 /// <summary>
-/// The Humanoid Retargeter dock window (design §7): add .fbx/.bvh/.glb/.gltf/.vrm files
-/// (file dialog or asset-browser context menu), see each file's detected profile as a colored chip
+/// The Humanoid Retargeter dock window (design §7): add .fbx/.bvh/.glb/.gltf/.vrm/.anm/.an5
+/// files (file dialog or asset-browser context menu), see each file's detected profile as a colored chip
 /// (green = preset/user preset, amber = auto-mapped/needs review, red = failed), fix
 /// mappings manually, preview the retargeted clip on the skinned target model, and batch
 /// convert everything into one animation vmdl (standalone or augmenting an existing one).
@@ -105,7 +105,7 @@ public sealed class RetargetWindow : Widget
 		top.Spacing = 8;
 
 		var add = top.Add( new Button.Primary( "Add Files…" ) { Icon = "add" } );
-		add.ToolTip = "Add .fbx / .bvh / .glb / .gltf / .vrm animation files to convert";
+		add.ToolTip = "Add .fbx / .bvh / .glb / .gltf / .vrm / .anm / .an5 animation files to convert";
 		add.Clicked = AddFilesViaDialog;
 
 		top.AddSpacingCell( 8 );
@@ -367,7 +367,7 @@ public sealed class RetargetWindow : Widget
 		var fd = new FileDialog( null ) { Title = "Add animation files…" };
 		fd.SetFindExistingFiles();
 		fd.SetModeOpen();
-		fd.SetNameFilter( "Animation Files (*.fbx *.bvh *.glb *.gltf *.vrm)" );
+		fd.SetNameFilter( "Animation Files (*.fbx *.bvh *.glb *.gltf *.vrm *.anm *.an5)" );
 		if ( !fd.Execute() )
 			return;
 
@@ -474,6 +474,34 @@ public sealed class RetargetWindow : Widget
 	void RemoveEntry( SourceFileEntry entry )
 	{
 		_entries.Remove( entry );
+		RefreshAll();
+	}
+
+	/// <summary>
+	/// Explicit skeleton selection for RenderWare animations (.anm/.an5 carry no skeleton;
+	/// automatic .dff resolution failed): re-loads the entry against the picked model .dff
+	/// — styled like the custom-target FBX picker.
+	/// </summary>
+	void PickSkeletonFor( SourceFileEntry entry )
+	{
+		var path = EditorUtility.OpenFileDialog(
+			$"Select skeleton model (.dff) for {entry.FileName}",
+			"RenderWare Models (*.dff)",
+			System.IO.Path.GetDirectoryName( entry.FilePath ) );
+		if ( string.IsNullOrEmpty( path ) )
+			return;
+
+		var reloaded = SourceFileEntry.Load( entry.FilePath, Project.Current?.GetAssetsPath(), path );
+		var index = _entries.IndexOf( entry );
+		if ( index >= 0 )
+			_entries[index] = reloaded;
+		else
+			_entries.Add( reloaded );
+
+		if ( reloaded.Status == EntryStatus.Failed )
+			SetStatus( $"{reloaded.FileName}: {reloaded.StatusDetail}", Theme.Red );
+		else if ( reloaded.NeedsUserDecision )
+			ShowNoProfileDialog( reloaded );
 		RefreshAll();
 	}
 
@@ -636,7 +664,8 @@ public sealed class RetargetWindow : Widget
 			if ( take.TakeIndex >= scene.Clips.Count
 				|| MathF.Abs( scene.Clips[take.TakeIndex].Fps - clip.Fps ) > 0.01f )
 			{
-				scene = Retargeter.ImportSource( entry.Bytes, entry.FileName, clip.Fps );
+				scene = Retargeter.ImportSource(
+					entry.Bytes, entry.FileName, clip.Fps, entry.SkeletonBytes );
 			}
 
 			var derived = HumanoidRetargeter.Dl.DlMappingDeriver.Derive(
@@ -681,6 +710,7 @@ public sealed class RetargetWindow : Widget
 	{
 		SourceData = take.File.Bytes,
 		SourceFileName = take.File.FileName,
+		SkeletonData = take.File.SkeletonBytes, // RenderWare companion .dff; null otherwise
 		SourceId = take.SourceId, // full path + take index: rows must join results unambiguously
 		ClipDefinitions = take.File.ClipDefinitions,
 		TakeIndex = take.File.ClipDefinitions is not null
@@ -1031,7 +1061,7 @@ public sealed class RetargetWindow : Widget
 		{
 			var empty = _listLayout.Add( new Label( this )
 			{
-				Text = "No files yet. Use \"Add Files…\" or right-click .fbx/.bvh/.glb/.gltf/.vrm files in the "
+				Text = "No files yet. Use \"Add Files…\" or right-click .fbx/.bvh/.glb/.gltf/.vrm/.anm/.an5 files in the "
 					+ "Asset Browser and choose \"Retarget to s&box rig…\".",
 				WordWrap = true,
 			} );
@@ -1122,6 +1152,16 @@ public sealed class RetargetWindow : Widget
 			}
 
 			Layout.AddStretchCell();
+
+			// RenderWare animation without a resolvable skeleton: offer explicit .dff
+			// selection (resolution option b — see SourceFileEntry.ResolveSkeletonFile).
+			if ( entry.NeedsSkeletonFile )
+			{
+				var pickSkeleton = Layout.Add( new Button( "Pick skeleton…", "accessibility" ) );
+				pickSkeleton.ToolTip = "RenderWare animations carry no skeleton — select the "
+					+ "character's model .dff to load this file";
+				pickSkeleton.Clicked = () => _window.PickSkeletonFor( entry );
+			}
 
 			if ( entry.Scene is not null && take is not null )
 			{

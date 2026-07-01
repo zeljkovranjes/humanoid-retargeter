@@ -18,7 +18,7 @@ Drop in Mixamo, ActorCore/Character Creator, UE Mannequin, BVH mocap, or glTF an
 | **s&box** (editor) | A current s&box install with the editor (`sbox-dev`). The library is editor-side; nothing runs at game runtime. |
 | **A game project** | Conversions write into your project's `Assets/` folder. Any project works — including the shipped samples. The library refuses to modify engine-owned content (`addons/`, `core/`). |
 | **This library installed** | Copy or clone this repository into your project's `Libraries/` folder (e.g. `Libraries/local.humanoid_retargeter/`). Only `Code/`, `Editor/`, `Assets/` and the `.sbproj` are needed. |
-| Source animations | `.fbx` (binary or ASCII, FBX 7.x), `.bvh`, `.glb`, `.gltf`, or `.vrm` files. FBX 6.x is rejected with a clear message — re-export from your DCC. |
+| Source animations | `.fbx` (binary or ASCII, FBX 7.x), `.bvh`, `.glb`, `.gltf`, `.vrm`, or RenderWare `.anm`/`.an5` files. FBX 6.x is rejected with a clear message — re-export from your DCC. |
 
 No NuGet packages, no native DLLs, no Python, no external tools.
 
@@ -33,6 +33,11 @@ No NuGet packages, no native DLLs, no Python, no external tools.
 - **glTF / GLB / VRM** — node hierarchies, skins, animation samplers
   (linear/step/cubic-spline); a VRM's authored `humanoid.humanBones` map is used as the
   ground-truth mapping.
+- **RenderWare `.anm` / `.an5`** — RW 3.x animation streams (verified against
+  FreeStyle 2 game data): single clips and multi-take `.an5` banks, uncompressed and
+  rotation-only keyframe layouts. The animation carries no skeleton — place the
+  character's model `.dff` next to the animation (or in its parent folder) and it is
+  matched automatically by node count, or pick it explicitly on the file row.
 - **Multi-take unpacking** — a file containing many animations expands into one list entry
   per take, each independently previewable, removable, and convertible.
 
