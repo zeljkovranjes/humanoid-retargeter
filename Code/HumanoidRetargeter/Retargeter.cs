@@ -32,7 +32,9 @@ using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global
 /// Pipeline per clip:
 /// <list type="number">
 /// <item><b>Import</b> — format by file extension (<c>.fbx</c>/<c>.bvh</c>/<c>.glb</c>/
-/// <c>.gltf</c>), content sniff as fallback → <see cref="SourceScene"/> (cm, native axes).</item>
+/// <c>.gltf</c>/<c>.vrm</c>/<c>.anm</c>/<c>.an5</c>), content sniff as fallback →
+/// <see cref="SourceScene"/> (cm, native axes). RenderWare animations additionally take the
+/// companion model's .dff bytes via <see cref="RetargetRequest.SkeletonData"/>.</item>
 /// <item><b>Mapping</b> — per request: <see cref="RetargetRequest.MappingOverride"/> wins;
 /// else <see cref="ProfileDetector.Detect"/> over the preset library (user presets are
 /// loaded Editor-side and arrive as overrides); else <see cref="AutoMapper.Map"/> as best
