@@ -44,7 +44,10 @@ using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global
 /// the source's rest line and hunches the neck, so <see cref="RoleTransferMode.DeltaFromRest"/>
 /// roles instead replay the source's canonical-space delta from its own normalized rest onto
 /// the target's normalized rest: <c>R_tgtWorld(f) = C_tgt · ΔC(f) · C_tgt⁻¹ · R_tgtNormRest</c>
-/// with <c>ΔC(f) = C_src⁻¹·ΔR(f)·C_src</c>. Feet (rest foot→toe directions diverge 11–44°
+/// with <c>ΔC(f) = C_src⁻¹·ΔR(f)·C_src</c> (the NECK additionally transports the pure-pitch
+/// carriage divergence inside that constant with the body heading — a world-fixed divergence
+/// axis reads as lateral neck tilt once the clip's heading turns away from the rest heading;
+/// see <see cref="Plan.TryAddDirect"/>). Feet (rest foot→toe directions diverge 11–44°
 /// from the s&amp;box rig's steep ankle): absolute matching pitched/yawed planted feet by
 /// that divergence ("feet bent upward/inward"), while canonical-frame remapping would tilt
 /// the rotation <i>axes</i> by it (measured up to 47° planted-pitch error on a CMU-style
@@ -193,17 +196,17 @@ public sealed class GeometricSolver : IRetargetSolver
             /// <see cref="RoleTransferMode.CharacterDeltaFromRest"/>.</summary>
             public required Quaternion B { get; init; }
 
-            /// <summary>Slot of the source HIPS ΔR when this entry replays heading-aware
-            /// (the <see cref="RoleTransferMode.CharacterDeltaFromRest"/> head), else null
-            /// and the entry is the constant-folded product above. The hips twist is only
-            /// the FALLBACK transport (head pointing near-vertical); the primary transport
-            /// is the head's own carried yaw — see <see cref="HeadRestDirSrc"/>.</summary>
+            /// <summary>Slot of the transport bone's ΔR when this entry replays
+            /// heading-aware (the <see cref="RoleTransferMode.CharacterDeltaFromRest"/>
+            /// head: the source neck, falling back to the hips; the
+            /// <see cref="RoleTransferMode.DeltaFromRest"/> neck: the hips), else null and
+            /// the entry is the constant-folded product above.</summary>
             public int? HeadingSlot { get; init; }
 
-            /// <summary>Constant head-carriage divergence: the pure lateral-axis PITCH
-            /// between the rigs' rest head-lean angles (how much more/less the target's
-            /// neutral head leans than the source's). Re-applied per frame about the
-            /// current head facing's lateral axis — see <see cref="TryAddDirect"/>.
+            /// <summary>Constant carriage divergence: the pure lateral-axis PITCH between
+            /// the rigs' rest neck→head lean angles (how much more/less the target's
+            /// neutral carriage leans than the source's). Re-applied per frame about the
+            /// transport bone's carried-yaw lateral axis — see <see cref="TryAddDirect"/>.
             /// Identity when <see cref="HeadingSlot"/> is null.</summary>
             public Quaternion Div { get; init; }
         }
@@ -484,17 +487,38 @@ public sealed class GeometricSolver : IRetargetSolver
             // tracking (−11.9° → −19.7° mean on a curving CMU walk). Only the anatomical
             // lean difference is heading-dependent; everything else stays in the constant
             // product exactly as before.
+            // The NECK's DeltaFromRest constant has the same structure and the same defect:
+            // ct·cs⁻¹ factors exactly into D·K (D = the pure-pitch carriage divergence
+            // between the rigs' rest neck→head leans about the target lateral axis, K the
+            // frames' construction residue — measured 24.90° pitch / 0.00° residue on the
+            // rokoko-class Armchair1 rig vs the citizen, 13.4°/0.5° on CMU), so the old
+            // product W = D·(K·ΔR·K⁻¹)·D⁻¹·R_tgtRest re-applies D about the REST heading's
+            // lateral axis. A clip whose body heading is yawed λ away from the rest heading
+            // reads that pitch as heading-relative LATERAL tilt ≈ D·sin λ (measured on
+            // Armchair1, seated facing ~125° off rest: mean +13.3° / worst 85.7° lateral
+            // neck-segment residual, correlation 0.87 with D·sin λ — the user-visible
+            // "neck sticking out to the left"; pre-existing since before the head-carriage
+            // wave). Same fix, same machinery: transport D with the carried heading yaw,
+            // W = Y·D·Y⁻¹·K·ΔR·K⁻¹·D⁻¹·R_tgtRest (Pre absorbs D⁻¹, B is unchanged since
+            // K⁻¹·D⁻¹ = cs·ct⁻¹). Identical to the old product at rest facing, exact at
+            // ΔR = I, and the same round-trip identity (D = I when source == target).
             int? headingSlot = null;
             var div = Quaternion.Identity;
-            if (role == BoneRole.Head
-                && mode == RoleTransferMode.CharacterDeltaFromRest
+            var headReplay = role == BoneRole.Head && mode == RoleTransferMode.CharacterDeltaFromRest;
+            var neckReplay = role == BoneRole.Neck && mode == RoleTransferMode.DeltaFromRest;
+            if ((headReplay || neckReplay)
                 && srcMap.RoleToBone.TryGetValue(BoneRole.Hips, out var srcHipsBone))
             {
-                // Transport frame: the source NECK's yaw twist (carriage divergence is a
-                // neck-frame property — the neck turns fully with the body and carries
-                // most of the head's look-around yaw); neck-less rigs use the hips.
+                // Transport frame: the HEAD uses the source NECK's yaw twist (carriage
+                // divergence is a neck-frame property — the neck turns fully with the body
+                // and carries most of the head's look-around yaw); neck-less rigs use the
+                // hips. The NECK itself uses the HIPS yaw twist (body heading): its rest
+                // lean is TORSO anatomy, and transporting it with the neck's own yaw was
+                // measured to over-rotate the tilt axis whenever the head looks off-body
+                // (+12.0° lateral seg residual at a 44°-yawed look on Armchair1 vs +5.5°
+                // with the body heading; clip means 3.0° vs 0.5°).
                 headingSlot = RegisterSlot(
-                    srcMap.RoleToBone.TryGetValue(BoneRole.Neck, out var srcNeckBone)
+                    headReplay && srcMap.RoleToBone.TryGetValue(BoneRole.Neck, out var srcNeckBone)
                         ? srcNeckBone
                         : srcHipsBone);
                 var srcDir = Vector3.Normalize(Vector3.Transform(Vector3.UnitX, cs));
@@ -516,7 +540,11 @@ public sealed class GeometricSolver : IRetargetSolver
                 TgtBone = tgtBone,
                 Pre = mode switch
                 {
-                    RoleTransferMode.DeltaFromRest => MathQ.Normalize(ct * Quaternion.Conjugate(cs)),
+                    // div is identity except for the heading-transported NECK (see above),
+                    // where Pre must be K = D⁻¹·ct·cs⁻¹ so the per-frame premultiplier
+                    // Y·D·Y⁻¹ re-applies the divergence about the CURRENT heading.
+                    RoleTransferMode.DeltaFromRest => MathQ.Normalize(
+                        Quaternion.Conjugate(div) * ct * Quaternion.Conjugate(cs)),
                     _ => _basisChange,
                 },
                 B = mode == RoleTransferMode.CharacterDeltaFromRest
@@ -688,7 +716,7 @@ public sealed class GeometricSolver : IRetargetSolver
                 var r = d.Pre * _deltas[d.Slot] * d.B;
                 if (d.HeadingSlot is int headingSlot)
                 {
-                    // Carriage-divergence transport for the head (see TryAddDirect): the
+                    // Carriage-divergence transport for the head/neck (see TryAddDirect): the
                     // pure-pitch divergence D is re-applied about the lateral axis of the
                     // transport bone's carried yaw (its ΔR's twist about character up —
                     // stable at any pitch, unlike direction-projection yaw which is
