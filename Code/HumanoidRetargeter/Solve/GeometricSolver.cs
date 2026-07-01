@@ -193,16 +193,18 @@ public sealed class GeometricSolver : IRetargetSolver
             /// <see cref="RoleTransferMode.CharacterDeltaFromRest"/>.</summary>
             public required Quaternion B { get; init; }
 
-            /// <summary>Slot of the source HIPS ΔR when this entry replays body-frame-aware
+            /// <summary>Slot of the source HIPS ΔR when this entry replays heading-aware
             /// (the <see cref="RoleTransferMode.CharacterDeltaFromRest"/> head), else null
-            /// and the entry is the constant-folded product above.</summary>
+            /// and the entry is the constant-folded product above. The hips twist is only
+            /// the FALLBACK transport (head pointing near-vertical); the primary transport
+            /// is the head's own carried yaw — see <see cref="HeadRestDirSrc"/>.</summary>
             public int? HeadingSlot { get; init; }
 
-            /// <summary>Constant head-carriage divergence <c>D = C_tgt · (Q · C_src)⁻¹</c>
-            /// (target world, ≈ a lateral-axis pitch: how much more/less the target's neutral
-            /// head leans than the source's). Re-applied per frame in the current body frame
-            /// — see the body-frame comment in <see cref="TryAddDirect"/>. Identity when
-            /// <see cref="HeadingSlot"/> is null.</summary>
+            /// <summary>Constant head-carriage divergence: the pure lateral-axis PITCH
+            /// between the rigs' rest head-lean angles (how much more/less the target's
+            /// neutral head leans than the source's). Re-applied per frame about the
+            /// current head facing's lateral axis — see <see cref="TryAddDirect"/>.
+            /// Identity when <see cref="HeadingSlot"/> is null.</summary>
             public Quaternion Div { get; init; }
         }
 
@@ -455,27 +457,57 @@ public sealed class GeometricSolver : IRetargetSolver
             // the divergence counter-rotates and reflects into a real pitch error of up
             // to 2×D (measured −26.6° chin-up plateaus on a tumbling clip whose rig
             // diverges 13.4° from the citizen; pure yaw is exact, error 0 at rest
-            // facing). Fix: transport D with the body — conjugate it by the HIPS ΔR
-            // mapped to the target side, so it is re-applied in the CURRENT body frame:
-            //     W_t = H·D·H⁻¹ · Q·ΔR · C_src·C_tgt⁻¹·R_tgtRest,  H = Q·ΔR_hips·Q⁻¹
+            // facing). Fix: transport D with the head's own carried yaw — conjugate it by
+            // the yaw of the CURRENT source head direction (rest-relative), mapped to the
+            // target side:
+            //     W_t = Y·D·Y⁻¹ · Q·ΔR · Q⁻¹·D⁻¹·R_tgtRest,  Y = Q·Yaw(λ(f)−λ0)·Q⁻¹
+            // where λ(f) is the carried head direction's yaw about character up.
             // Properties: exact at ΔR=I (rest preserved, D cancels), identical to the
             // old product for pure yaw (head turning with the body) and for pitches at
             // rest facing (D is lateral and commutes with lateral-axis rotations),
-            // collapses to the same round-trip identity when source==target (D=I),
-            // removes the 2× reflection at turned facings, and stays well-defined
-            // through inversions (a yaw-twist extraction is degenerate mid-somersault
-            // — measured: yaw-conjugation left the inverted-tuck plateau at −26.8°,
-            // body transport is the form that clears it). Feet share the world-axes
+            // collapses to the same round-trip identity when source==target (D=I), and
+            // removes the 2× reflection at turned facings. Transport frame choices that
+            // measurably FAIL: the full hips ΔR rides the step cycle's hip pitch/roll
+            // into the divergence axis (median 8.4° per-step head wobble on a plain CMU
+            // walk, 22° peaks seated — a user-visible "weird neck"); the hips yaw twist
+            // distorts head YAW whenever the head looks off-heading (−12° → −21° mean on
+            // a curving walk whose head leads the turn) because pitching about an axis
+            // not perpendicular to the head direction leaks into yaw. The head's own
+            // carried yaw is the axis that by construction changes lean only (hips yaw
+            // twist remains as the near-vertical fallback). Feet share the world-axes
             // replay but their pitch/roll is re-anchored by FootGroundAlign/FootPlant
             // cleanups — left as is.
+            // D is the PURE PITCH between the rigs' rest head-lean angles (the audit's
+            // "expected constant lean offset"), NOT the full canonical-frame difference
+            // ct·cs⁻¹·Q⁻¹: the full form also carries the frames' yaw/roll construction
+            // residue, and yaw-conjugating that residue measurably worsened head yaw
+            // tracking (−11.9° → −19.7° mean on a curving CMU walk). Only the anatomical
+            // lean difference is heading-dependent; everything else stays in the constant
+            // product exactly as before.
             int? headingSlot = null;
             var div = Quaternion.Identity;
             if (role == BoneRole.Head
                 && mode == RoleTransferMode.CharacterDeltaFromRest
                 && srcMap.RoleToBone.TryGetValue(BoneRole.Hips, out var srcHipsBone))
             {
-                headingSlot = RegisterSlot(srcHipsBone);
-                div = MathQ.Normalize(ct * Quaternion.Conjugate(cs) * Quaternion.Conjugate(_basisChange));
+                // Transport frame: the source NECK's yaw twist (carriage divergence is a
+                // neck-frame property — the neck turns fully with the body and carries
+                // most of the head's look-around yaw); neck-less rigs use the hips.
+                headingSlot = RegisterSlot(
+                    srcMap.RoleToBone.TryGetValue(BoneRole.Neck, out var srcNeckBone)
+                        ? srcNeckBone
+                        : srcHipsBone);
+                var srcDir = Vector3.Normalize(Vector3.Transform(Vector3.UnitX, cs));
+                var tgtDir = Vector3.Normalize(Vector3.Transform(Vector3.UnitX, ct));
+                var srcLean = MathF.Atan2(
+                    Vector3.Dot(srcDir, _srcCanon.CharacterForward),
+                    Vector3.Dot(srcDir, _srcCanon.CharacterUp));
+                var tgtLean = MathF.Atan2(
+                    Vector3.Dot(tgtDir, _tgtCanon.CharacterForward),
+                    Vector3.Dot(tgtDir, _tgtCanon.CharacterUp));
+                var lateral = Vector3.Normalize(
+                    Vector3.Cross(_tgtCanon.CharacterUp, _tgtCanon.CharacterForward));
+                div = Quaternion.CreateFromAxisAngle(lateral, tgtLean - srcLean);
             }
 
             _direct.Add(new DirectEntry
@@ -487,8 +519,12 @@ public sealed class GeometricSolver : IRetargetSolver
                     RoleTransferMode.DeltaFromRest => MathQ.Normalize(ct * Quaternion.Conjugate(cs)),
                     _ => _basisChange,
                 },
-                B = mode == RoleTransferMode.CharacterDeltaFromRest && headingSlot is null
-                    ? MathQ.Normalize(Quaternion.Conjugate(_basisChange) * _tgtNormRest[tgtBone].Rot)
+                B = mode == RoleTransferMode.CharacterDeltaFromRest
+                    ? headingSlot is null
+                        ? MathQ.Normalize(Quaternion.Conjugate(_basisChange) * _tgtNormRest[tgtBone].Rot)
+                        : MathQ.Normalize(
+                            Quaternion.Conjugate(_basisChange) * Quaternion.Conjugate(div)
+                            * _tgtNormRest[tgtBone].Rot)
                     : MathQ.Normalize(cs * Quaternion.Conjugate(ct) * _tgtNormRest[tgtBone].Rot),
                 HeadingSlot = headingSlot,
                 Div = div,
@@ -652,11 +688,15 @@ public sealed class GeometricSolver : IRetargetSolver
                 var r = d.Pre * _deltas[d.Slot] * d.B;
                 if (d.HeadingSlot is int headingSlot)
                 {
-                    // Body-frame head replay (see TryAddDirect): re-apply the constant
-                    // carriage divergence in the CURRENT body frame (hips ΔR transported
-                    // to the target side) instead of the rest heading's frame.
-                    var body = _basisChange * _deltas[headingSlot] * Quaternion.Conjugate(_basisChange);
-                    r = body * d.Div * Quaternion.Conjugate(body) * r;
+                    // Carriage-divergence transport for the head (see TryAddDirect): the
+                    // pure-pitch divergence D is re-applied about the lateral axis of the
+                    // transport bone's carried yaw (its ΔR's twist about character up —
+                    // stable at any pitch, unlike direction-projection yaw which is
+                    // noise near vertical).
+                    MathQ.SwingTwist(
+                        _deltas[headingSlot], _srcCanon.CharacterUp, out _, out var facing);
+                    var yawT = _basisChange * facing * Quaternion.Conjugate(_basisChange);
+                    r = yawT * d.Div * Quaternion.Conjugate(yawT) * r;
                 }
                 _rot[d.TgtBone] = MathQ.Normalize(r);
                 _solved[d.TgtBone] = true;
