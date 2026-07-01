@@ -461,6 +461,7 @@ public static class Retargeter
                 scene.OriginalUpAxis, scene.Notes)
             {
                 AuthoredMapping = scene.AuthoredMapping,
+                RestPlacementAuthored = scene.RestPlacementAuthored,
             };
 
             anyPinkySuccess |= ConvertOne(

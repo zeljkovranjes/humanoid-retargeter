@@ -83,8 +83,21 @@ using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global
 /// source spine bones (UE "Interpolated").</para>
 /// <para><b>Positions.</b> Target bones keep their rest local translations (bone lengths are
 /// never modified) except the hips: the pelvis travel from the normalized source rest is
-/// re-expressed in the source character frame, scaled (horizontal/vertical, default = hip
-/// height ratio), and re-expressed in the target world.</para>
+/// re-expressed in a gravity-aligned (yaw-only) source character basis, scaled
+/// (horizontal/vertical, default = hip height ratio), and re-expressed in the target world
+/// through the target's gravity-aligned basis. Translations must NOT ride through the full
+/// anatomical frames: their pitch (the rest pose's lean — ~12° on the CMU corpus rig) pours
+/// horizontal travel into world vertical, measured as ±45 cm of spurious pelvis height over
+/// a level 3.8 m walk. For sources whose rest pose carries
+/// no authored world placement (<see cref="SourceScene.RestPlacementAuthored"/> = false —
+/// BVH, whose motion lives in absolute capture-volume coordinates unrelated to the
+/// OFFSET-built rest skeleton), the travel reference additionally absorbs a per-clip
+/// placement offset: the frame-0 horizontal hips offset from the rest hips and the
+/// motion-ground ↔ rest-ground vertical gap. The output then starts over the target origin
+/// with ground contact at the target's ground, while all within-clip motion (walks, jumps)
+/// is preserved exactly — without this, a mocap subject standing at stage position
+/// (347, 86) with hips 107 cm above the capture floor solves to a character floating a
+/// full hip height in the air, several meters off origin ("skywalking").</para>
 /// <para>Bones with <see cref="BoneClass.ConstraintDriven"/> or <see cref="BoneClass.IkBaked"/>
 /// and unmapped animated bones keep their rest locals every frame (IK baking is a separate,
 /// later pass). The output asserts finiteness; solving is deterministic.</para>
@@ -104,11 +117,7 @@ public sealed class GeometricSolver : IRetargetSolver
                 $"ClipIndex out of range; the source has {source.Clips.Count} clip(s).");
         var clip = source.Clips[options.ClipIndex];
 
-        // Non-anatomical binds (SOMA uniform-skeleton sticks — see RestNormalizer remarks)
-        // carry their real rest orientation in the motion data, so the clip's first frame
-        // serves as the rest reference; anatomical binds ignore it.
-        var referencePose = clip.Frames.Count > 0 ? clip.Frames[0] : null;
-        var plan = new Plan(source.Skeleton, sourceMap, target, options, referencePose);
+        var plan = new Plan(source, clip, sourceMap, target, options);
         var output = new Clip(options.ClipName ?? clip.Name, clip.Fps, clip.Looping);
         foreach (var frame in clip.Frames)
             output.Frames.Add(plan.SolveFrame(frame));
@@ -142,6 +151,24 @@ public sealed class GeometricSolver : IRetargetSolver
         private readonly float _scaleV;
         private readonly int _srcHips = -1;
         private readonly int _tgtHips = -1;
+
+        /// <summary>Source-world point pelvis travel is measured FROM. Normally the
+        /// normalized-rest hips position; for sources without an authored rest placement
+        /// (<see cref="SourceScene.RestPlacementAuthored"/> = false, i.e. BVH) it
+        /// additionally absorbs the clip's placement offset — the frame-0 horizontal root
+        /// offset and the motion-ground ↔ rest-ground gap (see the class remarks).</summary>
+        private readonly Vector3 _hipsTravelRef;
+
+        /// <summary>Gravity-aligned (yaw-only) source/target bases for the PELVIS TRAVEL
+        /// re-expression: character forward flattened onto the world ground plane, up snapped
+        /// to the nearest world axis. The anatomical frames (<see cref="_chrSrcInv"/>/
+        /// <see cref="_chrTgt"/>) may be pitched by the rest pose's lean — the CMU corpus
+        /// rig's rest leans ~12° — and rotating TRANSLATIONS through that tilt pours forward
+        /// travel into world vertical (measured on cmu_01_01: a level 3.8 m walk gained
+        /// ±45 cm of spurious pelvis height, feet sinking 43 cm through the floor). Facing
+        /// (yaw) alignment is kept; gravity must stay gravity.</summary>
+        private readonly Quaternion _travelSrcInv;
+        private readonly Quaternion _travelTgt;
 
         // Source world-delta slots: which source bones need ΔR computed each frame.
         private readonly List<(int SrcBone, Quaternion NormRestRotInv)> _slots = new();
@@ -210,14 +237,18 @@ public sealed class GeometricSolver : IRetargetSolver
         /// fallback below) is disabled — see <see cref="SolveOptions.TransferModes"/>.</summary>
         private readonly bool _explicitModes;
 
-        public Plan(
-            SkeletonModel src, MappingResult srcMap, TargetRig rig, SolveOptions options,
-            IReadOnlyList<XForm>? srcReferencePose = null)
+        public Plan(SourceScene source, Clip clip, MappingResult srcMap, TargetRig rig, SolveOptions options)
         {
+            var src = source.Skeleton;
             _src = src;
             _tgt = rig.Skeleton;
             _explicitModes = options.TransferModes is not null;
             _modes = options.TransferModes ?? SolveOptions.DefaultTransferModes;
+
+            // Non-anatomical binds (SOMA uniform-skeleton sticks — see RestNormalizer
+            // remarks) carry their real rest orientation in the motion data, so the clip's
+            // first frame serves as the rest reference; anatomical binds ignore it.
+            var srcReferencePose = clip.Frames.Count > 0 ? clip.Frames[0] : null;
 
             var tgtMap = rig.ToMappingResult();
             var (srcNorm, _) = RestNormalizer.Normalize(src, srcMap, srcReferencePose);
@@ -231,6 +262,8 @@ public sealed class GeometricSolver : IRetargetSolver
                 MathQ.BasisFromForwardUp(_srcCanon.CharacterForward, _srcCanon.CharacterUp));
             _chrTgt = MathQ.BasisFromForwardUp(_tgtCanon.CharacterForward, _tgtCanon.CharacterUp);
             _basisChange = MathQ.Normalize(_chrTgt * _chrSrcInv);
+            _travelSrcInv = Quaternion.Conjugate(GravityAlignedBasis(_srcCanon));
+            _travelTgt = GravityAlignedBasis(_tgtCanon);
 
             var ratio = _srcCanon.HipHeight > 1e-3f ? _tgtCanon.HipHeight / _srcCanon.HipHeight : 1f;
             if (!float.IsFinite(ratio) || ratio <= 0f)
@@ -241,6 +274,13 @@ public sealed class GeometricSolver : IRetargetSolver
             if (srcMap.RoleToBone.TryGetValue(BoneRole.Hips, out var srcHips))
                 _srcHips = srcHips;
             _tgtHips = rig.BoneForRole(BoneRole.Hips) ?? -1;
+
+            if (_srcHips >= 0)
+            {
+                _hipsTravelRef = _srcNormRest[_srcHips].Pos;
+                if (!source.RestPlacementAuthored)
+                    _hipsTravelRef += ClipPlacementOffset(source, clip);
+            }
 
             // Body roles (everything but spine + fingers), in target bone order (deterministic).
             for (var i = 0; i < _tgt.Count; i++)
@@ -270,6 +310,84 @@ public sealed class GeometricSolver : IRetargetSolver
         }
 
         // ------------------------------------------------------------ build helpers
+
+        /// <summary>
+        /// Clip placement offset for sources whose rest carries no authored world placement
+        /// (BVH — see <see cref="SourceScene.RestPlacementAuthored"/>): the source-world
+        /// translation separating the CLIP's placement from the REST skeleton's. Horizontal
+        /// part: the frame-0 hips offset from the rest hips (an absolute capture-volume
+        /// position — the subject stood wherever it stood on the stage); vertical part: the
+        /// motion ground (lowest joint reached over the whole clip) minus the rest ground
+        /// (lowest rest joint). Subtracting it from the travel reference re-centers the
+        /// clip's start over the target origin and puts ground contact at the target's own
+        /// ground — while every within-clip displacement (walks, jumps) is preserved exactly
+        /// (the offset is one constant for the whole clip). Measured on the repro:
+        /// Armchair1.bvh starts at (347, 107, 86) with rest ground −107 → the solved pelvis
+        /// hovered a full hip height above the s&amp;box rig, 3.5 grid-widths off origin.
+        /// </summary>
+        private Vector3 ClipPlacementOffset(SourceScene source, Clip clip)
+        {
+            if (clip.Frames.Count == 0 || clip.Frames[0].Length != _src.Count)
+                return Vector3.Zero;
+
+            var up = AxisVector(source.UpAxis, source.UpAxisSign);
+            var world = new XForm[_src.Count];
+            float motionGround = float.MaxValue;
+            var firstHips = Vector3.Zero;
+            for (var f = 0; f < clip.Frames.Count; f++)
+            {
+                var locals = clip.Frames[f];
+                if (locals.Length != _src.Count)
+                    return Vector3.Zero; // malformed frame — SolveFrame reports it properly
+                for (var i = 0; i < _src.Count; i++)
+                {
+                    var parent = _src[i].ParentIndex;
+                    world[i] = parent < 0 ? locals[i] : XForm.Compose(world[parent], locals[i]);
+                    motionGround = MathF.Min(motionGround, Vector3.Dot(world[i].Pos, up));
+                }
+                if (f == 0)
+                    firstHips = world[_srcHips].Pos;
+            }
+
+            var restGround = float.MaxValue;
+            foreach (var x in _srcNormRest)
+                restGround = MathF.Min(restGround, Vector3.Dot(x.Pos, up));
+
+            var horizontal = firstHips - _srcNormRest[_srcHips].Pos;
+            horizontal -= up * Vector3.Dot(horizontal, up);
+            var offset = horizontal + up * (motionGround - restGround);
+            return float.IsFinite(offset.X + offset.Y + offset.Z) ? offset : Vector3.Zero;
+        }
+
+        private static Vector3 AxisVector(int axis, int sign) => axis switch
+        {
+            0 => new Vector3(sign, 0f, 0f),
+            2 => new Vector3(0f, 0f, sign),
+            _ => new Vector3(0f, sign, 0f),
+        };
+
+        /// <summary>The yaw-only travel basis of a rig (see <see cref="_travelSrcInv"/>):
+        /// character up snapped to the nearest signed world axis (every corpus rest is
+        /// within ~12° of one), character forward flattened onto the world ground plane.
+        /// Falls back to the full anatomical frame when the rest faces straight up/down
+        /// (a flattened forward would be degenerate — no meaningful yaw exists).</summary>
+        private static Quaternion GravityAlignedBasis(CanonicalFrames canon)
+        {
+            var up = canon.CharacterUp;
+            var absX = MathF.Abs(up.X);
+            var absY = MathF.Abs(up.Y);
+            var absZ = MathF.Abs(up.Z);
+            var snapped = absX >= absY && absX >= absZ
+                ? new Vector3(MathF.Sign(up.X), 0f, 0f)
+                : absY >= absZ
+                    ? new Vector3(0f, MathF.Sign(up.Y), 0f)
+                    : new Vector3(0f, 0f, MathF.Sign(up.Z));
+            var forward = canon.CharacterForward
+                - snapped * Vector3.Dot(canon.CharacterForward, snapped);
+            if (forward.LengthSquared() < 1e-6f)
+                return MathQ.BasisFromForwardUp(canon.CharacterForward, canon.CharacterUp);
+            return MathQ.BasisFromForwardUp(forward, snapped);
+        }
 
         private int RegisterSlot(int srcBone)
         {
@@ -559,13 +677,18 @@ public sealed class GeometricSolver : IRetargetSolver
             _fingers?.Apply(_deltas, _solved, _rot);
 
             // Pelvis translation: character-frame re-expression with hip-height scaling.
+            // Travel is measured from _hipsTravelRef — the normalized-rest hips, plus the
+            // clip placement offset on unplaced (BVH) sources (see ClipPlacementOffset).
             Vector3? hipsPos = null;
             if (_srcHips >= 0 && _tgtHips >= 0 && _solved[_tgtHips])
             {
+                // Yaw-only bases here: rotating the travel through the anatomical frames'
+                // rest-lean pitch would pour horizontal travel into world vertical
+                // (see _travelSrcInv).
                 var v = Vector3.Transform(
-                    _srcWorld[_srcHips].Pos - _srcNormRest[_srcHips].Pos, _chrSrcInv);
+                    _srcWorld[_srcHips].Pos - _hipsTravelRef, _travelSrcInv);
                 v = new Vector3(v.X * _scaleH, v.Y * _scaleH, v.Z * _scaleV); // chr Z = up
-                hipsPos = _tgtNormRest[_tgtHips].Pos + Vector3.Transform(v, _chrTgt);
+                hipsPos = _tgtNormRest[_tgtHips].Pos + Vector3.Transform(v, _travelTgt);
             }
 
             // Compose output locals top-down over the target hierarchy.
