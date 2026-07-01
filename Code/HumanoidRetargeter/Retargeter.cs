@@ -8,6 +8,7 @@ using HumanoidRetargeter.Formats.Bvh;
 using HumanoidRetargeter.Formats.Dmx;
 using HumanoidRetargeter.Formats.Fbx;
 using HumanoidRetargeter.Formats.Gltf;
+using HumanoidRetargeter.Formats.Renderware;
 using HumanoidRetargeter.Mapping;
 using HumanoidRetargeter.Maths;
 using HumanoidRetargeter.Skeleton;
@@ -273,11 +274,11 @@ public static class Retargeter
     /// multi-take file into one entry per take. Throws <see cref="FormatException"/> when
     /// the file is unreadable.
     /// </summary>
-    public static InspectResult Inspect(byte[] sourceData, string fileName)
+    public static InspectResult Inspect(byte[] sourceData, string fileName, byte[]? skeletonData = null)
     {
         ArgumentNullException.ThrowIfNull(sourceData);
         ArgumentNullException.ThrowIfNull(fileName);
-        var scene = ImportSource(sourceData, fileName);
+        var scene = ImportSource(sourceData, fileName, skeletonData: skeletonData);
         var takeNames = new List<string>(scene.Clips.Count);
         foreach (var clip in scene.Clips)
             takeNames.Add(clip.Name);
@@ -303,7 +304,8 @@ public static class Retargeter
         MappingResult map;
         try
         {
-            scene = ImportSource(request.SourceData, request.SourceFileName, request.SampleFps);
+            scene = ImportSource(
+                request.SourceData, request.SourceFileName, request.SampleFps, request.SkeletonData);
             (map, report) = ResolveMapping(
                 scene.Skeleton, request.MappingOverride, authoredMapping: scene.AuthoredMapping);
         }
@@ -926,9 +928,13 @@ public static class Retargeter
     /// <param name="fileName">File name; only the extension is consulted.</param>
     /// <param name="sampleFps">Resample rate for the imported clips; null = importer default
     /// (30 fps).</param>
+    /// <param name="skeletonData">Companion skeleton bytes for animation-only formats
+    /// (RenderWare .anm/.an5 need the model .dff — see
+    /// <see cref="RetargetRequest.SkeletonData"/>); ignored by self-contained formats.</param>
     /// <exception cref="FormatException">Thrown when the bytes are not a readable
-    /// FBX/BVH/glTF.</exception>
-    public static SourceScene ImportSource(byte[] data, string fileName, float? sampleFps = null)
+    /// FBX/BVH/glTF/RenderWare animation.</exception>
+    public static SourceScene ImportSource(
+        byte[] data, string fileName, float? sampleFps = null, byte[]? skeletonData = null)
     {
         ArgumentNullException.ThrowIfNull(data);
         ArgumentNullException.ThrowIfNull(fileName);
@@ -936,6 +942,12 @@ public static class Retargeter
         var fbxOptions = sampleFps is { } fbxFps ? new FbxImportOptions { SampleFps = fbxFps } : null;
         var bvhOptions = sampleFps is { } bvhFps ? new BvhImportOptions { SampleFps = bvhFps } : null;
         var gltfOptions = sampleFps is { } gltfFps ? new GltfImportOptions { SampleFps = gltfFps } : null;
+        // RenderWare banks carry no clip names — takes are named from the file stem.
+        var rwOptions = new RwAnmImportOptions
+        {
+            SampleFps = sampleFps ?? 30f,
+            ClipNameBase = FileStem(fileName),
+        };
         var ext = ExtensionOf(fileName);
         return ext switch
         {
@@ -945,13 +957,18 @@ public static class Retargeter
             // humanoid bone map into SourceScene.AuthoredMapping); unknown-extension VRM
             // bytes also land here via the GLB magic sniff below.
             "glb" or "gltf" or "vrm" => GltfImporter.Import(data, gltfOptions),
+            // RenderWare animations (FSB2 .anm single clips / .an5 banks); the skeleton
+            // comes from the companion model .dff (a missing skeleton throws the
+            // importer's instructive error).
+            "anm" or "an5" => RwAnmImporter.Import(data, skeletonData, rwOptions),
             _ => SniffFormat(data) switch
             {
                 "fbx" => FbxImporter.Import(data, fbxOptions),
                 "bvh" => BvhImporter.Import(data, bvhOptions),
                 "gltf" => GltfImporter.Import(data, gltfOptions),
+                "rwanim" => RwAnmImporter.Import(data, skeletonData, rwOptions),
                 _ => throw new FormatException(
-                    $"Unrecognized source format for '{fileName}' (expected .fbx, .bvh, .glb, .gltf or .vrm)."),
+                    $"Unrecognized source format for '{fileName}' (expected .fbx, .bvh, .glb, .gltf, .vrm, .anm or .an5)."),
             },
         };
     }
@@ -976,6 +993,10 @@ public static class Retargeter
         if (trimmed.StartsWith("{", StringComparison.Ordinal)
             && head.Contains("\"asset\"", StringComparison.Ordinal))
             return "gltf"; // plain-JSON glTF
+
+        // RenderWare animation stream (.anm single clip / .an5 take container).
+        if (RwAnmImporter.LooksLikeRenderwareAnim(data))
+            return "rwanim";
         return null;
     }
 
