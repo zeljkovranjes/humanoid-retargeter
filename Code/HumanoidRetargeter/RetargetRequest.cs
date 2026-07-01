@@ -34,17 +34,28 @@ public sealed class RetargetRequest
     /// conversion fails per-clip with a clear error otherwise.</summary>
     public SolverKind Solver { get; init; } = SolverKind.Geometric;
 
-    /// <summary>Raw bytes of the source file (.fbx, .bvh, .glb, .gltf or .vrm).</summary>
+    /// <summary>Raw bytes of the source file (.fbx, .bvh, .glb, .gltf, .vrm, .anm or .an5).</summary>
     public required byte[] SourceData { get; init; }
 
     /// <summary>
     /// Source file name (used for the report and DMX provenance). The extension drives the
     /// format choice (<c>.fbx</c> / <c>.bvh</c> / <c>.glb</c> / <c>.gltf</c> / <c>.vrm</c> —
-    /// a VRM is a glTF container whose authored humanoid bone map becomes the mapping);
-    /// when the extension is unknown the content is sniffed (FBX binary magic /
-    /// "FBXHeaderExtension" / BVH "HIERARCHY" / GLB 'glTF' magic / glTF JSON).
+    /// a VRM is a glTF container whose authored humanoid bone map becomes the mapping — /
+    /// <c>.anm</c> / <c>.an5</c> RenderWare animations, which additionally need
+    /// <see cref="SkeletonData"/>); when the extension is unknown the content is sniffed
+    /// (FBX binary magic / "FBXHeaderExtension" / BVH "HIERARCHY" / GLB 'glTF' magic /
+    /// glTF JSON / RenderWare 0x1B animation chunk).
     /// </summary>
     public required string SourceFileName { get; init; }
+
+    /// <summary>
+    /// Raw bytes of a companion SKELETON file for formats whose animation files carry no
+    /// skeleton of their own: RenderWare <c>.anm</c>/<c>.an5</c> sources require the
+    /// character model's <c>.dff</c> here (callers resolve the file — e.g. a .dff sitting
+    /// next to the animation; the facade does no file IO). Ignored by self-contained
+    /// formats. A RenderWare request without it fails with an instructive error.
+    /// </summary>
+    public byte[]? SkeletonData { get; init; }
 
     /// <summary>
     /// Caller-supplied identity of this request, echoed verbatim on every produced

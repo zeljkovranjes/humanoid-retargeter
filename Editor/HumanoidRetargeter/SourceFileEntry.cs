@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using HumanoidRetargeter.Formats;
+using HumanoidRetargeter.Formats.Renderware;
 using HumanoidRetargeter.Mapping;
 using HumanoidRetargeter.Skeleton;
 
@@ -43,6 +44,24 @@ public sealed class SourceFileEntry
 
 	/// <summary>Raw file bytes (what gets handed to the facade).</summary>
 	public byte[] Bytes { get; private set; }
+
+	/// <summary>
+	/// Absolute path of the companion SKELETON file for animation-only formats (RenderWare
+	/// .anm/.an5 need the character model's .dff — the animation itself has no skeleton).
+	/// Resolved automatically from the animation's folder (then its parent folder) by
+	/// matching the .dff's HAnim node count against the animation's node count, or chosen
+	/// explicitly by the user. Null for self-contained formats.
+	/// </summary>
+	public string SkeletonPath { get; private set; }
+
+	/// <summary>Companion skeleton bytes (see <see cref="SkeletonPath"/>) — handed to the
+	/// facade as <see cref="HumanoidRetargeter.RetargetRequest.SkeletonData"/>.</summary>
+	public byte[] SkeletonBytes { get; private set; }
+
+	/// <summary>True when this is a RenderWare animation that failed to load because no
+	/// matching skeleton .dff was found — the row then offers explicit skeleton selection
+	/// (reload via <see cref="Load"/> with the chosen path).</summary>
+	public bool NeedsSkeletonFile { get; private set; }
 
 	/// <summary>Imported scene; null when the file was unreadable.</summary>
 	public SourceScene Scene { get; private set; }
@@ -106,13 +125,18 @@ public sealed class SourceFileEntry
 	/// <see cref="NeedsUserDecision"/> below the detection threshold). Never throws: an
 	/// unreadable file yields a <see cref="EntryStatus.Failed"/> entry.
 	/// </summary>
-	public static SourceFileEntry Load( string filePath, string assetsPath )
+	/// <param name="filePath">Absolute path of the source animation file.</param>
+	/// <param name="assetsPath">Project assets path for the user-preset lookup (null = no lookup).</param>
+	/// <param name="skeletonPath">Explicit companion skeleton (.dff) path for RenderWare
+	/// animations; null = resolve automatically from the animation's folder.</param>
+	public static SourceFileEntry Load( string filePath, string assetsPath, string skeletonPath = null )
 	{
 		var entry = new SourceFileEntry { FilePath = filePath };
 		try
 		{
 			entry.Bytes = File.ReadAllBytes( filePath );
-			entry.Scene = Retargeter.ImportSource( entry.Bytes, filePath );
+			ResolveSkeletonFile( entry, skeletonPath );
+			entry.Scene = Retargeter.ImportSource( entry.Bytes, filePath, skeletonData: entry.SkeletonBytes );
 			entry.Signature = SkeletonSignature.Compute( entry.Scene.Skeleton );
 			for ( var i = 0; i < entry.Scene.Clips.Count; i++ )
 				entry.Takes.Add( new SourceTakeEntry( entry, i, entry.Scene.Clips[i].Name ) );
@@ -122,6 +146,9 @@ public sealed class SourceFileEntry
 		{
 			entry.Status = EntryStatus.Failed;
 			entry.StatusDetail = e.Message;
+			// A RenderWare animation that failed WITHOUT a skeleton gets the explicit
+			// "Pick skeleton…" affordance on its row.
+			entry.NeedsSkeletonFile = IsRenderwareAnimation( filePath ) && entry.SkeletonBytes is null;
 			return entry;
 		}
 
@@ -136,6 +163,81 @@ public sealed class SourceFileEntry
 
 		ResolveMapping( entry, assetsPath );
 		return entry;
+	}
+
+	/// <summary>Whether the path is a RenderWare animation (needs a companion .dff skeleton).</summary>
+	public static bool IsRenderwareAnimation( string filePath )
+	{
+		var ext = Path.GetExtension( filePath ).TrimStart( '.' );
+		return ext.Equals( "anm", StringComparison.OrdinalIgnoreCase )
+			|| ext.Equals( "an5", StringComparison.OrdinalIgnoreCase );
+	}
+
+	/// <summary>
+	/// RenderWare skeleton resolution: an explicit <paramref name="skeletonPath"/> wins;
+	/// otherwise .dff files in the animation's own folder, then its parent folder, are
+	/// probed and the one whose HAnim node count equals the animation's node count is
+	/// chosen (several matches → the .dff with the most frames wins — the most complete
+	/// model). No match leaves the entry skeleton-less; the importer then fails with its
+	/// instructive error and the row offers explicit selection. Never throws.
+	/// </summary>
+	static void ResolveSkeletonFile( SourceFileEntry entry, string skeletonPath )
+	{
+		if ( !IsRenderwareAnimation( entry.FilePath ) )
+			return;
+
+		try
+		{
+			if ( skeletonPath is not null )
+			{
+				entry.SkeletonPath = skeletonPath;
+				entry.SkeletonBytes = File.ReadAllBytes( skeletonPath );
+				return;
+			}
+
+			if ( RwAnmImporter.PeekNodeCount( entry.Bytes ) is not int wantedNodes )
+				return; // not parseable as a RenderWare anim — the importer reports why
+
+			var folder = Path.GetDirectoryName( Path.GetFullPath( entry.FilePath ) );
+			var parent = folder is null ? null : Path.GetDirectoryName( folder );
+			foreach ( var dir in new[] { folder, parent } )
+			{
+				if ( dir is null || !Directory.Exists( dir ) )
+					continue;
+
+				string bestPath = null;
+				byte[] bestBytes = null;
+				var bestFrames = -1;
+				foreach ( var dff in Directory.EnumerateFiles( dir, "*.dff", SearchOption.TopDirectoryOnly ) )
+				{
+					try
+					{
+						var bytes = File.ReadAllBytes( dff );
+						var skeleton = RwDffSkeleton.Parse( bytes );
+						if ( skeleton.Nodes.Count != wantedNodes || skeleton.FrameCount <= bestFrames )
+							continue;
+						bestPath = dff;
+						bestBytes = bytes;
+						bestFrames = skeleton.FrameCount;
+					}
+					catch ( Exception )
+					{
+						// unreadable / non-skeleton dff — not a candidate
+					}
+				}
+
+				if ( bestPath is not null )
+				{
+					entry.SkeletonPath = bestPath;
+					entry.SkeletonBytes = bestBytes;
+					return;
+				}
+			}
+		}
+		catch ( Exception )
+		{
+			// Resolution is best-effort; a missing skeleton surfaces through the importer.
+		}
 	}
 
 	/// <summary>
