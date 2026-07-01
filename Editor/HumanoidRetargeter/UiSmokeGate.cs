@@ -584,6 +584,10 @@ public static class UiSmokeGate
 	/// standalone run's folder so its writes never re-trigger that vmdl's compile).</summary>
 	const string AugmentDmxFolder = OutputFolder + "/augment";
 
+	/// <summary>Sequence name of the stale AnimFile planted into the augment target in an5
+	/// mode (its DMX deliberately never exists - the user-report repro).</summary>
+	const string StaleProbeName = "hr_stale_probe";
+
 	static async Task RunAugmentAsync(
 		SourceFileEntry entry, TargetPickers.ResolvedTarget target, string augmentVmdlPath )
 	{
@@ -601,7 +605,7 @@ public static class UiSmokeGate
 		try
 		{
 			// Same request the window's BuildRequest produces for this entry.
-			var requests = new[]
+			var requests = new List<RetargetRequest>
 			{
 				new RetargetRequest
 				{
@@ -615,6 +619,99 @@ public static class UiSmokeGate
 					LoopingOverride = null,
 				},
 			};
+
+			// User-report batch shape (HR_UI_FIXTURE_AN5): a BVH plus EVERY take of a
+			// RenderWare .an5 bank, one request per take row exactly like the window's
+			// Convert All (TakeIndex per row, companion .dff as SkeletonData). This is the
+			// mixed batch that produced "vmdl did not compile" on a real citizen vmdl copy;
+			// with it armed the augment gate REQUIRES the recompile to succeed.
+			var an5Path = Environment.GetEnvironmentVariable( "HR_UI_FIXTURE_AN5" );
+			if ( !string.IsNullOrWhiteSpace( an5Path ) && File.Exists( an5Path ) )
+			{
+				Result.augmentAn5Mode = true;
+				var assetsPath = Project.Current.GetAssetsPath();
+
+				var bvhPath = Environment.GetEnvironmentVariable( "HR_UI_FIXTURE_STEPS" );
+				if ( !string.IsNullOrWhiteSpace( bvhPath ) && File.Exists( bvhPath ) )
+				{
+					var bvhEntry = SourceFileEntry.Load( bvhPath, assetsPath );
+					if ( bvhEntry.Scene is not null && bvhEntry.Mapping is not null )
+					{
+						requests.Add( new RetargetRequest
+						{
+							SourceData = bvhEntry.Bytes,
+							SourceFileName = bvhEntry.FileName,
+							SourceId = bvhEntry.FilePath,
+							MappingOverride = bvhEntry.Mapping,
+							RootMotion = Cleanup.RootMotionMode.Off,
+							FootPlantCleanup = true,
+							ArmEffectorIk = false,
+							LoopingOverride = null,
+						} );
+					}
+					else
+						Note( $"augment an5 mode: bvh fixture unreadable: {bvhEntry.StatusDetail}" );
+				}
+
+				var an5Entry = SourceFileEntry.Load( an5Path, assetsPath );
+				if ( an5Entry.Scene is null || an5Entry.Mapping is null )
+				{
+					Note( $"augment an5 mode: an5 fixture unreadable: {an5Entry.StatusDetail} "
+						+ $"(skeleton={an5Entry.SkeletonPath ?? "none"})" );
+				}
+				else
+				{
+					Result.augmentAn5Takes = an5Entry.ClipCount;
+					for ( var i = 0; i < an5Entry.ClipCount; i++ )
+					{
+						requests.Add( new RetargetRequest
+						{
+							SourceData = an5Entry.Bytes,
+							SourceFileName = an5Entry.FileName,
+							SkeletonData = an5Entry.SkeletonBytes,
+							SourceId = an5Entry.FilePath + "#" + i,
+							MappingOverride = an5Entry.Mapping,
+							TakeIndex = an5Entry.ClipCount > 1 ? i : null,
+							RootMotion = Cleanup.RootMotionMode.Off,
+							FootPlantCleanup = true,
+							ArmEffectorIk = false,
+							LoopingOverride = null,
+						} );
+					}
+					Note( $"augment an5 mode: {an5Entry.FileName} takes={an5Entry.ClipCount} "
+						+ $"skeleton={Path.GetFileName( an5Entry.SkeletonPath ?? "none" )} "
+						+ $"profile={an5Entry.Mapping.ProfileName} requests={requests.Count}" );
+				}
+
+				// USER-REPORT REPRO: plant a stale AnimFile into the augment target BEFORE
+				// converting - an entry from an "earlier batch" whose DMX no longer exists on
+				// disk (the user's vmdl had accumulated animations/retargeted/*.dmx entries,
+				// then the files went away). One such entry fails the ENTIRE recompile
+				// ("Node 'X' resolve failure" -> ResourceCompilerSystem [FAIL]); the fix must
+				// prune it so the augmented vmdl still compiles.
+				try
+				{
+					var staleVmdl = Target.VmdlAugmenter.Augment(
+						File.ReadAllText( augmentVmdlPath ),
+						new[]
+						{
+							new Target.AnimEntry
+							{
+								Name = StaleProbeName,
+								SourceFilename = "animations/retargeted/" + StaleProbeName + ".dmx",
+							},
+						},
+						out _,
+						new Target.AugmentOptions { DefaultRootBone = "pelvis" } );
+					File.WriteAllText( augmentVmdlPath, staleVmdl );
+					Result.augmentStalePlanted = true;
+					Note( $"planted stale AnimFile '{StaleProbeName}' (missing dmx) into the augment target" );
+				}
+				catch ( Exception e )
+				{
+					Note( $"could not plant stale AnimFile: {e.Message}" );
+				}
+			}
 			var options = new BatchOptions
 			{
 				DmxFolderRelative = AugmentDmxFolder,
@@ -659,6 +756,25 @@ public static class UiSmokeGate
 			Result.augmentCompilePollCompleted = write is not null;
 			Result.augmentQuietInputsAbandon = EditorPipeline.LogSliceShowsAbandonedRecompile(
 				logOffset, Path.GetFileName( augmentVmdlPath ) );
+			Result.augmentClipNames = batch.Clips
+				.Where( c => c.Success ).Select( c => c.ClipName ).ToArray();
+			Result.augmentFailedClips = batch.Clips
+				.Where( c => !c.Success ).Select( c => $"{c.ClipName}: {c.Error}" ).ToArray();
+
+			// The ACTUAL resourcecompiler verdict for the augment vmdl: every error-looking
+			// line of the per-run log slice that mentions it (the editor console shows these;
+			// the log carries at least the recompile ERROR line).
+			var vmdlFileName = Path.GetFileName( augmentVmdlPath );
+			Result.augmentCompileErrors = (EditorPipeline.ReadLogSlice( logOffset ) ?? "")
+				.Split( '\n' )
+				.Select( l => l.TrimEnd( '\r' ) )
+				.Where( l => l.Length > 0
+					&& (l.Contains( "error", StringComparison.OrdinalIgnoreCase )
+						|| l.Contains( "fail", StringComparison.OrdinalIgnoreCase ))
+					&& (l.Contains( vmdlFileName, StringComparison.OrdinalIgnoreCase )
+						|| l.Contains( "resourcecompiler", StringComparison.OrdinalIgnoreCase )
+						|| l.Contains( "ModelDoc", StringComparison.OrdinalIgnoreCase )) )
+				.ToArray();
 
 			// Stale-compile probe verdict: either the compile honestly failed/was not
 			// reported (expected here - missing meshes), or it succeeded AND the compiled
@@ -686,6 +802,20 @@ public static class UiSmokeGate
 				var augmentClipNames = batch.Clips.Where( c => c.Success ).Select( c => c.ClipName ).ToArray();
 				Result.augmentVmdlContainsClips = augmentClipNames.Length > 0
 					&& augmentClipNames.All( c => text.Contains( c, StringComparison.OrdinalIgnoreCase ) );
+
+				// Stale-entry verdict: the planted missing-DMX AnimFile must be GONE from
+				// the written vmdl and reported as a batch warning - otherwise the recompile
+				// above could only have failed.
+				Result.augmentWarnings = batch.Warnings.ToArray();
+				if ( Result.augmentStalePlanted )
+				{
+					Result.augmentStalePruned =
+						!text.Contains( StaleProbeName, StringComparison.OrdinalIgnoreCase )
+						&& batch.Warnings.Any( w =>
+							w.Contains( StaleProbeName, StringComparison.Ordinal ) );
+					Note( $"stale AnimFile probe: pruned={Result.augmentStalePruned} "
+						+ $"warnings=[{string.Join( " | ", batch.Warnings )}]" );
+				}
 			}
 			catch
 			{
@@ -717,7 +847,15 @@ public static class UiSmokeGate
 				&& Result.augmentRegistered && Result.augmentCompilePollCompleted
 				&& !Result.augmentQuietInputsAbandon && Result.augmentVmdlContainsClips
 				&& Result.augmentCompileVerified
-				&& Result.installGuardRejected;
+				&& Result.installGuardRejected
+				// The user-report repro (an5 mode) proves the augmented citizen vmdl really
+				// COMPILES - the scratch project resolves the citizen addon's meshes/prefabs,
+				// so a compile failure here is a genuine regression, never noise - and that
+				// the planted stale (missing-DMX) entry was pruned rather than left to fail
+				// the recompile.
+				&& (!Result.augmentAn5Mode
+					|| (Result.augmentCompiled
+						&& Result.augmentStalePlanted && Result.augmentStalePruned));
 
 			Note( $"augment: produced={Result.augmentedVmdlProduced} written={Result.augmentVmdlWritten} "
 				+ $"registered={Result.augmentRegistered} pollCompleted={Result.augmentCompilePollCompleted} "
@@ -822,6 +960,14 @@ public static class UiSmokeGate
 
 		// augment mode (HR_UI_SMOKE_AUGMENT)
 		public bool augmentMode { get; set; }
+		public bool augmentAn5Mode { get; set; }
+		public int augmentAn5Takes { get; set; }
+		public string[] augmentClipNames { get; set; } = Array.Empty<string>();
+		public string[] augmentFailedClips { get; set; } = Array.Empty<string>();
+		public string[] augmentCompileErrors { get; set; } = Array.Empty<string>();
+		public bool augmentStalePlanted { get; set; }
+		public bool augmentStalePruned { get; set; }
+		public string[] augmentWarnings { get; set; } = Array.Empty<string>();
 		public string augmentVmdlPath { get; set; }
 		public bool augmentedVmdlProduced { get; set; }
 		public bool augmentVmdlWritten { get; set; }

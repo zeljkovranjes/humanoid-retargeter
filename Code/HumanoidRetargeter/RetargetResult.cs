@@ -188,6 +188,11 @@ public sealed class RetargetBatchResult
     /// batch result stays usable regardless — one bad file never aborts the batch.</summary>
     public List<string> Errors { get; } = new();
 
+    /// <summary>Non-fatal notices the caller should surface (e.g. stale AnimFile entries
+    /// removed from the augmented vmdl because their animation sources are gone from disk —
+    /// see <see cref="BatchOptions.MissingAnimSources"/>).</summary>
+    public List<string> Warnings { get; } = new();
+
     /// <summary>
     /// Directional locomotion families found among the batch's successful clips when
     /// <see cref="BatchOptions.DetectLocomotionSets"/> was on — one report per family,

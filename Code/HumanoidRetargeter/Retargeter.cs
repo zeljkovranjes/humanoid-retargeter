@@ -143,6 +143,7 @@ public static class Retargeter
         {
             try
             {
+                var removedSequences = new List<string>();
                 result.AugmentedVmdl = VmdlAugmenter.Augment(
                     options.AugmentVmdlText, entries, out _,
                     new AugmentOptions
@@ -158,7 +159,19 @@ public static class Retargeter
                         // locomotion folders (every AnimFile sourced under our DMX folder)
                         // are replaceable wholesale on re-runs.
                         DmxFolderRelative = options.DmxFolderRelative,
-                    });
+                        // Stale entries whose DMX the caller found missing on disk: keep
+                        // them and the WHOLE vmdl stops compiling ("Node 'X' resolve
+                        // failure"), new sequences included.
+                        MissingSourceFiles = options.MissingAnimSources,
+                    },
+                    removedSequences);
+                foreach (var name in removedSequences)
+                {
+                    result.Warnings.Add(
+                        $"removed stale sequence '{name}' from the augmented vmdl: its "
+                        + "animation source file no longer exists on disk (a missing source "
+                        + "fails the whole model recompile)");
+                }
             }
             catch (Exception e)
             {

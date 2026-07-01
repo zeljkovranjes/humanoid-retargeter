@@ -285,6 +285,19 @@ public sealed class BatchOptions
     /// to build each AnimFile's <c>source_filename</c>.</summary>
     public string DmxFolderRelative { get; init; } = "animations/retargeted";
 
+    /// <summary>
+    /// Animation source paths (<c>source_filename</c> values of the augment target's existing
+    /// AnimFile nodes, assets-relative) that the IO-owning caller has determined NO LONGER
+    /// EXIST on disk. Stale AnimFile entries referencing them are REMOVED from the augmented
+    /// vmdl (reported on <see cref="RetargetBatchResult.Warnings"/>) — one unresolvable
+    /// source otherwise fails the ENTIRE vmdl recompile ("Node 'X' resolve failure"), taking
+    /// every newly added animation down with it. Entries this batch overwrites (their DMX is
+    /// about to be written) are never pruned. The facade itself never touches the filesystem:
+    /// callers probe <see cref="Target.VmdlAugmenter.CollectAnimSourcePaths"/> results against
+    /// their content roots and pass the missing ones here. Null/empty = keep everything.
+    /// </summary>
+    public IReadOnlyCollection<string>? MissingAnimSources { get; init; }
+
     /// <summary>Auto-suffix colliding clip names (<c>_2</c>, <c>_3</c>, …) across the whole
     /// batch (default on). When off, duplicate names are kept as-is.</summary>
     public bool AutoSuffixCollisions { get; init; } = true;
