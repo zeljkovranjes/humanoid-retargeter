@@ -37,8 +37,12 @@ No NuGet packages, no native DLLs, no Python, no external tools.
   per take, each independently previewable, removable, and convertible.
 
 ### Rig understanding (automatic, per file)
-- **Built-in profiles**: Mixamo, ActorCore / Character Creator (`CC_Base_*`),
-  UE Mannequin (UE4/UE5 naming), Rokoko/Xsens-style BVH.
+- **Built-in profiles** (17): Mixamo, ActorCore / Character Creator (`CC_Base_*`),
+  UE Mannequin (UE4/UE5 naming), Xsens MVN, Perception Neuron / Axis Neuron,
+  Rokoko-style BVH, SMPL-X, SMPL, NVIDIA SOMA BVH, classic/Character-Studio BVH,
+  Source ValveBiped (`ValveBiped.Bip01_*`), 3ds Max Biped (`Bip01`/`Bip001`),
+  DAZ Genesis 3/8, DAZ/Poser classic, Blender Rigify (metarig + `DEF-`),
+  VRoid/VRM (`J_Bip_*`), Auto-Rig Pro exports.
 - **Your saved presets** — confirm a mapping once and that skeleton is recognized
   instantly forever (keyed by skeleton signature).
 - **Auto-mapper** — token-based name matching for unlisted rigs (DAZ/Poser, 3ds Max
