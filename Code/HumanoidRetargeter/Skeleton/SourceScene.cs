@@ -54,6 +54,19 @@ public sealed class SourceScene
     public IReadOnlyList<string> Notes { get; }
 
     /// <summary>
+    /// True (the default) when the format anchors the rest skeleton at an authored world
+    /// placement shared with its motion data — FBX/glTF bind poses live in the same scene
+    /// space as their animation curves, so absolute root translations are meaningful as-is.
+    /// The BVH importer sets this FALSE: a BVH rest skeleton is OFFSETs only (root at the
+    /// file origin, ground implicitly at the rest feet) while its MOTION root positions are
+    /// absolute capture-volume coordinates (ground at the capture floor, subject anywhere on
+    /// the stage) — the two spaces share no origin or ground level, so the solver normalizes
+    /// each clip's placement against the rest skeleton before measuring pelvis travel
+    /// (see <c>GeometricSolver</c> remarks).
+    /// </summary>
+    public bool RestPlacementAuthored { get; init; } = true;
+
+    /// <summary>
     /// A role mapping AUTHORED inside the source file itself, when the format carries one —
     /// a VRM's <c>humanoid.humanBones</c> block (set by the glTF importer,
     /// <see cref="MappingSource.Authored"/>, confidence 1.0). Null for formats/files without

@@ -47,6 +47,26 @@ public sealed class BvhImportOptions
 /// Millimeter-scale files (height &gt; 400) are not special-cased — they are rare and
 /// ambiguous against cm mocap of long ranges; <see cref="SourceScene.UnitScaleCm"/> records
 /// whichever factor was applied for diagnostics.</para>
+/// <para><b>Calibration rest-frame trim</b>: mocap exports (CMU asf/amc conversions among
+/// them) often prepend a skeleton-calibration segment — the rest pose itself (all rotation
+/// channels ≈ 0), hard-cut (or blend-ramped over 2–3 frames) into the real motion. Played
+/// back it reads as a T-pose flash at t = 0. The importer drops such a segment from either
+/// clip end when ALL of (measured margins in parentheses, over the corpus + repro files):
+/// every segment frame is rest-like (max joint rotation vs the identity rest ≤ 40°;
+/// calibration frames/ramps measure ≤ 24°, real clip edges ≥ 80°); the segment is short
+/// (≤ 4 rest-like frames — hard cuts measure 1, blend ramps 2; longer rest-like leads are
+/// content); the clip beyond it is NOT rest-like; and the discontinuity where the segment
+/// exits into the motion is both large in absolute terms (≥ 20°; measured 25–177°) and
+/// large versus the clip's own typical inter-frame delta (≥ 4× the median; real clip edges
+/// measure ≤ 8° at ≤ ~1× the median). A qualifying segment that exits through a multi-frame
+/// blend RAMP (measured 22–25°/frame for 3 frames on a makehuman-retarget export) has the
+/// ramp trimmed too, until the motion settles — 8 frames total per end at most. A clip that
+/// legitimately starts near rest (an idle) is continuous into the motion and never trips
+/// the discontinuity gates. Note the trim can never remove
+/// the reference frame a non-anatomical stick bind needs for its rest rebuild (see
+/// <c>RestNormalizer</c>): it only removes frames that MATCH the identity-rotation bind,
+/// and a frame matching a stick bind carries no rest information the bind itself lacks —
+/// the next (real) frame is then strictly the better reference.</para>
 /// <para><b>Resampling</b>: motion frames are resampled from the file's <c>Frame Time</c>
 /// grid onto <see cref="BvhImportOptions.SampleFps"/>. Each native frame's euler channels are
 /// converted to a quaternion FIRST and bracketing frames are then slerped (positions lerped).
@@ -125,12 +145,20 @@ public static class BvhImporter
             clips.Add(ResampleClip(joints, skeleton, motion, frameTime, unitScale, options.SampleFps));
 
         // BVH conventional axes: Y-up (1), Z-front (2), X-coord (0) — recorded, not converted.
+        // RestPlacementAuthored = false: the BVH rest skeleton is OFFSETs only (root at the
+        // file origin, no authored world placement), while MOTION root positions live in
+        // absolute capture-volume coordinates — the two share no common ground/origin, so
+        // the solver must normalize clip placement against the rest skeleton
+        // (see SourceScene.RestPlacementAuthored and GeometricSolver remarks).
         return new SourceScene(
             skeleton, clips, unitScale,
             upAxis: 1, upAxisSign: 1,
             frontAxis: 2, frontAxisSign: 1,
             coordAxis: 0, coordAxisSign: 1,
-            originalUpAxis: -1);
+            originalUpAxis: -1)
+        {
+            RestPlacementAuthored = false,
+        };
     }
 
     // =====================================================================================
@@ -282,8 +310,9 @@ public static class BvhImporter
 
     /// <summary>
     /// Decodes every native frame to per-joint local transforms (quaternions built per frame
-    /// from the joint's channel order), then resamples onto the <paramref name="fps"/> grid —
-    /// positions lerped, rotations slerped between the bracketing native frames.
+    /// from the joint's channel order), drops leading/trailing calibration rest frames (see
+    /// class remarks), then resamples onto the <paramref name="fps"/> grid — positions
+    /// lerped, rotations slerped between the bracketing native frames.
     /// </summary>
     private static Clip ResampleClip(
         List<Joint> joints, Skeleton.Skeleton skeleton, float[][] motion,
@@ -308,16 +337,27 @@ public static class BvhImporter
             native[f] = locals;
         }
 
-        double duration = (nativeCount - 1) * (double)frameTime;
+        // Calibration rest-frame trim: a short rest-like segment per clip end (class remarks).
+        int first = 0;
+        int last = nativeCount - 1;
+        if (nativeCount >= 3)
+        {
+            float typicalDeltaDeg = TypicalNeighborRotDeltaDeg(native);
+            first += CalibrationSegmentLength(native, first, last, step: +1, typicalDeltaDeg);
+            last -= CalibrationSegmentLength(native, last, first, step: -1, typicalDeltaDeg);
+        }
+        int trimmedCount = last - first + 1;
+
+        double duration = (trimmedCount - 1) * (double)frameTime;
         int outCount = Math.Max(1, (int)Math.Round(duration * fps) + 1);
 
         var frames = new List<XForm[]>(outCount);
         for (int f = 0; f < outCount; f++)
         {
-            double s = f / (double)fps / frameTime; // position on the native frame grid
-            int i0 = Math.Clamp((int)Math.Floor(s), 0, nativeCount - 1);
-            int i1 = Math.Min(i0 + 1, nativeCount - 1);
-            float u = Math.Clamp((float)(s - i0), 0f, 1f);
+            double s = f / (double)fps / frameTime; // position on the trimmed native frame grid
+            int i0 = first + Math.Clamp((int)Math.Floor(s), 0, trimmedCount - 1);
+            int i1 = Math.Min(i0 + 1, last);
+            float u = Math.Clamp((float)(s - (i0 - first)), 0f, 1f);
 
             var frame = new XForm[skeleton.Count];
             var a = native[i0];
@@ -335,6 +375,108 @@ public static class BvhImporter
         // ranges (Unity .meta clipAnimations) are expressed in it.
         float nativeFps = frameTime > 0f ? (float)(1.0 / frameTime) : fps;
         return new Clip("motion", fps, looping: false, frames, nativeFps);
+    }
+
+    // ---------------------------------------------------------------- calibration trim
+
+    /// <summary>A frame counts as rest-like only below this max-joint rotation angle vs the
+    /// identity-rotation bind (measured: calibration frames/ramps ≤ 24°, real edges ≥ 80°).</summary>
+    private const float CalibrationRestMaxDeg = 40f;
+
+    /// <summary>Absolute floor on the discontinuity out of the rest-like segment (measured:
+    /// calibration exits 25–177°, continuous real clip edges ≤ 8°).</summary>
+    private const float CalibrationJumpMinDeg = 20f;
+
+    /// <summary>The segment-exit discontinuity must also exceed this multiple of the clip's
+    /// median inter-frame delta — a clip idling near rest never trips this.</summary>
+    private const float CalibrationJumpTypicalRatio = 4f;
+
+    /// <summary>Longest rest-like calibration segment trimmed per clip end. Hard cuts are
+    /// 1 frame (CMU asf/amc exports); rest→motion blend ramps measure 2 rest-like frames
+    /// (a makehuman-retarget export). Longer rest-like leads are content, left alone.</summary>
+    private const int CalibrationMaxSegmentFrames = 4;
+
+    /// <summary>Absolute floor on a blend-ramp frame's delta for the ramp extension
+    /// (measured ramp deltas 15–25°/frame; settled motion ≤ 6°).</summary>
+    private const float CalibrationRampMinDeg = 10f;
+
+    /// <summary>Hard cap on the total trim per clip end (rest-like segment + blend ramp;
+    /// measured worst case 5 frames on the makehuman-retarget export).</summary>
+    private const int CalibrationMaxTrimFrames = 8;
+
+    /// <summary>
+    /// Length of the prepended (<paramref name="step"/> = +1, scanning from
+    /// <paramref name="edge"/> toward <paramref name="stop"/>) or appended (−1)
+    /// skeleton-calibration segment, 0 when there is none. The segment is a short run of
+    /// rest-like frames (≤ <see cref="CalibrationMaxSegmentFrames"/>) that exits into
+    /// NON-rest-like motion (≥ 2 frames of which must remain) through a discontinuity that
+    /// is large both absolutely and against the clip's typical inter-frame delta. When the
+    /// exit is a multi-frame blend RAMP rather than a hard cut (measured: 2 rest-like frames
+    /// then 22–25°/frame for 3 more), the ramp frames are consumed too — until the motion
+    /// settles to ordinary deltas — bounded by <see cref="CalibrationMaxTrimFrames"/> total.
+    /// See class remarks for the measured margins.
+    /// </summary>
+    private static int CalibrationSegmentLength(
+        XForm[][] native, int edge, int stop, int step, float typicalDeltaDeg)
+    {
+        int length = 0;
+        int f = edge;
+        while (f != stop && length <= CalibrationMaxSegmentFrames
+               && MaxRotDeltaDeg(native[f], null) <= CalibrationRestMaxDeg)
+        {
+            length++;
+            f += step;
+        }
+        if (length is 0 or > CalibrationMaxSegmentFrames)
+            return 0;
+
+        // f = first frame past the rest-like segment; require a real (non-rest-like) clip
+        // of ≥ 2 frames beyond it and a calibration-grade cut between segment and motion.
+        if (f == stop || MaxRotDeltaDeg(native[f], null) <= CalibrationRestMaxDeg)
+            return 0;
+        float jump = MaxRotDeltaDeg(native[f - step], native[f]);
+        if (jump < CalibrationJumpMinDeg || jump < CalibrationJumpTypicalRatio * typicalDeltaDeg)
+            return 0;
+
+        // Blend-ramp extension: consume frames still moving at calibration-ramp speed until
+        // the motion settles (leaving ≥ 2 frames past the trim).
+        float rampFloor = MathF.Max(
+            CalibrationRampMinDeg, CalibrationJumpTypicalRatio * typicalDeltaDeg);
+        while (length < CalibrationMaxTrimFrames
+               && f != stop && f + step != stop
+               && MaxRotDeltaDeg(native[f], native[f + step]) >= rampFloor)
+        {
+            length++;
+            f += step;
+        }
+        return length;
+    }
+
+    /// <summary>Max joint rotation angle (degrees) between two decoded frames, or — when
+    /// <paramref name="b"/> is null — against the identity-rotation BVH bind rest.</summary>
+    private static float MaxRotDeltaDeg(XForm[] a, XForm[]? b)
+    {
+        float max = 0f;
+        for (int i = 0; i < a.Length; i++)
+        {
+            float angle = MathQ.AngleBetween(a[i].Rot, b is null ? Quaternion.Identity : b[i].Rot);
+            max = MathF.Max(max, angle);
+        }
+        return max * (180f / MathF.PI);
+    }
+
+    /// <summary>Median of the per-pair max joint rotation deltas over the clip's INTERIOR
+    /// consecutive frame pairs (both edge pairs excluded — they are the trim candidates).</summary>
+    private static float TypicalNeighborRotDeltaDeg(XForm[][] native)
+    {
+        int pairCount = native.Length - 3; // pairs (1,2) … (n-3, n-2)
+        if (pairCount <= 0)
+            return 0f;
+        var deltas = new float[pairCount];
+        for (int f = 0; f < pairCount; f++)
+            deltas[f] = MaxRotDeltaDeg(native[f + 1], native[f + 2]);
+        Array.Sort(deltas);
+        return deltas[pairCount / 2];
     }
 
     /// <summary>One joint's local transform from one motion row (see class remarks).</summary>
