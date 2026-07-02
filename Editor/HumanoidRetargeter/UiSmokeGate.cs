@@ -74,6 +74,28 @@ public static class UiSmokeGate
 		if ( string.IsNullOrWhiteSpace( _resultPath ) )
 			return; // not a smoke run - do nothing, ever
 
+		// One-shot arming marker, written by the driver script immediately before launch
+		// and CONSUMED here. The env var alone must never arm the gate: a gate run that
+		// boots Steam as its child leaks HR_UI_SMOKE into Steam's environment, and every
+		// editor the user launches through that Steam afterwards inherits it - observed as
+		// the user's own scratch-project session quitting itself seconds after opening
+		// (same failure mode as M0Gate).
+		var marker = _resultPath + ".arm";
+		try
+		{
+			if ( !File.Exists( marker ) )
+			{
+				Log.Info( "[hr-ui-smoke] HR_UI_SMOKE is set but there is no arming marker - "
+					+ "leaked env var (stale Steam environment?), ignoring; not a smoke run" );
+				return;
+			}
+			File.Delete( marker );
+		}
+		catch
+		{
+			return; // cannot verify/consume the marker - err on never running
+		}
+
 		_ = RunAsync();
 	}
 
