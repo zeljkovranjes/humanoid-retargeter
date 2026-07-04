@@ -958,18 +958,38 @@ public static class UiSmokeGate
 		var restPatterns = Environment.GetEnvironmentVariable( "HR_UI_SMOKE_REST_BONES" );
 		if ( !string.IsNullOrWhiteSpace( restPatterns ) && !isModelTarget )
 		{
-			var patterns = restPatterns.Split( ',', StringSplitOptions.RemoveEmptyEntries );
+			// "!pattern" = INVERTED: rest everything that does NOT match (single-bone repro).
+			var inverted = restPatterns.StartsWith( '!' );
+			var patterns = restPatterns.TrimStart( '!' )
+				.Split( ',', StringSplitOptions.RemoveEmptyEntries );
 			var skeleton = target.Spec.Rig.Skeleton;
 			var rested = 0;
 			for ( var i = 0; i < skeleton.Count; i++ )
 			{
-				if ( !patterns.Any( p => skeleton[i].Name.Contains( p.Trim(), StringComparison.OrdinalIgnoreCase ) ) )
-					continue;
-				foreach ( var frame in clip.SolvedFrames )
-					frame[i] = skeleton[i].RestLocal;
-				rested++;
+				var matches = patterns.Any( p =>
+					skeleton[i].Name.Contains( p.Trim(), StringComparison.OrdinalIgnoreCase ) );
+				if ( matches != inverted )
+				{
+					foreach ( var frame in clip.SolvedFrames )
+						frame[i] = skeleton[i].RestLocal;
+					rested++;
+				}
 			}
-			Note( $"REST-BONES bisect: {rested} bones forced to rest ({restPatterns})" );
+			// Re-serialize so the COMPILE reflects the bisect too (the DMX was written
+			// inside ConvertBatch before this hook ran) - mirrors EmitClip incl. the
+			// embedded-mesh root-yaw compensation.
+			clip.OverrideDmxContent( HumanoidRetargeter.Formats.Dmx.DmxWriter.Write(
+				skeleton,
+				new HumanoidRetargeter.Skeleton.Clip( clip.ClipName, clip.Fps, clip.Looping,
+					HumanoidRetargeter.Retargeter.TestHook_CompensateEmbeddedMeshRootYaw(
+						clip.SolvedFrames, target.Spec ) ),
+				new HumanoidRetargeter.Formats.Dmx.DmxWriteOptions
+				{
+					Name = clip.ClipName,
+					SourceNote = "rest-bones bisect",
+					UpAxisY = target.Spec.UpAxis == TargetUpAxis.YUpCm,
+				} ) );
+			Note( $"REST-BONES bisect: {rested} bones forced to rest ({restPatterns}) - DMX re-serialized" );
 		}
 
 		// Expected pelvis (rig space) at a mid frame, FK'd from the solved locals.
@@ -1277,32 +1297,56 @@ public static class UiSmokeGate
 								+ $"worst '{worstRoot}' {worstAngle:0.#}deg" );
 						}
 
-						// Full-skeleton audit at mid-sequence: engine playback bone worlds
-						// vs OUR solved FK (converted to engine space). Separates a broken
-						// compiled ANIMATION (bones off) from broken mesh SKINNING (bones
-						// right, skin wrong).
+						// Full-skeleton ROTATION audit: compiled playback world rotations vs
+						// +90X·FK(compensated frames) — the exact space the compiler plays
+						// (the root channels ship pre-yawed, see CompensateEmbeddedMeshRootYaw).
+						// Names the bones whose compiled result diverges from our data.
 						{
-							var frameIdx = Math.Min( clip.SolvedFrames.Count - 1,
-								(int)(clip.SolvedFrames.Count * 0.5f) );
-							probeModel.CurrentSequence.Time = probeModel.CurrentSequence.Duration * 0.5f;
+							var frameIdx = Math.Min( clip.SolvedFrames.Count - 1, clip.SolvedFrames.Count / 2 );
+							probeModel.CurrentSequence.Time = frameIdx / MathF.Max( clip.Fps, 1f );
 							probeModel.Update( 0.001f );
-							var solvedWorld = new HumanoidRetargeter.Skeleton.Pose(
-								clip.SolvedFrames[frameIdx] ).ToWorld( rig.Skeleton );
+							var yawFix = System.Numerics.Quaternion.CreateFromAxisAngle(
+								System.Numerics.Vector3.UnitY, -MathF.PI * 0.5f );
+							var upConv = System.Numerics.Quaternion.CreateFromAxisAngle(
+								System.Numerics.Vector3.UnitX, MathF.PI * 0.5f );
+							var locals = new HumanoidRetargeter.Maths.XForm[rig.Skeleton.Count];
+							for ( var i = 0; i < rig.Skeleton.Count; i++ )
+							{
+								var local = clip.SolvedFrames[frameIdx][i];
+								locals[i] = rig.Skeleton[i].ParentIndex < 0
+									&& target.Spec.UpAxis == TargetUpAxis.YUpCm
+									&& !string.IsNullOrEmpty( target.Spec.MeshFilePath )
+									? new HumanoidRetargeter.Maths.XForm(
+										System.Numerics.Vector3.Transform( local.Pos, yawFix ),
+										System.Numerics.Quaternion.Normalize( yawFix * local.Rot ) )
+									: local;
+							}
+							var world = new HumanoidRetargeter.Skeleton.Pose( locals ).ToWorld( rig.Skeleton );
+							// The compiled skeleton lives in a GLOBALLY yawed frame (the same
+							// +90° about engine-up the root compensation targets) - fold it
+							// into the expectation, and skip ConstraintDriven bones (a bare
+							// SceneModel probe zeroes their constraints; false 90-100° reads).
+							var globalYaw = System.Numerics.Quaternion.CreateFromAxisAngle(
+								System.Numerics.Vector3.UnitZ, MathF.PI * 0.5f );
 							var offenders = new List<(float Err, string Line)>();
 							for ( var i = 0; i < rig.Skeleton.Count; i++ )
 							{
-								var pos = solvedWorld[i].Pos;
-								var expected = target.Spec.UpAxis == TargetUpAxis.YUpCm
-									? new Vector3( pos.X, -pos.Z, pos.Y ) * target.PreviewPositionScale
-									: new Vector3( pos.X, pos.Y, pos.Z ) * target.PreviewPositionScale;
-								var actual = probeModel.GetBoneWorldTransform( rig.Skeleton[i].Name ).Position;
-								var err = actual.Distance( expected );
-								if ( err > 1.5f )
-									offenders.Add( (err, $"{rig.Skeleton[i].Name} {err:0.#}in") );
+								if ( rig.ClassOf( i ) == HumanoidRetargeter.Target.BoneClass.ConstraintDriven )
+									continue;
+								var expectedRot = target.Spec.UpAxis == TargetUpAxis.YUpCm
+									? System.Numerics.Quaternion.Normalize( globalYaw * (upConv * world[i].Rot) )
+									: world[i].Rot;
+								var actual = probeModel.GetBoneWorldTransform( rig.Skeleton[i].Name ).Rotation;
+								var dot = MathF.Min( MathF.Abs(
+									expectedRot.X * actual.x + expectedRot.Y * actual.y
+									+ expectedRot.Z * actual.z + expectedRot.W * actual.w ), 1f );
+								var angle = 2f * MathF.Acos( dot ) * 180f / MathF.PI;
+								if ( angle > 5f )
+									offenders.Add( (angle, $"{rig.Skeleton[i].Name} {angle:0.#}deg") );
 							}
-							Note( $"{tag} COMPILED bone audit (50%): {offenders.Count} bones >1.5in off; worst: "
+							Note( $"{tag} COMPILED ROTATION audit (f{frameIdx}): {offenders.Count} bones >5deg off; worst: "
 								+ string.Join( ", ", offenders.OrderByDescending( o => o.Err )
-									.Take( 10 ).Select( o => o.Line ) ) );
+									.Take( 12 ).Select( o => o.Line ) ) );
 						}
 
 						// Renders of the COMPILED model mid-sequence - the ModelDoc ground

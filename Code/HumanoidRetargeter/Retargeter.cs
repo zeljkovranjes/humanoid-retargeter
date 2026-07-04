@@ -935,6 +935,14 @@ public static class Retargeter
         return result;
     }
 
+    /// <summary>Test seam for <see cref="CompensateEmbeddedMeshRootYaw"/> (gate bisects
+    /// re-serialize mutated frames with the same compensation the pipeline applies).</summary>
+    public static List<XForm[]> TestHook_CompensateEmbeddedMeshRootYaw(
+        IReadOnlyList<XForm[]> frames, RetargetTargetSpec target)
+        => target.UpAxis == TargetUpAxis.YUpCm && !string.IsNullOrEmpty(target.MeshFilePath)
+            ? CompensateEmbeddedMeshRootYaw(frames, target.Rig)
+            : frames.ToList();
+
     /// <summary>Test seam for <see cref="FollowHipsWithOrphanBones"/>.</summary>
     public static void TestHook_FollowOrphans(TargetRig rig, List<XForm[]> frames)
         => FollowHipsWithOrphanBones(rig, frames, new MappingReportInfo

@@ -84,6 +84,10 @@ public sealed class ClipResult
     /// <see cref="ReleaseHeavyData"/>.</summary>
     public string DmxContent { get; internal set; } = "";
 
+    /// <summary>Replaces the serialized DMX (diagnostic harnesses only: the UI smoke
+    /// gate's bone-bisect re-serializes mutated frames so the COMPILE reflects them).</summary>
+    public void OverrideDmxContent(string dmx) => DmxContent = dmx ?? "";
+
     /// <summary>Mapping report of the source file; null when the failure happened before
     /// detection (unreadable file).</summary>
     public MappingReportInfo? Mapping { get; init; }

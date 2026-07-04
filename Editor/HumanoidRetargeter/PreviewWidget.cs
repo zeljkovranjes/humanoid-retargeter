@@ -600,7 +600,25 @@ public sealed class PreviewWidget : SceneRenderingWidget
 				sequenceModel.CurrentSequence.Duration * Math.Clamp( fraction, 0f, 1f );
 			sequenceModel.Update( 0.016f );
 			_sceneModel.RenderingEnabled = false;
-			return RenderToPng( size );
+
+			// RenderToPng ticks the scene with WALL-CLOCK time - re-pin the sequence
+			// time right before the draw so the render can't sample a different frame
+			// than the probes (diagnosed: bone queries read the correct pose while the
+			// rendered skin showed a ~90° different one).
+			Scene.EditorTick( RealTime.Now, 0.016f );
+			sequenceModel.CurrentSequence.Time =
+				sequenceModel.CurrentSequence.Duration * Math.Clamp( fraction, 0f, 1f );
+			sequenceModel.Update( 0.001f );
+			var png = RenderToPng( size );
+			var thigh = sequenceModel.Model?.Bones?.AllBones?.FirstOrDefault(
+				b => b.Name.Contains( "thigh", StringComparison.OrdinalIgnoreCase ) );
+			if ( thigh is not null )
+			{
+				var t = sequenceModel.GetBoneWorldTransform( thigh.Name );
+				Log.Info( $"[humanoid-retargeter] render-model probe '{thigh.Name}' rot={t.Rotation} "
+					+ $"time={sequenceModel.CurrentSequence.Time:0.###}" );
+			}
+			return png;
 		}
 		finally
 		{
