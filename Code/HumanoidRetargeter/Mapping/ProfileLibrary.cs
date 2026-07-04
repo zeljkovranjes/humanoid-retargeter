@@ -213,6 +213,24 @@ public static class ProfileLibrary
     /// </summary>
     public static Profile DazGenesis { get; } = BuildDazGenesis();
 
+    /// <summary>
+    /// The s&amp;box citizen-family skeleton itself (<c>citizen.vmdl</c>,
+    /// <c>citizen_human_*.vmdl</c> and every community model re-rigged on their skeleton):
+    /// <c>pelvis</c>, <c>spine_0..2</c>, <c>neck_0</c>, <c>head</c>, reversed-word limb
+    /// names <c>arm_upper_L→arm_lower_L→hand_L</c> / <c>leg_upper_L→leg_lower_L→
+    /// ankle_L→ball_L</c>, <c>clavicle_L/R</c> and fingers
+    /// <c>finger_&lt;name&gt;_{meta,0,1,2}_L</c> (meta = metacarpal, 0/1/2 =
+    /// proximal/middle/distal). The alias table mirrors
+    /// <see cref="Target.SboxBoneClassifier"/>'s curated role table — kept in sync by a
+    /// test. This is what lets a COMPILED s&amp;box model picked as a custom conversion
+    /// target (or used as a source) be recognized: the reversed word order
+    /// (<c>arm_upper</c>, not <c>upper_arm</c>) defeats generic token matching, which
+    /// scored the citizen rig at 5% and made every custom-model pick fail with "not
+    /// recognized as humanoid". Twist/helper/IK/face bones (<c>*_twist*</c>,
+    /// <c>*_helper*</c>, <c>eye_*</c>, …) have no aliases and are never mapped.
+    /// </summary>
+    public static Profile Sbox { get; } = BuildSbox();
+
     /// <summary>All built-in presets, in detection order (first wins score ties — see
     /// <see cref="SmplX"/> vs <see cref="Smpl"/>; <see cref="ValveBiped"/> is evaluated
     /// before <see cref="Biped"/> and <see cref="DazGenesis"/> before
@@ -220,10 +238,51 @@ public static class ProfileLibrary
     public static IReadOnlyList<Profile> All { get; } =
         new[]
         {
-            Mixamo, ActorCoreCc, UeMannequin, XsensMvn, PerceptionNeuron, RokokoBvh,
+            Sbox, Mixamo, ActorCoreCc, UeMannequin, XsensMvn, PerceptionNeuron, RokokoBvh,
             SmplX, Smpl, SomaBvh, ClassicBvh, ValveBiped, Biped, DazGenesis, DazPoser,
             Rigify, Vrm, AutoRigPro,
         };
+
+    // ---------------------------------------------------------------- sbox
+
+    private static Profile BuildSbox()
+    {
+        var aliases = new Dictionary<BoneRole, string[]>
+        {
+            [BoneRole.Hips] = new[] { "pelvis" },
+            [BoneRole.Spine0] = new[] { "spine_0" },
+            [BoneRole.Spine1] = new[] { "spine_1" },
+            [BoneRole.Spine2] = new[] { "spine_2" },
+            [BoneRole.Spine3] = new[] { "spine_3" },
+            [BoneRole.Neck] = new[] { "neck_0" },
+            [BoneRole.Head] = new[] { "head" },
+        };
+        foreach (var side in new[] { "L", "R" })
+        {
+            aliases[Role("Clavicle", side)] = new[] { $"clavicle_{side}" };
+            aliases[Role("UpperArm", side)] = new[] { $"arm_upper_{side}" };
+            aliases[Role("LowerArm", side)] = new[] { $"arm_lower_{side}" };
+            aliases[Role("Hand", side)] = new[] { $"hand_{side}" };
+            aliases[Role("UpperLeg", side)] = new[] { $"leg_upper_{side}" };
+            aliases[Role("LowerLeg", side)] = new[] { $"leg_lower_{side}" };
+            aliases[Role("Foot", side)] = new[] { $"ankle_{side}" };
+            aliases[Role("Toe", side)] = new[] { $"ball_{side}" };
+
+            foreach (var (finger, rolePrefix) in new[]
+            {
+                ("thumb", "Thumb"), ("index", "Index"), ("middle", "Middle"),
+                ("ring", "Ring"), ("pinky", "Pinky"),
+            })
+            {
+                aliases[Role($"{rolePrefix}Meta", side)] = new[] { $"finger_{finger}_meta_{side}" };
+                aliases[Role($"{rolePrefix}Prox", side)] = new[] { $"finger_{finger}_0_{side}" };
+                aliases[Role($"{rolePrefix}Mid", side)] = new[] { $"finger_{finger}_1_{side}" };
+                aliases[Role($"{rolePrefix}Dist", side)] = new[] { $"finger_{finger}_2_{side}" };
+            }
+        }
+
+        return new Profile("sbox", new string[0], aliases);
+    }
 
     // ---------------------------------------------------------------- mixamo
 

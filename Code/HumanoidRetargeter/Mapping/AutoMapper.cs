@@ -65,11 +65,13 @@ public static class AutoMapper
     private static readonly string[] HipsCores = { "hips", "hip", "pelvis" };
     private static readonly string[] SpineCores = { "spine", "chest", "torso", "waist", "lowerback", "abdomen" };
     private static readonly string[] ClavicleCores = { "shoulder", "clavicle", "collar", "collarbone" };
-    private static readonly string[] UpperArmCores = { "upperarm", "uparm", "arm", "bicep" };
-    private static readonly string[] LowerArmCores = { "forearm", "lowerarm", "lowarm", "elbow" };
+    // "armupper"/"legupper" etc. are the s&box-style reversed word order (arm_upper_L) -
+    // custom rigs built for s&box reuse that convention with their own skeletons.
+    private static readonly string[] UpperArmCores = { "upperarm", "uparm", "armupper", "arm", "bicep" };
+    private static readonly string[] LowerArmCores = { "forearm", "lowerarm", "lowarm", "armlower", "elbow" };
     private static readonly string[] HandCores = { "hand", "wrist" };
-    private static readonly string[] UpperLegCores = { "upleg", "upperleg", "thigh" };
-    private static readonly string[] LowerLegCores = { "lowerleg", "lowleg", "calf", "shin", "knee" };
+    private static readonly string[] UpperLegCores = { "upleg", "upperleg", "legupper", "thigh" };
+    private static readonly string[] LowerLegCores = { "lowerleg", "lowleg", "leglower", "calf", "shin", "knee" };
     private static readonly string[] FootCores = { "foot", "ankle" };
     private static readonly string[] ToeCores = { "toe", "toebase", "toes", "ball" };
 
