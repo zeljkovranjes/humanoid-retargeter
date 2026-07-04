@@ -41,8 +41,9 @@ No NuGet packages, no native DLLs, no Python, no external tools.
   per take, each independently previewable, removable, and convertible.
 
 ### Rig understanding (automatic, per file)
-- **Built-in profiles** (17): Mixamo, ActorCore / Character Creator (`CC_Base_*`),
-  UE Mannequin (UE4/UE5 naming), Xsens MVN, Perception Neuron / Axis Neuron,
+- **Built-in profiles** (18): s&box citizen/human rigs (`pelvis`/`arm_upper_L` naming —
+  any model re-rigged on the citizen skeleton), Mixamo, ActorCore / Character Creator
+  (`CC_Base_*`), UE Mannequin (UE4/UE5 naming), Xsens MVN, Perception Neuron / Axis Neuron,
   Rokoko-style BVH, SMPL-X, SMPL, NVIDIA SOMA BVH, classic/Character-Studio BVH,
   Source ValveBiped (`ValveBiped.Bip01_*`), 3ds Max Biped (`Bip01`/`Bip001`),
   DAZ Genesis 3/8, DAZ/Poser classic, Blender Rigify (metarig + `DEF-`),
@@ -89,9 +90,13 @@ No NuGet packages, no native DLLs, no Python, no external tools.
 - **s&box Human** (default) — the 5-finger `citizen_human` rig.
 - **s&box Citizen (classic)** — the 4-finger citizen; missing pinky roles are skipped
   cleanly.
-- **Any custom humanoid** — pick any model/.vmdl or FBX as the target; its skeleton goes
-  through the same detection/mapping machinery (best-effort even on imperfect matches).
-  Engine-unit targets are handled with the correct axis/unit conventions automatically.
+- **Any custom humanoid** — pick any compiled model/.vmdl or FBX as the target; its
+  skeleton goes through the same detection/mapping machinery, odd-but-humanoid anatomy
+  included (paws, one finger, a missing hand — unmapped roles are skipped cleanly).
+  Unrecognized skeletons open the manual bone mapper, and the confirmed mapping is saved
+  as a preset so the rig resolves instantly forever after. Engine-unit targets are handled
+  with the correct axis/unit conventions automatically; FBX targets get the FBX embedded
+  into the generated vmdl (mesh + skeleton), so the output is a complete playable model.
 
 ### Output
 - **DMX animation files** (byte-compatible with s&box's own fbx2dmx output) plus either:
