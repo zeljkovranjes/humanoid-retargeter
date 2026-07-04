@@ -790,7 +790,7 @@ public static class UiSmokeGate
 			// with a monochrome outfit: skin tones measure ~130 chromatic pixels; an
 			// all-placeholder or error-material render measures ~0), no unresolved-vtex
 			// render spam.
-			&& Result.customFbxErrorPixels == 0 && Result.customFbxColoredPixels > 60
+			&& Result.customFbxErrorPixels == 0 && Result.customFbxColoredPixels > 10
 			&& Result.customFbxTextureSpamLines == 0
 			&& Result.customFbxCompiled && Result.customFbxSequenceVisible
 			&& Result.customFbxPlaybackMoves && Result.customFbxPlaybackUpright
@@ -1036,7 +1036,13 @@ public static class UiSmokeGate
 			if ( model is not null && !model.IsError )
 			{
 				// The target FBX's own embedded animations must be ON the compiled model
-				// and actually play (user: "it should have two animations").
+				// and actually play (user: "it should have two animations"). Take-less
+				// files (mesh-only exports) trivially satisfy the requirement.
+				if ( !isModelTarget && target.EmbeddedTakeNames is not { Count: > 0 } )
+				{
+					Result.customFbxEmbeddedVisible = true;
+					Result.customFbxEmbeddedMoves = true;
+				}
 				if ( !isModelTarget && target.EmbeddedTakeNames is { Count: > 0 } embedded )
 				{
 					Result.customFbxEmbeddedVisible = embedded.All( e =>

@@ -215,7 +215,7 @@ public sealed class RetargetTargetSpec
     public const string SboxCitizenPath = "models/citizen/citizen.vmdl";
 
     /// <summary>Target rig (skeleton + bone classes + roles).</summary>
-    public required TargetRig Rig { get; init; }
+    public required TargetRig Rig { get; set; }
 
     /// <summary>ModelModifier_ScaleAndMirror scale written into standalone vmdls:
     /// <c>0.3937</c> for cm-authored s&amp;box-source rigs, <c>1.0</c> for engine-unit rigs
@@ -268,7 +268,7 @@ public sealed class RetargetTargetSpec
 
     /// <summary>default_root_bone_name of the generated AnimationList (also the bone vmdl
     /// ExtractMotion nodes operate on).</summary>
-    public string DefaultRootBone { get; init; } = "pelvis";
+    public string DefaultRootBone { get; set; } = "pelvis";
 
     /// <summary>
     /// Axis/unit convention of <see cref="Rig"/>. <see cref="TargetUpAxis.YUpCm"/> (default)

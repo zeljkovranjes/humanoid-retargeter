@@ -367,8 +367,12 @@ public sealed class RetargetWindow : Widget
 	void RefreshFbxTargetPreview( TargetPickers.ResolvedTarget resolved )
 	{
 		if ( resolved?.FbxAbsolutePath is not null && resolved.Warning is null )
-			_ = CompileFbxTargetPreviewAsync( resolved );
+			_fbxPreviewTask = CompileFbxTargetPreviewAsync( resolved );
 	}
+
+	/// <summary>Pending FBX-target preview compile; conversions await it because it also
+	/// rebuilds the rig from the compiled model (the engine-authoritative skeleton).</summary>
+	Task _fbxPreviewTask;
 
 	async Task CompileFbxTargetPreviewAsync( TargetPickers.ResolvedTarget resolved )
 	{
@@ -1069,6 +1073,15 @@ public sealed class RetargetWindow : Widget
 					}
 				}
 			}
+		}
+
+		// FBX targets: the pick-time preview compile also rebuilds the rig from the
+		// COMPILED model (the engine-authoritative skeleton, rig == bind by construction).
+		// Converting before it finishes would solve onto the drift-prone importer rig.
+		if ( !_augmentMode && _fbxPreviewTask is { IsCompleted: false } pendingPreview )
+		{
+			SetStatus( "Preparing the target model (first-time mesh compile)…", Theme.Blue );
+			await pendingPreview;
 		}
 
 		_converting = true;

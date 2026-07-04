@@ -297,6 +297,66 @@ public static class TargetPickers
 		return resolved;
 	}
 
+	/// <summary>
+	/// Rebuilds an FBX target's rig from its COMPILED preview model — the engine's own
+	/// import is the single source of truth the sequences will play on, so deriving the
+	/// rig from it makes rig ≡ compiled bind BY CONSTRUCTION for any FBX, killing the
+	/// per-exporter drift our importer can never fully chase (measured: 6 finger bones up
+	/// to 6in/8° off on an Auto-Rig Pro export — stretched fingers — while a Biped export
+	/// matched exactly). The engine skeleton (Z-up inches) is re-expressed in the vmdl's
+	/// source space (Y-up cm) so the DMX and the ScaleAndMirror-carrying vmdl stay unit-
+	/// and axis-consistent with the embedded mesh. False = keep the importer-derived rig.
+	/// </summary>
+	internal static bool TryRebuildFromCompiledPreview( ResolvedTarget target, string modelPath )
+	{
+		try
+		{
+			var model = Model.Load( modelPath );
+			if ( model is null || model.IsError || model.BoneCount == 0 )
+				return false;
+
+			var engine = SkeletonFromModel( model );
+
+			// Engine (Z-up, inches) → vmdl source space (Y-up, cm): uniform inverse scale
+			// on every local position; the inverse basis rotation folds into the roots.
+			var inverseUp = System.Numerics.Quaternion.CreateFromAxisAngle(
+				System.Numerics.Vector3.UnitX, -MathF.PI * 0.5f );
+			var definitions = new List<HumanoidRetargeter.Skeleton.BoneDefinition>( engine.Count );
+			foreach ( var bone in engine.Bones )
+			{
+				var pos = bone.RestLocal.Pos / RetargetTargetSpec.SboxSourceScale;
+				var rot = bone.RestLocal.Rot;
+				if ( bone.ParentIndex < 0 )
+				{
+					pos = System.Numerics.Vector3.Transform( pos, inverseUp );
+					rot = System.Numerics.Quaternion.Normalize( inverseUp * rot );
+				}
+				definitions.Add( new HumanoidRetargeter.Skeleton.BoneDefinition(
+					bone.Name, bone.ParentIndex < 0 ? null : engine[bone.ParentIndex].Name,
+					new XForm( pos, rot ) ) );
+			}
+			var skeleton = SkeletonModel.Create( definitions );
+
+			var map = DetectHumanoid( skeleton, out var error, out _ );
+			if ( map is null )
+			{
+				Log.Warning( $"[humanoid-retargeter] compiled-preview rig rebuild skipped: {error}" );
+				return false;
+			}
+
+			target.Spec.Rig = TargetRig.FromSkeleton( skeleton, map );
+			target.Spec.DefaultRootBone = RootBoneName( skeleton, map );
+			Log.Info( "[humanoid-retargeter] target rig rebuilt from the compiled preview model "
+				+ $"({skeleton.Count} bones) - rig now matches the engine bind exactly" );
+			return true;
+		}
+		catch ( Exception e )
+		{
+			Log.Warning( $"[humanoid-retargeter] compiled-preview rig rebuild failed: {e.Message}" );
+			return false;
+		}
+	}
+
 	/// <summary>Resourcecompiler's bone-name sanitization (non-alphanumeric → underscore),
 	/// applied to a candidate TARGET skeleton so the generated animation channels match the
 	/// compiled model's bones exactly. Kept as-is when nothing changes or when sanitizing

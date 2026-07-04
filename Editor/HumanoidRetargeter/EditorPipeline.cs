@@ -601,16 +601,10 @@ public static class EditorPipeline
 			var bytes = File.ReadAllBytes( target.FbxAbsolutePath );
 			var fileName = Path.GetFileName( target.FbxAbsolutePath );
 
-			// Identity mapping: the target rig's own role table, index-aligned with the
-			// source import (same file, same importer, deterministic bone order).
-			var mapping = new HumanoidRetargeter.Mapping.MappingResult(
-				"identity", HumanoidRetargeter.Mapping.MappingSource.Manual );
-			foreach ( var role in Enum.GetValues<HumanoidRetargeter.Mapping.BoneRole>() )
-			{
-				if ( target.Spec.Rig.BoneForRole( role ) is { } index )
-					mapping.RoleToBone[role] = index;
-			}
-
+			// Role-based mapping via the normal cascade: the target rig may be rebuilt
+			// from the COMPILED model (different bone order/count than the raw import),
+			// so index-aligned identity would mis-bind - the same-anatomy role retarget
+			// is near-identity anyway.
 			for ( var take = 0; take < names.Count; take++ )
 			{
 				requests.Add( new RetargetRequest
@@ -618,7 +612,6 @@ public static class EditorPipeline
 					SourceData = bytes,
 					SourceFileName = fileName,
 					SourceId = target.FbxAbsolutePath + "#embedded" + take,
-					MappingOverride = mapping,
 					TakeIndex = names.Count > 1 ? take : null,
 					ClipNameOverride = names[take],
 					RootMotion = Cleanup.RootMotionMode.Off,
@@ -792,6 +785,12 @@ public static class EditorPipeline
 			}
 
 			target.PreviewModelPath = asset.Path;
+
+			// THE flawless-FBX-target keystone: once the engine has compiled the mesh,
+			// its skeleton is the authority the sequences will play on - rebuild the rig
+			// from it so rig and compiled bind can never disagree (per-exporter pivot/
+			// scale quirks stretched fingers when the importer-derived rig drifted).
+			TargetPickers.TryRebuildFromCompiledPreview( target, asset.Path );
 			return true;
 		}
 		catch ( Exception e )
