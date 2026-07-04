@@ -1074,6 +1074,10 @@ public sealed class RetargetWindow : Widget
 		{
 			var outputFolder = NormalizedOutputFolder();
 			var requests = list.Select( BuildRequest ).ToList();
+			// Custom FBX target: convert its own embedded takes alongside the batch so the
+			// output model keeps the animations the FBX shipped with.
+			if ( !_augmentMode )
+				requests.AddRange( EditorPipeline.BuildEmbeddedTakeRequests( _target ) );
 			var options = BuildBatchOptions( outputFolder, augmentText );
 			var target = _target;
 

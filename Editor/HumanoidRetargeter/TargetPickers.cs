@@ -66,6 +66,13 @@ public static class TargetPickers
 		/// (e.g. a skeleton-only target FBX whose standalone vmdl will have no visible
 		/// model). Null when there is nothing to warn about.</summary>
 		public string Warning { get; set; }
+
+		/// <summary>Sequence names of the target FBX's OWN embedded animation takes
+		/// (index-aligned with the imported clips). Converted alongside every batch as
+		/// exact identity retargets so an animated FBX keeps its animations - AnimFile
+		/// nodes referencing the FBX directly cannot rescale translations (no import
+		/// scale on the node), which broke inch-authored files. Null/empty = none.</summary>
+		public IReadOnlyList<string> EmbeddedTakeNames { get; set; }
 	}
 
 	/// <summary>
