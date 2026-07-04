@@ -83,18 +83,24 @@ public static class TwistBoneFollow
         {
             foreach (var (bone, driver, axis, fraction) in twists)
             {
-                // The driver's rotation delta from rest, in the shared parent's space.
+                // The driver's rotation delta from rest, in the shared parent's space,
+                // forced to the SHORTEST arc (W >= 0) so the twist angle below is
+                // continuous in (-180°, 180°) and never flips representation.
                 var delta = MathQ.Normalize(
                     frame[driver].Rot * Quaternion.Conjugate(skeleton[driver].RestLocal.Rot));
+                if (delta.W < 0f)
+                    delta = new Quaternion(-delta.X, -delta.Y, -delta.Z, -delta.W);
                 // Twist component about the limb axis (swing-twist decomposition).
                 var proj = Vector3.Dot(new Vector3(delta.X, delta.Y, delta.Z), axis);
-                var twist = new Quaternion(axis * proj, delta.W);
-                if (twist.LengthSquared() < 1e-12f)
-                    continue; // 180-degree pure swing: twist undefined, keep rest
-                twist = Quaternion.Normalize(twist);
-                // Scale the roll by the twist bone's position along the segment.
-                var angle = 2f * MathF.Atan2(proj >= 0 ? new Vector3(twist.X, twist.Y, twist.Z).Length()
-                    : -new Vector3(twist.X, twist.Y, twist.Z).Length(), twist.W);
+                // Ill-conditioned when the delta approaches a pure 180° SWING (both the
+                // axis projection and W collapse toward 0): the decomposition then
+                // amplifies noise into huge fake rolls — measured on a throw clip, the
+                // kicking foot injected ±99° into the calf twist bone and the calf skin
+                // flipped upward ("the leg is up"). Keep rest instead.
+                var conditioning = MathF.Sqrt(proj * proj + delta.W * delta.W);
+                if (conditioning < 0.2f)
+                    continue;
+                var angle = 2f * MathF.Atan2(proj, delta.W);
                 var scaled = Quaternion.CreateFromAxisAngle(axis, angle * fraction);
                 frame[bone] = new XForm(
                     frame[bone].Pos, MathQ.Normalize(scaled * skeleton[bone].RestLocal.Rot));

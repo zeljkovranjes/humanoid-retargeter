@@ -819,6 +819,74 @@ public static class UiSmokeGate
 	static void DumpPreviewRender( PreviewWidget preview, string name )
 		=> DumpPng( () => preview.RenderToPng(), name );
 
+	/// <summary>Writes the rig (names, roles, rest locals) + solved frames next to the
+	/// result JSON, render_skinned.py schema.</summary>
+	static void TryDumpRigSolve(
+		HumanoidRetargeter.Target.TargetRig rig, HumanoidRetargeter.ClipResult clip, string fileName )
+	{
+		try
+		{
+			var skeleton = rig.Skeleton;
+			var path = Path.Combine( Path.GetDirectoryName( _resultPath ), fileName );
+			using var stream = File.Create( path );
+			using var w = new System.Text.Json.Utf8JsonWriter( stream );
+			void Xf( HumanoidRetargeter.Maths.XForm xf )
+			{
+				w.WriteStartArray( "p" );
+				w.WriteNumberValue( xf.Pos.X ); w.WriteNumberValue( xf.Pos.Y ); w.WriteNumberValue( xf.Pos.Z );
+				w.WriteEndArray();
+				w.WriteStartArray( "r" );
+				w.WriteNumberValue( xf.Rot.X ); w.WriteNumberValue( xf.Rot.Y );
+				w.WriteNumberValue( xf.Rot.Z ); w.WriteNumberValue( xf.Rot.W );
+				w.WriteEndArray();
+			}
+			w.WriteStartObject();
+			w.WriteNumber( "frameCount", clip.SolvedFrames.Count );
+			w.WriteStartObject( "mapping" );
+			w.WriteStartObject( "targetRoles" );
+			for ( var i = 0; i < skeleton.Count; i++ )
+			{
+				if ( rig.RoleOf( i ) is { } role )
+					w.WriteString( role.ToString(), skeleton[i].Name );
+			}
+			w.WriteEndObject();
+			w.WriteEndObject();
+			w.WriteStartArray( "targetBones" );
+			for ( var i = 0; i < skeleton.Count; i++ )
+			{
+				w.WriteStartObject();
+				w.WriteString( "name", skeleton[i].Name );
+				w.WriteString( "parent", skeleton[i].ParentIndex >= 0
+					? skeleton[skeleton[i].ParentIndex].Name : "" );
+				w.WriteStartObject( "rest" );
+				Xf( skeleton[i].RestLocal );
+				w.WriteEndObject();
+				w.WriteEndObject();
+			}
+			w.WriteEndArray();
+			w.WriteStartArray( "frames" );
+			foreach ( var frame in clip.SolvedFrames )
+			{
+				w.WriteStartArray();
+				for ( var i = 0; i < skeleton.Count; i++ )
+				{
+					w.WriteStartObject();
+					Xf( frame[i] );
+					w.WriteEndObject();
+				}
+				w.WriteEndArray();
+			}
+			w.WriteEndArray();
+			w.WriteEndObject();
+			w.Flush();
+			Note( $"rig+solve dumped: {fileName} ({skeleton.Count} bones)" );
+		}
+		catch ( Exception e )
+		{
+			Note( $"rig dump failed: {e.Message}" );
+		}
+	}
+
 	static void DumpPng( Func<byte[]> render, string name )
 	{
 		try
@@ -877,6 +945,32 @@ public static class UiSmokeGate
 			+ $"errors=[{string.Join( "; ", batch.Clips.Where( c => !c.Success ).Select( c => c.Error ) )}]" );
 		if ( clip is null )
 			return;
+
+		// Diagnostic dump of the (possibly engine-rebuilt) rig + this solve, in the same
+		// schema the Blender render harness reads - lets a headless-vs-editor solve be
+		// diffed bone by bone when the two disagree visually.
+		if ( !isModelTarget )
+			TryDumpRigSolve( target.Spec.Rig, clip, $"{vmdlName}_rig_solve.json" );
+
+		// Visual bisect hook: HR_UI_SMOKE_REST_BONES=<substr>[,<substr>] forces matching
+		// bones back to their rest locals in the SOLVED frames before the preview and
+		// compile - isolates which bone group causes an engine-side render artifact.
+		var restPatterns = Environment.GetEnvironmentVariable( "HR_UI_SMOKE_REST_BONES" );
+		if ( !string.IsNullOrWhiteSpace( restPatterns ) && !isModelTarget )
+		{
+			var patterns = restPatterns.Split( ',', StringSplitOptions.RemoveEmptyEntries );
+			var skeleton = target.Spec.Rig.Skeleton;
+			var rested = 0;
+			for ( var i = 0; i < skeleton.Count; i++ )
+			{
+				if ( !patterns.Any( p => skeleton[i].Name.Contains( p.Trim(), StringComparison.OrdinalIgnoreCase ) ) )
+					continue;
+				foreach ( var frame in clip.SolvedFrames )
+					frame[i] = skeleton[i].RestLocal;
+				rested++;
+			}
+			Note( $"REST-BONES bisect: {rested} bones forced to rest ({restPatterns})" );
+		}
 
 		// Expected pelvis (rig space) at a mid frame, FK'd from the solved locals.
 		var rig = target.Spec.Rig;
@@ -1107,6 +1201,43 @@ public static class UiSmokeGate
 					Note( $"{tag} embedded animation(s) [{string.Join( ", ", embedded )}]: "
 						+ $"visible={Result.customFbxEmbeddedVisible} playback: {embeddedProbe.Detail} "
 						+ $"moved={embeddedProbe.Moved} staticTake={staticTake}" );
+				}
+
+				// Finger-integrity probe ON THE COMPILED MODEL: hand→fingertip distance mid-
+				// sequence vs the rig rest distance. Catches finger corruption the pelvis/
+				// upright checks can't see (user: "fingers stretched like crazy" - the
+				// headless solve measures clean, so where the corruption enters matters).
+				if ( rig.BoneForRole( HumanoidRetargeter.Mapping.BoneRole.HandR ) is { } probeHand
+					&& rig.BoneForRole( HumanoidRetargeter.Mapping.BoneRole.MiddleDistR ) is { } probeTip )
+				{
+					SceneWorld probeWorld = null;
+					SceneModel probeModel = null;
+					try
+					{
+						probeWorld = new SceneWorld();
+						probeModel = new SceneModel( probeWorld, model, Transform.Zero );
+						probeModel.UseAnimGraph = false;
+						probeModel.CurrentSequence.Name = clip.ClipName;
+						probeModel.CurrentSequence.Time = probeModel.CurrentSequence.Duration * 0.75f;
+						probeModel.Update( 0.001f );
+						var handT = probeModel.GetBoneWorldTransform( rig.Skeleton[probeHand].Name );
+						var tipT = probeModel.GetBoneWorldTransform( rig.Skeleton[probeTip].Name );
+						var engineDist = handT.Position.Distance( tipT.Position );
+						var restDist = (rig.Skeleton.RestWorld[probeTip].Pos
+							- rig.Skeleton.RestWorld[probeHand].Pos).Length()
+							* target.PreviewPositionScale;
+						Note( $"{tag} COMPILED finger probe: hand→middle tip {engineDist:0.##} "
+							+ $"engine-units vs rest {restDist:0.##} (ratio {engineDist / MathF.Max( restDist, 0.001f ):0.##})" );
+					}
+					catch ( Exception e )
+					{
+						Note( $"{tag} compiled finger probe threw: {e.Message}" );
+					}
+					finally
+					{
+						probeModel?.Delete();
+						probeWorld?.Delete();
+					}
 				}
 
 				var legL = rig.BoneForRole( HumanoidRetargeter.Mapping.BoneRole.UpperLegL );
