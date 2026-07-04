@@ -777,8 +777,77 @@ public static class Retargeter
         if (context.HasIkBakedBones)
             IkBoneBaker.Bake(frames, target.Rig);
 
+        // ---- orphan helper bones ride the hips (LAST: anchored to the FINAL hips, after
+        // foot-plant pinning / root motion have settled the trajectory) -------------------
+        FollowHipsWithOrphanBones(target.Rig, frames, report);
+
         var looping = request.LoopingOverride ?? solved.Looping;
         return new Clip(clipName, solved.Fps, looping, frames);
+    }
+
+    /// <summary>
+    /// Unmapped bone subtrees OUTSIDE the mapped skeleton (no mapped ancestor — cloth and
+    /// physics helpers parented to the scene root; real case: a skirt of 48 kilt bones on
+    /// a Sketchfab catgirl, siblings of the body root) ride the HIPS rigidly. Left at
+    /// their rest locals they freeze at the bind spot while the body animates away
+    /// ("one part of the body doesn't move at all") and the mesh skinned across the
+    /// boundary shears ("completely stretched"). Only each subtree's topmost bone is
+    /// re-anchored — its descendants ride along on their rest locals. Bones on the
+    /// hips' own ancestor path stay solver-owned (trajectory).
+    /// </summary>
+    private static void FollowHipsWithOrphanBones(
+        TargetRig rig, List<XForm[]> frames, MappingReportInfo report)
+    {
+        var skeleton = rig.Skeleton;
+        if (rig.BoneForRole(BoneRole.Hips) is not { } hips || frames.Count == 0)
+            return;
+
+        var hipsPath = new HashSet<int>();
+        for (var b = hips; b >= 0; b = skeleton[b].ParentIndex)
+            hipsPath.Add(b);
+
+        bool HasMappedAncestor(int bone)
+        {
+            for (var b = skeleton[bone].ParentIndex; b >= 0; b = skeleton[b].ParentIndex)
+            {
+                if (rig.RoleOf(b) is not null)
+                    return true;
+            }
+            return false;
+        }
+
+        // Topmost orphans: unmapped, off the hips' ancestor path, no mapped ancestor,
+        // and the parent is either the scene root path or absent (children of deeper
+        // orphans ride along unchanged).
+        var tops = new List<int>();
+        for (var i = 0; i < skeleton.Count; i++)
+        {
+            if (rig.RoleOf(i) is not null || hipsPath.Contains(i) || HasMappedAncestor(i))
+                continue;
+            var parent = skeleton[i].ParentIndex;
+            if (parent < 0 || hipsPath.Contains(parent))
+                tops.Add(i);
+        }
+        if (tops.Count == 0)
+            return;
+
+        var rest = skeleton.RestWorld;
+        var hipsRestInverse = rest[hips].Inverse();
+        foreach (var frame in frames)
+        {
+            var world = new Skeleton.Pose(frame).ToWorld(skeleton);
+            var hipsDelta = XForm.Compose(world[hips], hipsRestInverse);
+            foreach (var top in tops)
+            {
+                var parent = skeleton[top].ParentIndex;
+                var parentWorld = parent >= 0 ? world[parent] : XForm.Identity;
+                frame[top] = XForm.ToLocal(
+                    parentWorld, XForm.Compose(hipsDelta, rest[top]));
+            }
+        }
+        AddNote(report,
+            $"{tops.Count} helper bone subtree(s) outside the mapped skeleton ride the hips "
+            + "(cloth/physics bones would otherwise freeze at their bind position).");
     }
 
     /// <summary>

@@ -736,9 +736,14 @@ public static class UiSmokeGate
 
 			// A model that ships NO images renders legitimately monochrome - the
 			// chromatic-pixel floor below only applies when textures exist to show.
+			// Sidecars live next to the FBX or in a 'textures' folder BESIDE the
+			// source folder (the layouts the picker copies from).
 			var fixtureDir = Path.GetDirectoryName( targetFbxPath ) ?? ".";
-			Result.customFbxHasTextures = new[] { "*.png", "*.jpg", "*.jpeg", "*.tga" }
-				.SelectMany( p => Directory.GetFiles( fixtureDir, p, SearchOption.AllDirectories ) )
+			var siblingTextures = Path.Combine( Path.GetDirectoryName( fixtureDir ) ?? ".", "textures" );
+			Result.customFbxHasTextures = new[] { fixtureDir, siblingTextures }
+				.Where( Directory.Exists )
+				.SelectMany( d => new[] { "*.png", "*.jpg", "*.jpeg", "*.tga" }
+					.SelectMany( p => Directory.GetFiles( d, p, SearchOption.AllDirectories ) ) )
 				.Any();
 			Note( $"custom fbx sidecar textures present: {Result.customFbxHasTextures}" );
 			var customFbx = TargetPickers.FromFbxFile( targetFbxPath, out var fbxError );
@@ -1095,10 +1100,13 @@ public static class UiSmokeGate
 					Result.customFbxEmbeddedVisible = embedded.All( e =>
 						names.Any( n => string.Equals( n, e, StringComparison.OrdinalIgnoreCase ) ) );
 					var embeddedProbe = ProbeSequencePlayback( model, embedded[0], pelvisName );
-					Result.customFbxEmbeddedMoves = embeddedProbe.Moved;
+					// A STATIC take (zero-length bind-pose AnimStack, common in Sketchfab
+					// exports - the catgirl ships one) legitimately moves nothing.
+					var staticTake = embeddedProbe.Detail.Contains( "duration=0s" );
+					Result.customFbxEmbeddedMoves = embeddedProbe.Moved || staticTake;
 					Note( $"{tag} embedded animation(s) [{string.Join( ", ", embedded )}]: "
 						+ $"visible={Result.customFbxEmbeddedVisible} playback: {embeddedProbe.Detail} "
-						+ $"moved={embeddedProbe.Moved}" );
+						+ $"moved={embeddedProbe.Moved} staticTake={staticTake}" );
 				}
 
 				var legL = rig.BoneForRole( HumanoidRetargeter.Mapping.BoneRole.UpperLegL );
