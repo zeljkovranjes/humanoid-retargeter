@@ -427,20 +427,28 @@ public static class TargetPickers
 	}
 
 	/// <summary>Converts <c>Model.Bones</c> to the library's skeleton model.
-	/// <c>BoneCollection.Bone.LocalTransform</c> is the parent-relative bind transform in
-	/// engine units; <see cref="SkeletonModel.Create"/> tolerates any bone order.</summary>
+	/// <c>BoneCollection.Bone.LocalTransform</c> is the bind transform in MODEL space
+	/// despite its name (measured: treating it as parent-relative compounds the citizen's
+	/// upper body until the head FKs to 220in from the pelvis — the exploded "stretched
+	/// mesh" class; near-root bones like the pelvis stay coincidentally correct, which is
+	/// why position asserts on the pelvis alone never caught it). Convert to the
+	/// parent-relative locals <see cref="SkeletonModel.Create"/> expects.</summary>
 	static SkeletonModel SkeletonFromModel( Model model )
 	{
+		static XForm ToXForm( Transform transform ) => new(
+			new System.Numerics.Vector3( transform.Position.x, transform.Position.y, transform.Position.z ),
+			new System.Numerics.Quaternion(
+				transform.Rotation.x, transform.Rotation.y, transform.Rotation.z, transform.Rotation.w ) );
+
 		var definitions = new List<HumanoidRetargeter.Skeleton.BoneDefinition>();
 		foreach ( var bone in model.Bones.AllBones )
 		{
-			var local = bone.LocalTransform;
+			var world = ToXForm( bone.LocalTransform );
+			var local = bone.Parent is null
+				? world
+				: XForm.ToLocal( ToXForm( bone.Parent.LocalTransform ), world );
 			definitions.Add( new HumanoidRetargeter.Skeleton.BoneDefinition(
-				bone.Name,
-				bone.Parent?.Name,
-				new XForm(
-					new System.Numerics.Vector3( local.Position.x, local.Position.y, local.Position.z ),
-					new System.Numerics.Quaternion( local.Rotation.x, local.Rotation.y, local.Rotation.z, local.Rotation.w ) ) ) );
+				bone.Name, bone.Parent?.Name, local ) );
 		}
 
 		return SkeletonModel.Create( definitions );
