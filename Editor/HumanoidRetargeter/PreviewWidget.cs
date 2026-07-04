@@ -572,6 +572,43 @@ public sealed class PreviewWidget : SceneRenderingWidget
 		return bitmap.ToPng();
 	}
 
+	/// <summary>Renders a COMPILED model playing one of its own sequences (the ModelDoc
+	/// ground truth) through this widget's camera — gate diagnostics for when the
+	/// pose-override preview and the compiled result disagree. The widget's own model is
+	/// hidden for the shot. Null when the model/camera is unavailable.</summary>
+	public byte[] RenderCompiledSequencePng(
+		string modelPath, string sequenceName, float fraction, int size = 512 )
+	{
+		if ( !Camera.IsValid() || !_sceneModel.IsValid() )
+		{
+			Log.Info( $"[humanoid-retargeter] compiled render unavailable: camera={Camera.IsValid()} model={_sceneModel.IsValid()}" );
+			return null;
+		}
+		var compiled = Model.Load( modelPath );
+		if ( compiled is null || compiled.IsError )
+		{
+			Log.Info( $"[humanoid-retargeter] compiled render unavailable: load '{modelPath}' null={compiled is null} error={compiled?.IsError}" );
+			return null;
+		}
+
+		var sequenceModel = new SceneModel( _sceneModel.World, compiled, Transform.Zero );
+		try
+		{
+			sequenceModel.UseAnimGraph = false;
+			sequenceModel.CurrentSequence.Name = sequenceName;
+			sequenceModel.CurrentSequence.Time =
+				sequenceModel.CurrentSequence.Duration * Math.Clamp( fraction, 0f, 1f );
+			sequenceModel.Update( 0.016f );
+			_sceneModel.RenderingEnabled = false;
+			return RenderToPng( size );
+		}
+		finally
+		{
+			_sceneModel.RenderingEnabled = true;
+			sequenceModel.Delete();
+		}
+	}
+
 	/// <summary>Renders a close-up of one bone (gate diagnostics for hand/finger quality
 	/// reports — full-body renders are too small to judge a wrist). The camera frames a
 	/// sphere of <paramref name="radius"/> around the CURRENTLY POSED bone. Null when the

@@ -986,9 +986,10 @@ public static class UiSmokeGate
 			: new Vector3( rigPelvis.X, rigPelvis.Y, rigPelvis.Z ) * target.PreviewPositionScale;
 
 		// ---- preview widget probe ---------------------------------------------------
+		PreviewWidget probePreview = null;
 		try
 		{
-			var preview = new PreviewWidget(
+			var preview = probePreview = new PreviewWidget(
 				null, rig, target.PreviewModelPath, target.PreviewPositionScale, target.Spec.UpAxis );
 			var hasModel = preview.HasModel;
 			preview.SetClip( clip );
@@ -1228,6 +1229,100 @@ public static class UiSmokeGate
 							* target.PreviewPositionScale;
 						Note( $"{tag} COMPILED finger probe: hand→middle tip {engineDist:0.##} "
 							+ $"engine-units vs rest {restDist:0.##} (ratio {engineDist / MathF.Max( restDist, 0.001f ):0.##})" );
+
+						// THE check the bind audit skips: ROOT-LEVEL bones (the hips on
+						// re-rooted rigs!). Compiled world vs the anim compiler's declared
+						// conversion (+90°X for Y-up DMX) of OUR solved local - any delta
+						// here rotates the whole body in ModelDoc while every pelvis-height
+						// and hips-relative metric stays blind to it.
+						{
+							var rootFrame = Math.Min( clip.SolvedFrames.Count - 1, clip.SolvedFrames.Count / 2 );
+							probeModel.CurrentSequence.Time = rootFrame / MathF.Max( clip.Fps, 1f );
+							probeModel.Update( 0.001f );
+							var yUp = System.Numerics.Quaternion.CreateFromAxisAngle(
+								System.Numerics.Vector3.UnitX, MathF.PI * 0.5f );
+							var worstRoot = "";
+							var worstAngle = 0f;
+							var offRoots = 0;
+							for ( var i = 0; i < rig.Skeleton.Count; i++ )
+							{
+								if ( rig.Skeleton[i].ParentIndex >= 0 )
+									continue;
+								var local = clip.SolvedFrames[rootFrame][i];
+								var expectedRot = target.Spec.UpAxis == TargetUpAxis.YUpCm
+									? System.Numerics.Quaternion.Normalize( yUp * local.Rot )
+									: local.Rot;
+								var actual = probeModel.GetBoneWorldTransform( rig.Skeleton[i].Name ).Rotation;
+								var dot = MathF.Min( MathF.Abs(
+									expectedRot.X * actual.x + expectedRot.Y * actual.y
+									+ expectedRot.Z * actual.z + expectedRot.W * actual.w ), 1f );
+								var angle = 2f * MathF.Acos( dot ) * 180f / MathF.PI;
+								if ( angle > 2f )
+									offRoots++;
+								if ( angle > worstAngle )
+								{
+									worstAngle = angle;
+									worstRoot = rig.Skeleton[i].Name;
+									// Delta = actual ∘ expected⁻¹ (engine space): its axis
+									// names the missing conversion in the rebuild fold.
+									var delta = new System.Numerics.Quaternion( actual.x, actual.y, actual.z, actual.w )
+										* System.Numerics.Quaternion.Conjugate( expectedRot );
+									if ( delta.W < 0 ) delta = new System.Numerics.Quaternion( -delta.X, -delta.Y, -delta.Z, -delta.W );
+									var axis = System.Numerics.Vector3.Normalize(
+										new System.Numerics.Vector3( delta.X, delta.Y, delta.Z ) );
+									worstRoot += $" axis=({axis.X:0.##},{axis.Y:0.##},{axis.Z:0.##})";
+								}
+							}
+							Note( $"{tag} COMPILED ROOT-BONE audit (f{rootFrame}): {offRoots} root bones >2deg off; "
+								+ $"worst '{worstRoot}' {worstAngle:0.#}deg" );
+						}
+
+						// Full-skeleton audit at mid-sequence: engine playback bone worlds
+						// vs OUR solved FK (converted to engine space). Separates a broken
+						// compiled ANIMATION (bones off) from broken mesh SKINNING (bones
+						// right, skin wrong).
+						{
+							var frameIdx = Math.Min( clip.SolvedFrames.Count - 1,
+								(int)(clip.SolvedFrames.Count * 0.5f) );
+							probeModel.CurrentSequence.Time = probeModel.CurrentSequence.Duration * 0.5f;
+							probeModel.Update( 0.001f );
+							var solvedWorld = new HumanoidRetargeter.Skeleton.Pose(
+								clip.SolvedFrames[frameIdx] ).ToWorld( rig.Skeleton );
+							var offenders = new List<(float Err, string Line)>();
+							for ( var i = 0; i < rig.Skeleton.Count; i++ )
+							{
+								var pos = solvedWorld[i].Pos;
+								var expected = target.Spec.UpAxis == TargetUpAxis.YUpCm
+									? new Vector3( pos.X, -pos.Z, pos.Y ) * target.PreviewPositionScale
+									: new Vector3( pos.X, pos.Y, pos.Z ) * target.PreviewPositionScale;
+								var actual = probeModel.GetBoneWorldTransform( rig.Skeleton[i].Name ).Position;
+								var err = actual.Distance( expected );
+								if ( err > 1.5f )
+									offenders.Add( (err, $"{rig.Skeleton[i].Name} {err:0.#}in") );
+							}
+							Note( $"{tag} COMPILED bone audit (50%): {offenders.Count} bones >1.5in off; worst: "
+								+ string.Join( ", ", offenders.OrderByDescending( o => o.Err )
+									.Take( 10 ).Select( o => o.Line ) ) );
+						}
+
+						// Renders of the COMPILED model mid-sequence - the ModelDoc ground
+						// truth, next to the PreviewWidget dumps (the two have disagreed).
+						// A FRESH widget every time: the probe-section widget is destroyed
+						// by the frame pump between sections (parentless editor widget).
+						if ( write.VmdlAsset is not null )
+						{
+							var compiledPreview = new PreviewWidget( null, rig,
+								target.PreviewModelPath, target.PreviewPositionScale, target.Spec.UpAxis );
+							foreach ( var fraction in new[] { 0.25f, 0.5f, 0.75f } )
+							{
+								var png = compiledPreview.RenderCompiledSequencePng(
+									write.VmdlAsset.Path, clip.ClipName, fraction );
+								if ( png is null )
+									Note( $"{tag} compiled render {fraction:P0} returned NULL" );
+								else
+									DumpPng( () => png, $"{vmdlName}_compiled_{(int)(fraction * 100)}" );
+							}
+						}
 					}
 					catch ( Exception e )
 					{
