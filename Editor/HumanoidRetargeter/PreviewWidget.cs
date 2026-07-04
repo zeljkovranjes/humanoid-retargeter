@@ -556,6 +556,86 @@ public sealed class PreviewWidget : SceneRenderingWidget
 		return bitmap.ToPng();
 	}
 
+	/// <summary>Renders a close-up of one bone (gate diagnostics for hand/finger quality
+	/// reports — full-body renders are too small to judge a wrist). The camera frames a
+	/// sphere of <paramref name="radius"/> around the CURRENTLY POSED bone. Null when the
+	/// model or bone is unavailable.</summary>
+	public byte[] RenderBoneCloseUpPng( string boneName, float radius, int size = 512 )
+	{
+		if ( !Camera.IsValid() )
+			return null;
+		var bone = GetModelBoneTransform( boneName );
+		if ( bone is null )
+			return null;
+
+		Scene.EditorTick( RealTime.Now, 0.016f );
+
+		var center = bone.Value.Position;
+		var distance = MathX.SphereCameraDistance( radius, Camera.FieldOfView ) * 1.05f;
+		var yawRad = MathX.DegreeToRadian( _yaw );
+		var dir = new Vector3( MathF.Cos( yawRad ), MathF.Sin( yawRad ), 0.25f ).Normal;
+		Camera.WorldPosition = center + dir * distance;
+		Camera.WorldRotation = Rotation.LookAt( -dir, Vector3.Up );
+
+		var bitmap = new Bitmap( size, size );
+		Camera.RenderToBitmap( bitmap );
+		return bitmap.ToPng();
+	}
+
+	/// <summary>
+	/// Per-bone disagreement between the RIG's rest locals and the compiled model's bind
+	/// locals (worst offenders first). The DMX skeleton must match the engine's own import
+	/// of the same file — a mismatch (PreRotation/pivot convention differences) plays as a
+	/// CONSTANT offset on every frame: twisted wrists, fingers off their sockets.
+	/// Non-root local rotations are convention-independent and local positions differ only
+	/// by the uniform unit scale, so they compare directly.
+	/// </summary>
+	public string BindMismatchReport( int top = 12 )
+	{
+		if ( !_sceneModel.IsValid() )
+			return "(no model)";
+		var bones = _sceneModel.Model?.Bones;
+		if ( bones is null )
+			return "(no bones)";
+
+		var skeleton = _rig.Skeleton;
+		var entries = new List<(float Score, string Line)>();
+		for ( var i = 0; i < skeleton.Count; i++ )
+		{
+			if ( skeleton[i].ParentIndex < 0 )
+				continue; // the root's local carries the axis conversion - not comparable
+			var bone = bones.GetBone( skeleton[i].Name );
+			if ( bone?.Parent is null )
+				continue;
+
+			// Model bind local from the MODEL-space bind transforms.
+			var world = bone.LocalTransform;
+			var parent = bone.Parent.LocalTransform;
+			var modelLocal = new XForm(
+				new System.Numerics.Vector3( world.Position.x, world.Position.y, world.Position.z ),
+				new System.Numerics.Quaternion( world.Rotation.x, world.Rotation.y, world.Rotation.z, world.Rotation.w ) );
+			var parentLocal = new XForm(
+				new System.Numerics.Vector3( parent.Position.x, parent.Position.y, parent.Position.z ),
+				new System.Numerics.Quaternion( parent.Rotation.x, parent.Rotation.y, parent.Rotation.z, parent.Rotation.w ) );
+			var bind = XForm.ToLocal( parentLocal, modelLocal );
+
+			var rig = skeleton[i].RestLocal;
+			var posDelta = (rig.Pos * _positionScale - bind.Pos).Length();
+			var dot = MathF.Min( MathF.Abs( System.Numerics.Quaternion.Dot(
+				System.Numerics.Quaternion.Normalize( rig.Rot ),
+				System.Numerics.Quaternion.Normalize( bind.Rot ) ) ), 1f );
+			var angle = 2f * MathF.Acos( dot ) * 180f / MathF.PI;
+			var score = angle + posDelta * 10f;
+			if ( angle > 2f || posDelta > 0.25f )
+				entries.Add( (score, $"{skeleton[i].Name}: rot {angle:0.#}deg pos {posDelta:0.##}in") );
+		}
+
+		if ( entries.Count == 0 )
+			return "(rig matches the compiled bind)";
+		return $"{entries.Count} bones differ; worst: "
+			+ string.Join( "; ", entries.OrderByDescending( e => e.Score ).Take( top ).Select( e => e.Line ) );
+	}
+
 	/// <summary>Names and positions of model bones sitting farther than
 	/// <paramref name="radius"/> from the given anchor bone — gate diagnostics for
 	/// stretched-mesh reports (skinning webs point at bones left at wild transforms).</summary>

@@ -803,10 +803,13 @@ public static class UiSmokeGate
 	/// harness can LOOK at what the user sees - texture resolution, overlay shapes, hand
 	/// posture are all visual complaints pixel counts cannot diagnose.</summary>
 	static void DumpPreviewRender( PreviewWidget preview, string name )
+		=> DumpPng( () => preview.RenderToPng(), name );
+
+	static void DumpPng( Func<byte[]> render, string name )
 	{
 		try
 		{
-			var png = preview.RenderToPng();
+			var png = render();
 			if ( png is null )
 				return;
 			var directory = Path.Combine( Path.GetDirectoryName( _resultPath ), "preview_dumps" );
@@ -849,8 +852,10 @@ public static class UiSmokeGate
 			ArmEffectorIk = false,
 			LoopingOverride = null,
 		};
+		var requests = new List<RetargetRequest> { request };
+		requests.AddRange( EditorPipeline.BuildEmbeddedTakeRequests( target ) );
 		var batch = await Task.Run( () => Retargeter.ConvertBatch(
-			new[] { request }, target.Spec,
+			requests, target.Spec,
 			new BatchOptions { DmxFolderRelative = dmxFolder } ) );
 
 		var clip = batch.Clips.FirstOrDefault( c => c.Success && c.SolvedFrames is { Count: > 0 } );
@@ -891,7 +896,10 @@ public static class UiSmokeGate
 			var wildReport = hasModel ? preview.WildBoneReport( pelvisName, wildRadius ) : "(no model)";
 			var wildOk = !hasModel || wildReport == "(none)";
 			if ( hasModel )
+			{
 				Note( $"{tag} wild bones (>{wildRadius:0}in from pelvis): {wildReport}" );
+				Note( $"{tag} rig-vs-bind: {preview.BindMismatchReport()}" );
+			}
 
 			// TEXTURE CORRECTNESS, asserted on the FINAL RENDERED PIXELS (the fool-proof
 			// ground truth): no error-magenta anywhere, and a real amount of chromatic
@@ -913,6 +921,27 @@ public static class UiSmokeGate
 				}
 			}
 			DumpPreviewRender( preview, $"{vmdlName}_skinned" );
+
+			// Close-ups (user reports: "fingers and wrist still look weird", "the makeup
+			// around the eye is white" - full-body renders are too small to judge).
+			if ( hasModel )
+			{
+				foreach ( var (role, suffix, scale) in new[]
+				{
+					(HumanoidRetargeter.Mapping.BoneRole.HandR, "hand_R", 0.22f),
+					(HumanoidRetargeter.Mapping.BoneRole.HandL, "hand_L", 0.22f),
+					(HumanoidRetargeter.Mapping.BoneRole.Head, "head", 0.28f),
+				} )
+				{
+					if ( rig.BoneForRole( role ) is { } boneIndex )
+					{
+						var boneName = rig.Skeleton[boneIndex].Name;
+						var radius = MathF.Max( expectedEngine.z * scale, 8f );
+						DumpPng( () => preview.RenderBoneCloseUpPng( boneName, radius ),
+							$"{vmdlName}_{suffix}" );
+					}
+				}
+			}
 
 			// Source ghost with THIS motion fixture (user reports "two bars" instead of a
 			// skeleton) - rendered for visual diagnosis alongside the pose asserts.
@@ -1008,13 +1037,13 @@ public static class UiSmokeGate
 			{
 				// The target FBX's own embedded animations must be ON the compiled model
 				// and actually play (user: "it should have two animations").
-				if ( !isModelTarget && target.Spec.ExtraAnimFiles is { Count: > 0 } embedded )
+				if ( !isModelTarget && target.EmbeddedTakeNames is { Count: > 0 } embedded )
 				{
 					Result.customFbxEmbeddedVisible = embedded.All( e =>
-						names.Any( n => string.Equals( n, e.Name, StringComparison.OrdinalIgnoreCase ) ) );
-					var embeddedProbe = ProbeSequencePlayback( model, embedded[0].Name, pelvisName );
+						names.Any( n => string.Equals( n, e, StringComparison.OrdinalIgnoreCase ) ) );
+					var embeddedProbe = ProbeSequencePlayback( model, embedded[0], pelvisName );
 					Result.customFbxEmbeddedMoves = embeddedProbe.Moved;
-					Note( $"{tag} embedded animation(s) [{string.Join( ", ", embedded.Select( e => e.Name ) )}]: "
+					Note( $"{tag} embedded animation(s) [{string.Join( ", ", embedded )}]: "
 						+ $"visible={Result.customFbxEmbeddedVisible} playback: {embeddedProbe.Detail} "
 						+ $"moved={embeddedProbe.Moved}" );
 				}
