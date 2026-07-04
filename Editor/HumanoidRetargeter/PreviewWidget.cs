@@ -50,6 +50,7 @@ public sealed class PreviewWidget : SceneRenderingWidget
 	float _positionScale = 1f;
 	bool _convertYUpToZUp;
 	int[] _rigToModelBone;
+	Transform[] _modelBindByRig;
 	XForm[] _worldScratch;
 
 	HumanoidRetargeter.ClipResult _clip;
@@ -340,17 +341,28 @@ public sealed class PreviewWidget : SceneRenderingWidget
 	void BuildBoneMap( Model model )
 	{
 		_rigToModelBone = new int[_rig.Skeleton.Count];
+		_modelBindByRig = new Transform[_rig.Skeleton.Count];
 		var missing = 0;
+		var scaled = 0;
 		for ( var i = 0; i < _rig.Skeleton.Count; i++ )
 		{
 			var bone = model.Bones.GetBone( _rig.Skeleton[i].Name );
 			_rigToModelBone[i] = bone?.Index ?? -1;
 			if ( _rigToModelBone[i] < 0 )
 				missing++;
+			// The bind transform carries the bone's SCALE (cartoon/Sketchfab rigs bake
+			// non-uniform node scales into the bind). SetBoneOverride replaces the whole
+			// transform - overriding with the default scale 1 collapsed/inflated the
+			// skin around scaled bones (finger spike fans on a scaled-finger rig).
+			_modelBindByRig[i] = bone?.LocalTransform ?? Transform.Zero;
+			if ( bone is not null && !_modelBindByRig[i].Scale.AlmostEqual( Vector3.One, 0.001f ) )
+				scaled++;
 		}
 
 		if ( missing > 0 )
 			Log.Info( $"[humanoid-retargeter] preview: {missing} rig bones have no match on the preview model (kept at bind pose)." );
+		if ( scaled > 0 )
+			Log.Info( $"[humanoid-retargeter] preview: {scaled} model bones carry non-unit bind scale (preserved through pose overrides)." );
 	}
 
 	protected override void PreFrame()
@@ -416,7 +428,11 @@ public sealed class PreviewWidget : SceneRenderingWidget
 				if ( modelBone < 0 )
 					continue;
 
-				_sceneModel.SetBoneOverride( modelBone, RigWorldToEngine( _worldScratch[i] ) );
+				// Keep the bind's SCALE: the rig carries no scale, but scaled-bind rigs
+				// (cartoon exports) need it or the skin collapses around those bones.
+				var engineTransform = RigWorldToEngine( _worldScratch[i] );
+				engineTransform.Scale = _modelBindByRig[i].Scale;
+				_sceneModel.SetBoneOverride( modelBone, engineTransform );
 			}
 
 			// Flush the overrides into the model's bone state NOW: SetBoneOverride only takes
