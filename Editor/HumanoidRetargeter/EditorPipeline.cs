@@ -489,9 +489,7 @@ public static class EditorPipeline
 			string BestTextureMatch( string material, List<string> candidates, string[] suffixes )
 			{
 				var materialTokens = NameTokens( material );
-				string best = null;
-				var bestScore = 0;
-				var secondScore = 0;
+				var scored = new List<(string Path, int Score)>();
 				foreach ( var candidate in candidates )
 				{
 					// Tokenize the RAW stem: lower-casing first would erase its camelCase
@@ -499,31 +497,84 @@ public static class EditorPipeline
 					// never match the material's dante+dark tokens - observed as the head
 					// and lower body rendering untextured white while the arms worked).
 					var stem = Path.GetFileNameWithoutExtension( candidate );
-					if ( !suffixes.Any( s => stem.EndsWith( s, StringComparison.OrdinalIgnoreCase ) ) )
+					// Numbered layer variants ("eye_diff", "eye_diff2", "eye_diff3") are
+					// all diffuse CANDIDATES - suffixes match with trailing digits ignored.
+					var stemNoDigits = stem.TrimEnd( '0', '1', '2', '3', '4', '5', '6', '7', '8', '9' );
+					if ( !suffixes.Any( s => stem.EndsWith( s, StringComparison.OrdinalIgnoreCase )
+						|| stemNoDigits.EndsWith( s, StringComparison.OrdinalIgnoreCase ) ) )
 						continue;
 					var shared = NameTokens( stem ).Where( materialTokens.Contains ).ToList();
 					var distinctive = shared.Count( t => !ubiquitous.Contains( t ) );
-					var score = distinctive * 10 + shared.Count;
-					if ( score > bestScore )
-					{
-						secondScore = bestScore;
-						bestScore = score;
-						best = candidate;
-					}
-					else if ( score > secondScore )
-					{
-						secondScore = score;
-					}
+					scored.Add( (candidate, distinctive * 10 + shared.Count) );
 				}
-				// A DISTINCTIVE shared token (score >= 10) always wins. Base-name-only
-				// overlap is accepted only as a strict UNIQUE best: single-set exports
-				// name everything '<character>_*' ("sonic_mat" + "sonic_diff" is the only
-				// diffuse that shares anything - a correct match the old distinctive-only
-				// rule rejected, body rendered untextured), while ambiguous base-only ties
-				// stay rejected (the case that mapped hair onto the eyes).
-				if ( best is null || bestScore == 0 || (bestScore < 10 && bestScore <= secondScore) )
+				if ( scored.Count == 0 )
 					return null;
+
+				var bestScore = scored.Max( c => c.Score );
+				var top = scored.Where( c => c.Score == bestScore ).ToList();
+				var variantSet = top.All( c => SameVariantFamily( top[0].Path, c.Path ) );
+
+				// A DISTINCTIVE shared token (score >= 10) always wins. Base-name-only
+				// overlap is accepted only when unambiguous: single-set exports name
+				// everything '<character>_*' ("sonic_mat" + "sonic_diff" is the only
+				// diffuse that shares anything - a correct match the old distinctive-only
+				// rule rejected, body rendered untextured). Base-only ties across
+				// DIFFERENT names stay rejected (the case that mapped hair onto the
+				// eyes); numbered variants of ONE name are a layer set, decided below.
+				if ( bestScore == 0 || (bestScore < 10 && !variantSet) )
+					return null;
+
+				// Composite-shader layer sets ship several same-named images (a mobile
+				// eye: gray ball with black pupil + white sclera mask + catchlight dot;
+				// the game blends them in a custom shader). A single stand-in must be the
+				// layer a viewer would call "the texture": the one with the BRIGHTEST
+				// CENTRAL region - masks and catchlights are black-centered, and the
+				// pupil-hole layer rendered Sonic's eyes solid black.
+				var best = variantSet && top.Count > 1
+					? top.OrderByDescending( CenterBrightness ).First().Path
+					: top[0].Path;
+				if ( variantSet && top.Count > 1 )
+					Log.Info( $"[humanoid-retargeter] '{material}': picked "
+						+ $"{Path.GetFileName( best )} from {top.Count} layer variants by center brightness" );
 				return Path.GetRelativePath( assetsPath, best ).Replace( '\\', '/' );
+			}
+
+			static bool SameVariantFamily( string a, string b )
+			{
+				static string Family( string p ) => Path.GetFileNameWithoutExtension( p )
+					.TrimEnd( '0', '1', '2', '3', '4', '5', '6', '7', '8', '9' )
+					.ToLowerInvariant();
+				return Family( a ) == Family( b );
+			}
+
+			// Mean luminance of the central half of the image, sparsely sampled.
+			static float CenterBrightness( (string Path, int Score) candidate )
+			{
+				try
+				{
+					using var bitmap = SkiaSharp.SKBitmap.Decode( candidate.Path );
+					if ( bitmap is null || bitmap.Width == 0 || bitmap.Height == 0 )
+						return -1f;
+					float sum = 0;
+					var samples = 0;
+					var stepX = Math.Max( 1, bitmap.Width / 32 );
+					var stepY = Math.Max( 1, bitmap.Height / 32 );
+					for ( var y = bitmap.Height / 4; y < bitmap.Height * 3 / 4; y += stepY )
+					{
+						for ( var x = bitmap.Width / 4; x < bitmap.Width * 3 / 4; x += stepX )
+						{
+							var c = bitmap.GetPixel( x, y );
+							sum += (0.299f * c.Red + 0.587f * c.Green + 0.114f * c.Blue)
+								* (c.Alpha / 255f) / 255f;
+							samples++;
+						}
+					}
+					return samples > 0 ? sum / samples : -1f;
+				}
+				catch
+				{
+					return -1f; // undecodable: rank below anything readable
+				}
 			}
 		}
 		catch ( Exception e )
