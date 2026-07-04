@@ -153,13 +153,42 @@ public static class VmdlAugmenter
         }
 
         // Material remaps ride along the same healing pass: a pre-remap output would keep
-        // logging 'Missing vmat' / rendering placeholders forever. Only ADDED when absent -
-        // an existing MaterialGroupList may carry user edits and is left alone.
-        if (materialRemaps is { Count: > 0 }
-            && !children.Items.OfType<KvObject>().Any(o => o.GetString("_class") == "MaterialGroupList"))
+        // logging 'Missing vmat' / rendering placeholders forever. MERGED into an existing
+        // DefaultMaterialGroup: entries for materials it does not know yet are appended
+        // (an output vmdl written before a texture-matching improvement otherwise keeps
+        // the stale table forever - observed as textured preview but untextured ModelDoc);
+        // existing entries are left alone (they may carry user edits).
+        if (materialRemaps is { Count: > 0 })
         {
-            children.Items.Add(VmdlWriter.BuildMaterialGroupListNode(materialRemaps));
-            changed = true;
+            var materialList = children.Items.OfType<KvObject>()
+                .FirstOrDefault(o => o.GetString("_class") == "MaterialGroupList");
+            if (materialList is null)
+            {
+                children.Items.Add(VmdlWriter.BuildMaterialGroupListNode(materialRemaps));
+                changed = true;
+            }
+            else if (materialList.GetOrNull("children") is KvArray groups
+                && groups.Items.OfType<KvObject>()
+                    .FirstOrDefault(o => o.GetString("_class") == "DefaultMaterialGroup") is { } group
+                && group.GetOrNull("remaps") is KvArray remapArray)
+            {
+                var known = new HashSet<string>(
+                    remapArray.Items.OfType<KvObject>()
+                        .Select(o => o.GetString("from") ?? "")
+                        .Where(f => f.Length > 0),
+                    StringComparer.OrdinalIgnoreCase);
+                foreach (var (from, to) in materialRemaps.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+                {
+                    if (known.Contains(from))
+                        continue;
+                    remapArray.Items.Add(new KvObject
+                    {
+                        ["from"] = new KvString(from),
+                        ["to"] = new KvString(to),
+                    });
+                    changed = true;
+                }
+            }
         }
 
         return changed ? Kv3.Serialize(doc) : vmdlText;

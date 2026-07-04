@@ -531,7 +531,15 @@ public sealed class GeometricSolver : IRetargetSolver
                     Vector3.Dot(tgtDir, _tgtCanon.CharacterUp));
                 var lateral = Vector3.Normalize(
                     Vector3.Cross(_tgtCanon.CharacterUp, _tgtCanon.CharacterForward));
-                div = Quaternion.CreateFromAxisAngle(lateral, tgtLean - srcLean);
+                var divergence = tgtLean - srcLean;
+                // A human head/neck carriage never differs by anything near 45° - beyond
+                // that the anatomical direction derivation failed on non-human geometry
+                // (measured: a cartoon character whose skull runs along the bone read a
+                // ~90° "lean difference" and played every clip staring at the sky). A
+                // failed measurement must not correct anything.
+                if (MathF.Abs(divergence) > MathF.PI * 0.25f)
+                    divergence = 0f;
+                div = Quaternion.CreateFromAxisAngle(lateral, divergence);
             }
 
             _direct.Add(new DirectEntry

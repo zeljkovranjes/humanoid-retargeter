@@ -922,6 +922,42 @@ public static class UiSmokeGate
 			}
 			DumpPreviewRender( preview, $"{vmdlName}_skinned" );
 
+			// Multi-frame skinned dumps: progressive-stretch reports ("it stretched MORE
+			// when playing") need more than one pose to diagnose.
+			foreach ( var fraction in new[] { 0.25f, 0.75f } )
+			{
+				preview.Scrub( (int)((clip.SolvedFrames.Count - 1) * fraction) );
+				preview.ApplyCurrentFrame();
+				DumpPreviewRender( preview, $"{vmdlName}_skinned_{(int)(fraction * 100)}" );
+			}
+			preview.Scrub( frameIndex );
+			preview.ApplyCurrentFrame();
+
+			// The embedded take's solved pose (round-trips through the role cascade now -
+			// wrist quality must hold there too, not just on retargeted clips).
+			if ( !isModelTarget && target.EmbeddedTakeNames is { Count: > 0 } embeddedNames )
+			{
+				var embeddedClip = batch.Clips.FirstOrDefault( c =>
+					c.Success && c.ClipName == embeddedNames[0] && c.SolvedFrames is { Count: > 0 } );
+				if ( embeddedClip is not null )
+				{
+					preview.SetClip( embeddedClip );
+					preview.Scrub( embeddedClip.SolvedFrames.Count / 2 );
+					preview.ApplyCurrentFrame();
+					DumpPreviewRender( preview, $"{vmdlName}_embedded" );
+					if ( rig.BoneForRole( HumanoidRetargeter.Mapping.BoneRole.HandR ) is { } embHand )
+					{
+						var embBone = rig.Skeleton[embHand].Name;
+						var embRadius = MathF.Max( expectedEngine.z * 0.22f, 8f );
+						DumpPng( () => preview.RenderBoneCloseUpPng( embBone, embRadius ),
+							$"{vmdlName}_embedded_hand_R" );
+					}
+					preview.SetClip( clip );
+					preview.Scrub( frameIndex );
+					preview.ApplyCurrentFrame();
+				}
+			}
+
 			// Close-ups (user reports: "fingers and wrist still look weird", "the makeup
 			// around the eye is white" - full-body renders are too small to judge).
 			if ( hasModel )
