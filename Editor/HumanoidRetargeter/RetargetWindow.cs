@@ -187,8 +187,12 @@ public sealed class RetargetWindow : Widget
 		// Smart-disabled toggle: RefreshLocomotionCheckbox (run on every list refresh) only
 		// enables it while the current take rows actually contain a complete directional
 		// family; the tooltip names what was detected (or what naming would be needed).
+		// HIDDEN from the panel (user request 2026-07-04: "i don't want it to be seen") -
+		// the detection plumbing, the gate hooks and the smart-disable scan stay wired so
+		// the feature can return by flipping Visible.
 		_locomotionCheckbox = col1.Add( new Checkbox( "Detect locomotion sets" ) { Value = _detectLocomotionSets } );
 		_locomotionCheckbox.Clicked = () => _detectLocomotionSets = _locomotionCheckbox.Value;
+		_locomotionCheckbox.Visible = false;
 
 		col1.AddStretchCell();
 
@@ -309,8 +313,8 @@ public sealed class RetargetWindow : Widget
 			var asset = assets.FirstOrDefault();
 			if ( asset is null )
 				return;
-			var resolved = TargetPickers.FromModelAsset( asset, out var error );
-			ApplyPickedTarget( resolved, error );
+			var resolved = TargetPickers.FromModelAsset( asset, out var error, out var rejected );
+			ApplyPickedTarget( resolved, error, rejected );
 		};
 		picker.Show();
 	}
@@ -320,14 +324,24 @@ public sealed class RetargetWindow : Widget
 		var path = EditorUtility.OpenFileDialog( "Select target FBX", "FBX Files (*.fbx)", null );
 		if ( string.IsNullOrEmpty( path ) )
 			return;
-		var resolved = TargetPickers.FromFbxFile( path, out var error );
-		ApplyPickedTarget( resolved, error );
+		var resolved = TargetPickers.FromFbxFile( path, out var error, out var rejected );
+		ApplyPickedTarget( resolved, error, rejected );
 	}
 
-	void ApplyPickedTarget( TargetPickers.ResolvedTarget resolved, string error )
+	void ApplyPickedTarget( TargetPickers.ResolvedTarget resolved, string error,
+		TargetPickers.RejectedTarget rejected = null )
 	{
 		if ( resolved is null )
 		{
+			// Skeleton loaded but wasn't auto-recognized: any humanoid-LIKE rig (a paw,
+			// one finger, a missing hand) is still a valid target once its core bones are
+			// pointed out - open the manual mapper instead of dead-ending.
+			if ( rejected is not null )
+			{
+				OfferManualTargetMapping( rejected, error );
+				return;
+			}
+
 			_targetError = error ?? "Target rejected.";
 			SetStatus( _targetError, Theme.Red );
 			return;
@@ -335,7 +349,51 @@ public sealed class RetargetWindow : Widget
 
 		_target = resolved;
 		_targetError = null;
-		RefreshStatus();
+		if ( resolved.Warning is not null )
+			SetStatus( resolved.Warning, Theme.Yellow );
+		else
+			RefreshStatus();
+	}
+
+	/// <summary>Manual-mapping fallback for unrecognized custom targets: the same
+	/// <see cref="MappingEditor"/> sources use, prefilled with the cascade's best-effort
+	/// map. Confirming builds the target AND saves the mapping as a user preset, so the
+	/// rig resolves automatically on every future pick.</summary>
+	void OfferManualTargetMapping( TargetPickers.RejectedTarget rejected, string detectError )
+	{
+		SetStatus( $"{detectError} Map the target's bones manually to use it.", Theme.Yellow );
+
+		var editor = new MappingEditor( this, rejected.DisplayName, rejected.Skeleton, rejected.BestEffortMap )
+		{
+			Applied = mapping =>
+			{
+				var resolved = TargetPickers.FromManualMapping( rejected, mapping, out var buildError );
+				if ( resolved is null )
+				{
+					_targetError = buildError ?? "Target rejected.";
+					SetStatus( _targetError, Theme.Red );
+					return;
+				}
+
+				try
+				{
+					var assetsPath = Project.Current?.GetAssetsPath();
+					if ( assetsPath is not null )
+					{
+						UserPresets.Save( assetsPath,
+							HumanoidRetargeter.Mapping.SkeletonSignature.Compute( rejected.Skeleton ),
+							rejected.Skeleton, mapping );
+					}
+				}
+				catch ( Exception e )
+				{
+					Log.Warning( $"[humanoid-retargeter] could not save the target mapping as a preset: {e.Message}" );
+				}
+
+				ApplyPickedTarget( resolved, null );
+			},
+		};
+		editor.Show();
 	}
 
 	void SetAugmentMode( bool augment )
@@ -954,6 +1012,17 @@ public sealed class RetargetWindow : Widget
 					}
 				}
 			}
+		}
+
+		// Custom FBX target + standalone output: embed the target mesh in the generated
+		// vmdl (copy the FBX into the output folder, point the spec's MeshFilePath at it).
+		// Without a base model OR a mesh source the vmdl compiles into an empty model -
+		// 0 bones, 0 sequences - and "playing" it does nothing (user report 2026-07-04).
+		if ( !_augmentMode
+			&& !EditorPipeline.PrepareFbxTargetMesh( _target, NormalizedOutputFolder(), out var meshError ) )
+		{
+			SetStatus( meshError, Theme.Red );
+			return;
 		}
 
 		_converting = true;

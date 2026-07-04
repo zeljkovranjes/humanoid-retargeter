@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 
 namespace HumanoidRetargeter.Target;
 
@@ -123,17 +124,54 @@ public static class VmdlWriter
     /// one AnimFile per entry. When <paramref name="locomotionSets"/> is non-empty, each
     /// set's member entries are grouped under a Folder node (appended after the loose
     /// entries) together with the set's 2DBlend node, replicating the shipped citizen
-    /// locomotion layout.
+    /// locomotion layout. When <paramref name="meshFilePath"/> is non-empty a
+    /// RenderMeshList/RenderMeshFile node embeds that mesh source (assets-relative,
+    /// <paramref name="meshImportScale"/> raw-units→skeleton-units) — this is what gives
+    /// custom-FBX-target vmdls a skeleton and skin to play on (an empty
+    /// <c>base_model_name</c> with no mesh compiles into a model with 0 bones and 0
+    /// sequences).
     /// </summary>
     public static string GenerateStandalone(string baseModelPath, IEnumerable<AnimEntry> anims,
         float scale, string defaultRootBone,
-        IReadOnlyList<LocomotionSetSpec>? locomotionSets = null)
+        IReadOnlyList<LocomotionSetSpec>? locomotionSets = null,
+        string meshFilePath = "", float meshImportScale = 1.0f)
     {
         ArgumentNullException.ThrowIfNull(baseModelPath);
         ArgumentNullException.ThrowIfNull(anims);
         ArgumentNullException.ThrowIfNull(defaultRootBone);
 
         var children = new KvArray();
+
+        if (!string.IsNullOrEmpty(meshFilePath))
+        {
+            // Field set mirrors the shipped citizen_human_male_staging.vmdl RenderMeshFile.
+            var meshChildren = new KvArray();
+            meshChildren.Items.Add(new KvObject
+            {
+                ["_class"] = new KvString("RenderMeshFile"),
+                ["name"] = new KvString(Path.GetFileNameWithoutExtension(meshFilePath)),
+                ["filename"] = new KvString(meshFilePath),
+                ["import_translation"] = MakeVector3(0, 0, 0),
+                ["import_rotation"] = MakeVector3(0, 0, 0),
+                ["import_scale"] = new KvDouble(
+                    double.Parse(meshImportScale.ToString("R", CultureInfo.InvariantCulture),
+                        CultureInfo.InvariantCulture)),
+                ["align_origin_x_type"] = new KvString("None"),
+                ["align_origin_y_type"] = new KvString("None"),
+                ["align_origin_z_type"] = new KvString("None"),
+                ["parent_bone"] = new KvString(""),
+                ["import_filter"] = new KvObject
+                {
+                    ["exclude_by_default"] = new KvBool(false),
+                    ["exception_list"] = new KvArray(),
+                },
+            });
+            children.Items.Add(new KvObject
+            {
+                ["_class"] = new KvString("RenderMeshList"),
+                ["children"] = meshChildren,
+            });
+        }
 
         if (scale != 1.0f)
         {
@@ -276,6 +314,16 @@ public static class VmdlWriter
     /// (key order <c>Attachment</c>, <c>Foot</c>, <c>Volume</c>, exactly like the shipped
     /// data; null-valued keys are omitted, and an all-null key set omits the object).
     /// </summary>
+    /// <summary>KV3 <c>[ x, y, z ]</c> double array (RenderMeshFile import vectors).</summary>
+    private static KvArray MakeVector3(double x, double y, double z)
+    {
+        var array = new KvArray();
+        array.Items.Add(new KvDouble(x));
+        array.Items.Add(new KvDouble(y));
+        array.Items.Add(new KvDouble(z));
+        return array;
+    }
+
     private static KvObject BuildAnimEventNode(AnimEventEntry animEvent)
     {
         var node = new KvObject

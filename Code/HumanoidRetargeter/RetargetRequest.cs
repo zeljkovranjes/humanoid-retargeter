@@ -188,6 +188,15 @@ public enum TargetUpAxis
     /// further axis conversion.
     /// </summary>
     ZUpEngine,
+
+    /// <summary>
+    /// A Z-up rig authored in centimeters: FBX targets whose GlobalSettings declare a Z
+    /// up-axis (UE and 3ds Max exports; Maya/Blender exports are Y-up). The DMX declares
+    /// Z-up (no compile-time rotation — the mesh source is in the same Z-up space) while
+    /// the vmdl's ScaleAndMirror 0.3937 still converts cm→inches. Without this, a Z-up
+    /// FBX target compiles lying on its back.
+    /// </summary>
+    ZUpCm,
 }
 
 /// <summary>
@@ -215,6 +224,26 @@ public sealed class RetargetTargetSpec
 
     /// <summary>base_model_name of generated standalone vmdls (the model that owns the mesh).</summary>
     public string BaseModelPath { get; init; } = "";
+
+    /// <summary>
+    /// Assets-relative mesh source file (e.g. an <c>.fbx</c>) embedded in generated
+    /// standalone vmdls as a <c>RenderMeshList/RenderMeshFile</c> node. Custom FBX targets
+    /// have no compiled base model to point <see cref="BaseModelPath"/> at — without a mesh
+    /// source their standalone vmdl compiles into an EMPTY model (0 bones, 0 sequences) and
+    /// playing it does nothing. Callers own copying the file into the project (this type
+    /// does no IO); settable so the editor can fill it at convert time once the output
+    /// folder is known. Empty (default) = no mesh node.
+    /// </summary>
+    public string MeshFilePath { get; set; } = "";
+
+    /// <summary>
+    /// Import scale of <see cref="MeshFilePath"/> (raw mesh-file units → the target
+    /// skeleton's units). resourcecompiler reads mesh files' raw values ignoring their unit
+    /// metadata, while the importer normalizes the target skeleton to centimeters — a
+    /// meters-authored FBX therefore needs 100 here (the importer's recorded
+    /// source-unit→cm factor) for the mesh to match the animation skeleton.
+    /// </summary>
+    public float MeshImportScale { get; set; } = 1.0f;
 
     /// <summary>default_root_bone_name of the generated AnimationList (also the bone vmdl
     /// ExtractMotion nodes operate on).</summary>

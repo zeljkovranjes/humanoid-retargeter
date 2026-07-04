@@ -210,6 +210,69 @@ public static class EditorPipeline
 		return RetargetTargetSpec.SboxCitizen( File.ReadAllText( path ), DlAssets.TryLoadWeights() );
 	}
 
+	/// <summary>
+	/// Custom-FBX-target preparation, called before <see cref="Retargeter.ConvertBatch"/>
+	/// when the picked target is a raw FBX (<see cref="TargetPickers.ResolvedTarget.FbxAbsolutePath"/>):
+	/// copies the FBX into <c>Assets/&lt;outputFolderRelative&gt;/</c> (skipped when the
+	/// source and destination are the same file) and points
+	/// <see cref="RetargetTargetSpec.MeshFilePath"/>/<see cref="RetargetTargetSpec.MeshImportScale"/>
+	/// at it, so the generated standalone vmdl embeds the mesh as a RenderMeshFile node.
+	/// Without this the vmdl has no base model and no mesh — it compiles into an empty
+	/// model (0 bones, 0 sequences) and playing it does nothing. Returns false with
+	/// <paramref name="error"/> set when the copy fails; no-op for non-FBX targets.
+	/// </summary>
+	public static bool PrepareFbxTargetMesh(
+		TargetPickers.ResolvedTarget target, string outputFolderRelative, out string error )
+	{
+		error = null;
+		if ( target?.FbxAbsolutePath is null )
+			return true;
+
+		var assetsPath = Project.Current?.GetAssetsPath();
+		if ( assetsPath is null )
+		{
+			error = "No project is open.";
+			return false;
+		}
+
+		try
+		{
+			// Sanitized destination name: spaces and exotic characters in source-file names
+			// travel into the vmdl's RenderMeshFile node and the compiled asset path -
+			// underscores keep both on the safe side of ModelDoc's node naming.
+			var stem = Path.GetFileNameWithoutExtension( target.FbxAbsolutePath );
+			var safeStem = new string( stem.Select( c => char.IsLetterOrDigit( c ) ? c : '_' ).ToArray() );
+			var fileName = safeStem + Path.GetExtension( target.FbxAbsolutePath ).ToLowerInvariant();
+			var relative = string.IsNullOrEmpty( outputFolderRelative )
+				? fileName
+				: outputFolderRelative.TrimEnd( '/' ) + "/" + fileName;
+			var destination = Path.GetFullPath( Path.Combine(
+				assetsPath, relative.Replace( '/', Path.DirectorySeparatorChar ) ) );
+
+			if ( !string.Equals( Path.GetFullPath( target.FbxAbsolutePath ), destination,
+				StringComparison.OrdinalIgnoreCase ) )
+			{
+				Directory.CreateDirectory( Path.GetDirectoryName( destination ) );
+				File.Copy( target.FbxAbsolutePath, destination, overwrite: true );
+			}
+
+			// The compiler resolves the RenderMeshFile input through the asset system - a
+			// freshly copied file it has never seen fails the whole vmdl compile with
+			// "Node 'X' resolve failure" (observed in the custom-target gate). Register it
+			// like WriteAndCompileAsync registers the DMX outputs.
+			Try( () => AssetSystem.RegisterFile( destination ) );
+
+			target.Spec.MeshFilePath = relative;
+			target.Spec.MeshImportScale = target.FbxUnitScaleCm;
+			return true;
+		}
+		catch ( Exception e )
+		{
+			error = $"Could not copy the target FBX into the project: {e.Message}";
+			return false;
+		}
+	}
+
 	/// <summary>Disk + asset-system outcome of one conversion run.</summary>
 	public sealed class WriteResult
 	{

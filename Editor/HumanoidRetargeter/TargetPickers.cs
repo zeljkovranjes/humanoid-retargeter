@@ -50,6 +50,76 @@ public static class TargetPickers
 		/// <summary>Multiplier taking target-skeleton positions to engine units for the
 		/// preview (0.3937 for cm rigs, 1.0 for engine-unit rigs).</summary>
 		public float PreviewPositionScale { get; set; } = 1.0f;
+
+		/// <summary>Absolute path of the picked target FBX (custom FBX targets only; null
+		/// otherwise). At convert time the editor copies it into the output folder and sets
+		/// <see cref="RetargetTargetSpec.MeshFilePath"/> so the standalone vmdl embeds the
+		/// mesh — without it the vmdl compiles into an empty model that plays nothing.</summary>
+		public string FbxAbsolutePath { get; set; }
+
+		/// <summary>The FBX importer's source-unit→cm factor for
+		/// <see cref="FbxAbsolutePath"/> (resourcecompiler reads raw FBX values, so this
+		/// becomes the RenderMeshFile <c>import_scale</c>).</summary>
+		public float FbxUnitScaleCm { get; set; } = 1.0f;
+
+		/// <summary>Non-fatal caveat about the pick, surfaced on the window status strip
+		/// (e.g. a skeleton-only target FBX whose standalone vmdl will have no visible
+		/// model). Null when there is nothing to warn about.</summary>
+		public string Warning { get; set; }
+	}
+
+	/// <summary>
+	/// A picked custom target whose skeleton could not be auto-recognized: everything the
+	/// window's manual-mapping fallback needs to let the user assign the roles by hand and
+	/// build the target anyway (any humanoid-LIKE model — a paw, one finger, a missing
+	/// hand — is a valid target once its core bones are pointed out).
+	/// </summary>
+	public sealed class RejectedTarget
+	{
+		/// <summary>The candidate target skeleton (model bones / imported FBX).</summary>
+		public SkeletonModel Skeleton { get; set; }
+
+		/// <summary>The cascade's best-effort map — prefills the manual mapping editor.</summary>
+		public MappingResult BestEffortMap { get; set; }
+
+		/// <summary>Set for compiled-model picks (mutually exclusive with <see cref="FbxPath"/>).</summary>
+		public Asset ModelAsset { get; set; }
+
+		/// <summary>Set for FBX picks (absolute path).</summary>
+		public string FbxPath { get; set; }
+
+		/// <summary>FBX importer's source-unit→cm factor (FBX picks only).</summary>
+		public float FbxUnitScaleCm { get; set; } = 1.0f;
+
+		/// <summary>The FBX GlobalSettings up-axis index (1 = Y, 2 = Z; FBX picks only).</summary>
+		public int FbxUpAxis { get; set; } = 1;
+
+		/// <summary>Short name for dialog titles.</summary>
+		public string DisplayName { get; set; }
+	}
+
+	/// <summary>
+	/// Builds the target from a user-authored mapping over a previously rejected pick
+	/// (the manual-mapping fallback's confirm path). Returns null with
+	/// <paramref name="error"/> set when the mapping is structurally unusable (e.g.
+	/// duplicate bone assignments).
+	/// </summary>
+	public static ResolvedTarget FromManualMapping(
+		RejectedTarget rejected, MappingResult mapping, out string error )
+	{
+		error = null;
+		try
+		{
+			return rejected.ModelAsset is not null
+				? BuildModelTarget( rejected.ModelAsset, rejected.Skeleton, mapping )
+				: BuildFbxTarget( rejected.FbxPath, rejected.FbxUnitScaleCm, rejected.FbxUpAxis,
+					rejected.Skeleton, mapping );
+		}
+		catch ( Exception e )
+		{
+			error = $"Could not build the target from the mapping: {e.Message}";
+			return null;
+		}
 	}
 
 	/// <summary>The shipped s&amp;box human target. Throws when the rig JSON is missing.</summary>
@@ -87,8 +157,15 @@ public static class TargetPickers
 	/// armature is not recognized as humanoid.
 	/// </summary>
 	public static ResolvedTarget FromModelAsset( Asset asset, out string error )
+		=> FromModelAsset( asset, out error, out _ );
+
+	/// <summary>As <see cref="FromModelAsset(Asset, out string)"/>; additionally reports a
+	/// <see cref="RejectedTarget"/> when the skeleton loaded fine but was not recognized —
+	/// the window then offers manual mapping instead of a dead end.</summary>
+	public static ResolvedTarget FromModelAsset( Asset asset, out string error, out RejectedTarget rejected )
 	{
 		error = null;
+		rejected = null;
 		var model = Model.Load( asset.Path );
 		if ( model is null || model.IsError )
 		{
@@ -107,10 +184,24 @@ public static class TargetPickers
 			return null;
 		}
 
-		var map = DetectHumanoid( skeleton, out error );
+		var map = DetectHumanoid( skeleton, out error, out var bestEffort );
 		if ( map is null )
+		{
+			rejected = new RejectedTarget
+			{
+				Skeleton = skeleton,
+				BestEffortMap = bestEffort,
+				ModelAsset = asset,
+				DisplayName = asset.Name,
+			};
 			return null;
+		}
 
+		return BuildModelTarget( asset, skeleton, map );
+	}
+
+	static ResolvedTarget BuildModelTarget( Asset asset, SkeletonModel skeleton, MappingResult map )
+	{
 		var rig = TargetRig.FromSkeleton( skeleton, map );
 		return new ResolvedTarget
 		{
@@ -136,12 +227,29 @@ public static class TargetPickers
 	/// and the preview is unavailable.
 	/// </summary>
 	public static ResolvedTarget FromFbxFile( string filePath, out string error )
+		=> FromFbxFile( filePath, out error, out _ );
+
+	/// <summary>As <see cref="FromFbxFile(string, out string)"/>; additionally reports a
+	/// <see cref="RejectedTarget"/> when the file imported fine but the skeleton was not
+	/// recognized — the window then offers manual mapping instead of a dead end.</summary>
+	public static ResolvedTarget FromFbxFile( string filePath, out string error, out RejectedTarget rejected )
 	{
 		error = null;
+		rejected = null;
 		SkeletonModel skeleton;
+		float unitScaleCm;
+		int upAxis;
+		bool hasMesh;
 		try
 		{
-			skeleton = FbxImporter.Import( File.ReadAllBytes( filePath ) ).Skeleton;
+			var bytes = File.ReadAllBytes( filePath );
+			var imported = FbxImporter.Import( bytes );
+			skeleton = imported.Skeleton;
+			unitScaleCm = imported.UnitScaleCm;
+			upAxis = imported.UpAxis;
+			// "Geometry" appears in both binary and ASCII FBX whenever mesh geometry
+			// exists; skeleton-only animation exports (Mixamo "without skin") carry none.
+			hasMesh = ContainsToken( bytes, "Geometry" );
 		}
 		catch ( Exception e )
 		{
@@ -149,10 +257,51 @@ public static class TargetPickers
 			return null;
 		}
 
-		var map = DetectHumanoid( skeleton, out error );
+		var map = DetectHumanoid( skeleton, out error, out var bestEffort );
 		if ( map is null )
+		{
+			rejected = new RejectedTarget
+			{
+				Skeleton = skeleton,
+				BestEffortMap = bestEffort,
+				FbxPath = Path.GetFullPath( filePath ),
+				FbxUnitScaleCm = unitScaleCm,
+				FbxUpAxis = upAxis,
+				DisplayName = Path.GetFileName( filePath ),
+			};
 			return null;
+		}
 
+		var resolved = BuildFbxTarget( Path.GetFullPath( filePath ), unitScaleCm, upAxis, skeleton, map );
+		if ( !hasMesh )
+		{
+			resolved.Warning = $"'{Path.GetFileName( filePath )}' contains no mesh (skeleton-only "
+				+ "export): a NEW vmdl generated for it will have nothing visible to play. Add the "
+				+ "animations to an existing vmdl of this model instead, or re-export the FBX with skin.";
+		}
+		return resolved;
+	}
+
+	/// <summary>Byte-level token scan (works for binary and ASCII FBX alike).</summary>
+	static bool ContainsToken( byte[] data, string token )
+	{
+		var needle = System.Text.Encoding.ASCII.GetBytes( token );
+		for ( var i = 0; i <= data.Length - needle.Length; i++ )
+		{
+			var match = true;
+			for ( var j = 0; j < needle.Length; j++ )
+			{
+				if ( data[i + j] != needle[j] ) { match = false; break; }
+			}
+			if ( match )
+				return true;
+		}
+		return false;
+	}
+
+	static ResolvedTarget BuildFbxTarget(
+		string filePath, float unitScaleCm, int upAxis, SkeletonModel skeleton, MappingResult map )
+	{
 		var rig = TargetRig.FromSkeleton( skeleton, map );
 		return new ResolvedTarget
 		{
@@ -162,29 +311,71 @@ public static class TargetPickers
 				VmdlScale = RetargetTargetSpec.SboxSourceScale, // cm-authored skeleton
 				BaseModelPath = "",
 				DefaultRootBone = RootBoneName( skeleton, map ),
+				// UE / 3ds Max FBX exports are Z-up: the DMX must declare Z-up so the
+				// compiler applies no rotation (the embedded mesh is in the same space) -
+				// declaring Y-up would compile the animation lying on its back.
+				UpAxis = upAxis == 2 ? TargetUpAxis.ZUpCm : TargetUpAxis.YUpCm,
 				DlWeights = DlAssets.TryLoadWeights(),
 			},
 			Description = $"Custom FBX: {Path.GetFileName( filePath )}",
 			PreviewModelPath = null,
 			PreviewPositionScale = RetargetTargetSpec.SboxSourceScale,
+			FbxAbsolutePath = filePath,
+			FbxUnitScaleCm = unitScaleCm,
 		};
 	}
 
-	/// <summary>The facade's single mapping cascade, with this picker's own rejection rule
-	/// on top: targets must be trustworthy (design §9's best-effort rule is for sources), so
-	/// a below-threshold auto map is rejected with a clear message instead of proceeding.</summary>
-	static MappingResult DetectHumanoid( SkeletonModel skeleton, out string error )
+	/// <summary>
+	/// The facade's single mapping cascade (presets → saved user presets → auto/topology),
+	/// with this picker's own acceptance rule on top. A below-threshold map used to be
+	/// rejected outright, which made every odd-but-humanoid model — a paw instead of
+	/// fingers, one finger, a missing hand — unusable as a target (and, before the sbox
+	/// preset existed, even the citizen skeleton itself scored 5%). The solver skips
+	/// unmapped roles cleanly (the classic citizen ships without pinky roles), so a
+	/// best-effort map is ACCEPTED as long as it covers the structural minimum the
+	/// retarget needs — hips, both upper legs, and the upper-body evidence the character
+	/// frame is built from — and only genuine non-humanoids are rejected.
+	/// </summary>
+	static MappingResult DetectHumanoid(
+		SkeletonModel skeleton, out string error, out MappingResult bestEffort )
 	{
 		error = null;
-		var (map, report) = Retargeter.ResolveMapping( skeleton );
-		if ( report.NeedsUserDecision )
+		var assetsPath = Project.Current?.GetAssetsPath();
+		var (map, report) = Retargeter.ResolveMapping( skeleton,
+			userPresetLookup: assetsPath is null
+				? null
+				: signature => UserPresets.TryLoad( assetsPath, signature, skeleton ) );
+		bestEffort = map;
+
+		if ( !report.NeedsUserDecision )
+			return map;
+
+		if ( HasStructuralMinimum( map ) )
 		{
-			error = $"Armature not recognized as humanoid (mapping confidence "
-				+ $"{map.Confidence * 100f:0}% < {ProfileDetector.DetectionThreshold * 100f:0}%).";
-			return null;
+			map.Notes.Add(
+				$"Target accepted best-effort (mapping confidence {map.Confidence * 100f:0}%): "
+				+ $"{map.RoleToBone.Count} roles mapped; unmapped bones keep the model's rest pose." );
+			return map;
 		}
 
-		return map;
+		error = "Armature not auto-recognized as humanoid (mapping confidence "
+			+ $"{map.Confidence * 100f:0}%): could not locate hips, both upper legs and an "
+			+ "upper body from the bone names or topology.";
+		return null;
+	}
+
+	/// <summary>The least anatomy a usable conversion target needs: hips + both upper legs
+	/// (pelvis line and ground reference) and one source of upper-body direction — the same
+	/// bones the character-frame construction consumes. Everything else (hands, fingers,
+	/// toes, even whole arms one side) may be missing and is simply skipped.</summary>
+	static bool HasStructuralMinimum( MappingResult map )
+	{
+		bool Has( BoneRole role ) => map.RoleToBone.ContainsKey( role );
+		var upperBody = (Has( BoneRole.UpperArmL ) && Has( BoneRole.UpperArmR ))
+			|| (Has( BoneRole.ClavicleL ) && Has( BoneRole.ClavicleR ))
+			|| Has( BoneRole.Neck );
+		return Has( BoneRole.Hips ) && Has( BoneRole.UpperLegL ) && Has( BoneRole.UpperLegR )
+			&& upperBody;
 	}
 
 	/// <summary>Converts <c>Model.Bones</c> to the library's skeleton model.
