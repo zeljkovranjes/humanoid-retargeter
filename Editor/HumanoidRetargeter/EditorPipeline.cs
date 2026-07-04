@@ -343,9 +343,23 @@ public static class EditorPipeline
 			if ( assetsPath is null )
 				return null;
 
-			var materials = ExtractFbxMaterialNames( File.ReadAllBytes( fbxAbsolutePath ) );
+			var fbxBytes = File.ReadAllBytes( fbxAbsolutePath );
+			var materials = ExtractFbxMaterialNames( fbxBytes );
 			if ( materials.Count == 0 )
-				return null;
+			{
+				// An FBX with NO material objects at all (bare Blender export): the engine
+				// derives the material slot from the GEOMETRY name and then wants
+				// '<geometry>.vmat' (observed: mesh 'Cube' -> Missing vmat "cube.vmat",
+				// an unsatisfiable illegal-resource lookup). Stub those instead.
+				materials = ExtractFbxObjectNames( fbxBytes, "Geometry" )
+					.Select( n => n.ToLowerInvariant() )
+					.Distinct()
+					.ToList();
+				if ( materials.Count == 0 )
+					return null;
+				Log.Info( $"[humanoid-retargeter] FBX carries no materials - stubbing vmats "
+					+ $"for its geometry slots: {string.Join( ", ", materials )}" );
+			}
 
 			var directory = Path.GetDirectoryName( fbxAbsolutePath );
 			var textures = new List<string>();
@@ -399,14 +413,24 @@ public static class EditorPipeline
 					}
 				}
 
-				var color = BestTextureMatch( material, textures,
-					new[] { "_d", "_dm", "_diffuse", "_albedo", "_basecolor", "_c" } )
+				// Suffix conventions collected from real exports (Sketchfab rips, Unity
+				// packs, Blender/Substance/Marmoset outputs) - the user's assets keep
+				// arriving with new ones, so every known spelling is listed.
+				var color = BestTextureMatch( material, textures, new[]
+					{
+						"_d", "_dm", "_dif", "_diff", "_diffuse", "diffuse",
+						"_alb", "_albedo", "albedo", "_basecolor", "_base_color", "basecolor",
+						"_bc", "_col", "_color", "_colour", "color", "_clr", "_base",
+					} )
 					// Stand-in when the set ships no diffuse for this material (real case:
 					// a vest with only a specular map): a distinctively NAMED non-normal
 					// map carries the garment's actual detail and reads far better than
 					// flat placeholder white.
-					?? BestTextureMatch( material, textures,
-						new[] { "_s", "_spec", "_m", "_metal", "_ao", "_mask", "_e", "_emissive" } )
+					?? BestTextureMatch( material, textures, new[]
+					{
+						"_s", "_spec", "_specular", "_m", "_metal", "_metallic", "_metalness",
+						"_ao", "_occlusion", "_mask", "_e", "_emissive", "_emission", "_glow",
+					} )
 					// Last resort: ANY distinctively named non-normal image. Plain-named
 					// texture sets carry no suffix at all (real case: material "homer"
 					// shipping "homer.png" - both suffix passes skipped it and the model
@@ -415,7 +439,14 @@ public static class EditorPipeline
 						.Where( t => !Path.GetFileNameWithoutExtension( t )
 							.ToLowerInvariant().EndsWith( "_n" ) )
 						.ToList(), new[] { "" } );
-				var normal = BestTextureMatch( material, textures, new[] { "_n", "_normal" } );
+				var normal = BestTextureMatch( material, textures, new[]
+					{ "_n", "_nrm", "_nm", "_nor", "_norm", "_normal", "normal", "_normalmap", "_bump" } );
+				var rough = BestTextureMatch( material, textures, new[]
+					{ "_r", "_rough", "_roughness", "roughness", "_g", "_gloss", "_glossiness" } );
+				var metal = BestTextureMatch( material, textures, new[]
+					{ "_m", "_metal", "_metallic", "_metalness", "metallic" } );
+				var occlusion = BestTextureMatch( material, textures, new[]
+					{ "_ao", "_occlusion", "_ambientocclusion" } );
 
 				// Card/strand geometry (lashes, hair, brows, anything the modeler named
 				// "masked") is authored for alpha testing - rendered opaque it shows as
@@ -438,12 +469,19 @@ public static class EditorPipeline
 				}
 				builder.AppendLine( $"\tTextureColor \"{(color ?? "materials/default/default_color.tga")}\"" );
 				builder.AppendLine( $"\tTextureNormal \"{(normal ?? "materials/default/default_normal.tga")}\"" );
-				builder.AppendLine( "\tTextureRoughness \"materials/default/default_rough.tga\"" );
+				builder.AppendLine( $"\tTextureRoughness \"{(rough ?? "materials/default/default_rough.tga")}\"" );
+				if ( metal is not null )
+				{
+					builder.AppendLine( "\tF_METALNESS_TEXTURE 1" );
+					builder.AppendLine( $"\tTextureMetalness \"{metal}\"" );
+				}
+				if ( occlusion is not null )
+					builder.AppendLine( $"\tTextureAmbientOcclusion \"{occlusion}\"" );
 				builder.AppendLine( "}" );
 				File.WriteAllText( vmatPath, builder.ToString() );
 				Try( () => AssetSystem.RegisterFile( vmatPath ) );
 				Log.Info( $"[humanoid-retargeter] generated material {Path.GetFileName( vmatPath )} "
-					+ $"(color: {color ?? "default"}, normal: {normal ?? "default"})" );
+					+ $"(color: {color ?? "default"}, normal: {normal ?? "default"}, rough: {rough ?? "default"})" );
 			}
 
 			return remaps.Count > 0 ? remaps : null;
@@ -453,6 +491,7 @@ public static class EditorPipeline
 				var materialTokens = NameTokens( material );
 				string best = null;
 				var bestScore = 0;
+				var secondScore = 0;
 				foreach ( var candidate in candidates )
 				{
 					// Tokenize the RAW stem: lower-casing first would erase its camelCase
@@ -467,13 +506,22 @@ public static class EditorPipeline
 					var score = distinctive * 10 + shared.Count;
 					if ( score > bestScore )
 					{
+						secondScore = bestScore;
 						bestScore = score;
 						best = candidate;
 					}
+					else if ( score > secondScore )
+					{
+						secondScore = score;
+					}
 				}
-				// A match requires at least one DISTINCTIVE shared token (score >= 10) -
-				// base-name-only overlap picks unrelated textures.
-				if ( best is null || bestScore < 10 )
+				// A DISTINCTIVE shared token (score >= 10) always wins. Base-name-only
+				// overlap is accepted only as a strict UNIQUE best: single-set exports
+				// name everything '<character>_*' ("sonic_mat" + "sonic_diff" is the only
+				// diffuse that shares anything - a correct match the old distinctive-only
+				// rule rejected, body rendered untextured), while ambiguous base-only ties
+				// stay rejected (the case that mapped hair onto the eyes).
+				if ( best is null || bestScore == 0 || (bestScore < 10 && bestScore <= secondScore) )
 					return null;
 				return Path.GetRelativePath( assetsPath, best ).Replace( '\\', '/' );
 			}

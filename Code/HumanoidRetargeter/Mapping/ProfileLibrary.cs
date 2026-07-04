@@ -231,6 +231,19 @@ public static class ProfileLibrary
     /// </summary>
     public static Profile Sbox { get; } = BuildSbox();
 
+    /// <summary>
+    /// AdvancedSkeleton (Maya auto-rigger, ubiquitous in game rips and mobile-game rigs):
+    /// <c>Root_M</c> hips, <c>Spine1_M(→Spine2_M)→Chest_M</c> spine, <c>Neck_M→Head_M</c>
+    /// (small rigs parent <c>Head_M</c> straight to the chest with no neck),
+    /// <c>Scapula→Shoulder→Elbow→Wrist</c> arms, <c>Hip→Knee→Ankle→Toes</c> legs and
+    /// <c>&lt;Name&gt;Finger1..3</c> fingers, all sided <c>_L/_R</c> (center <c>_M</c>).
+    /// Twist helpers (<c>ShoulderPart1</c>, <c>HipPart1</c>, …), <c>Cup</c> palm bones and
+    /// the face rig carry no aliases. Real case: a Sonic mobile-game rip whose name stage
+    /// scored below threshold — the topology fallback then mapped ARMS AND LEGS ONTO THE
+    /// HEAD QUILLS (long symmetric chains), playing every clip as garbage.
+    /// </summary>
+    public static Profile AdvancedSkeleton { get; } = BuildAdvancedSkeleton();
+
     /// <summary>All built-in presets, in detection order (first wins score ties — see
     /// <see cref="SmplX"/> vs <see cref="Smpl"/>; <see cref="ValveBiped"/> is evaluated
     /// before <see cref="Biped"/> and <see cref="DazGenesis"/> before
@@ -240,8 +253,43 @@ public static class ProfileLibrary
         {
             Sbox, Mixamo, ActorCoreCc, UeMannequin, XsensMvn, PerceptionNeuron, RokokoBvh,
             SmplX, Smpl, SomaBvh, ClassicBvh, ValveBiped, Biped, DazGenesis, DazPoser,
-            Rigify, Vrm, AutoRigPro,
+            Rigify, Vrm, AutoRigPro, AdvancedSkeleton,
         };
+
+    // ---------------------------------------------------------------- advanced skeleton
+
+    private static Profile BuildAdvancedSkeleton()
+    {
+        var aliases = new Dictionary<BoneRole, string[]>
+        {
+            [BoneRole.Hips] = new[] { "Root_M" },
+            [BoneRole.Spine0] = new[] { "Spine1_M" },
+            [BoneRole.Spine1] = new[] { "Spine2_M" },
+            [BoneRole.Spine2] = new[] { "Chest_M" },
+            [BoneRole.Neck] = new[] { "Neck_M" },
+            [BoneRole.Head] = new[] { "Head_M" },
+        };
+        foreach (var side in new[] { "L", "R" })
+        {
+            aliases[Role("Clavicle", side)] = new[] { $"Scapula_{side}" };
+            aliases[Role("UpperArm", side)] = new[] { $"Shoulder_{side}" };
+            aliases[Role("LowerArm", side)] = new[] { $"Elbow_{side}" };
+            aliases[Role("Hand", side)] = new[] { $"Wrist_{side}" };
+            aliases[Role("UpperLeg", side)] = new[] { $"Hip_{side}" };
+            aliases[Role("LowerLeg", side)] = new[] { $"Knee_{side}" };
+            aliases[Role("Foot", side)] = new[] { $"Ankle_{side}" };
+            aliases[Role("Toe", side)] = new[] { $"Toes_{side}" };
+
+            foreach (var finger in new[] { "Thumb", "Index", "Middle", "Ring", "Pinky" })
+            {
+                aliases[Role($"{finger}Prox", side)] = new[] { $"{finger}Finger1_{side}" };
+                aliases[Role($"{finger}Mid", side)] = new[] { $"{finger}Finger2_{side}" };
+                aliases[Role($"{finger}Dist", side)] = new[] { $"{finger}Finger3_{side}" };
+            }
+        }
+
+        return new Profile("advanced_skeleton", new string[0], aliases);
+    }
 
     // ---------------------------------------------------------------- sbox
 

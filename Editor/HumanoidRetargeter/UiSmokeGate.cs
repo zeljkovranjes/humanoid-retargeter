@@ -733,6 +733,14 @@ public static class UiSmokeGate
 			if ( string.IsNullOrWhiteSpace( targetFbxPath ) || !File.Exists( targetFbxPath ) )
 				targetFbxPath = fixturePath;
 			Note( $"custom fbx target fixture: {targetFbxPath}" );
+
+			// A model that ships NO images renders legitimately monochrome - the
+			// chromatic-pixel floor below only applies when textures exist to show.
+			var fixtureDir = Path.GetDirectoryName( targetFbxPath ) ?? ".";
+			Result.customFbxHasTextures = new[] { "*.png", "*.jpg", "*.jpeg", "*.tga" }
+				.SelectMany( p => Directory.GetFiles( fixtureDir, p, SearchOption.AllDirectories ) )
+				.Any();
+			Note( $"custom fbx sidecar textures present: {Result.customFbxHasTextures}" );
 			var customFbx = TargetPickers.FromFbxFile( targetFbxPath, out var fbxError );
 			Result.customFbxTargetResolved = customFbx is not null;
 			Result.customFbxTargetError = fbxError;
@@ -789,8 +797,9 @@ public static class UiSmokeGate
 			// real chromatic (textured) surface present (calibrated on a real character
 			// with a monochrome outfit: skin tones measure ~130 chromatic pixels; an
 			// all-placeholder or error-material render measures ~0), no unresolved-vtex
-			// render spam.
-			&& Result.customFbxErrorPixels == 0 && Result.customFbxColoredPixels > 10
+			// render spam. Texture-less models render legitimately monochrome.
+			&& Result.customFbxErrorPixels == 0
+			&& (Result.customFbxColoredPixels > 10 || !Result.customFbxHasTextures)
 			&& Result.customFbxTextureSpamLines == 0
 			&& Result.customFbxCompiled && Result.customFbxSequenceVisible
 			&& Result.customFbxPlaybackMoves && Result.customFbxPlaybackUpright
@@ -1662,6 +1671,7 @@ public static class UiSmokeGate
 		public int customFbxTextureSpamLines { get; set; }
 		public int customFbxErrorPixels { get; set; }
 		public int customFbxColoredPixels { get; set; }
+		public bool customFbxHasTextures { get; set; }
 		public bool customFbxEmbeddedVisible { get; set; }
 		public bool customFbxEmbeddedMoves { get; set; }
 		public bool customFbxCompiled { get; set; }
