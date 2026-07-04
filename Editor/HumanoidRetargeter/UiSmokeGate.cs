@@ -378,15 +378,21 @@ public static class UiSmokeGate
 			Note( $"PreviewWidget: hasModel={preview.HasModel} frames={preview.FrameCount} frame applied OK" );
 
 			// Source ghost (the preview dialog's "Show source" toggle): install the source
-			// clip, enable, re-apply the frame and require the overlay to have drawn lines.
+			// clip, enable, re-apply the frame and require the overlay to have drawn lines
+			// AND to actually reach the screen (amber pixels - a missing line material
+			// rendered both overlays as a single purple blob; user report 2026-07-04).
 			try
 			{
 				preview.SetSourceGhost( entry.Scene.Skeleton, entry.Scene.Clips[0], entry.Mapping );
 				preview.ShowSourceGhost = true;
 				preview.ApplyCurrentFrame();
-				Result.previewGhostOk = preview.HasSourceGhost && preview.GhostLineCount > 0;
+				Result.previewGhostPixels = preview.CountRenderedPixels(
+					c => c.r > 0.45f && c.b < c.r * 0.6f );
+				Result.previewGhostOk = preview.HasSourceGhost && preview.GhostLineCount > 0
+					&& Result.previewGhostPixels > 20;
+				preview.ShowSourceGhost = false;
 				Note( $"source ghost: hasGhost={preview.HasSourceGhost} lines={preview.GhostLineCount} "
-					+ $"ok={Result.previewGhostOk}" );
+					+ $"pixels={Result.previewGhostPixels} ok={Result.previewGhostOk}" );
 			}
 			catch ( Exception e )
 			{
@@ -396,17 +402,21 @@ public static class UiSmokeGate
 			Result.previewWidgetOk &= Result.previewGhostOk;
 
 			// Wireframe-skeleton view (the dialog's "Skeleton" toggle): switching over must
-			// draw the retargeted pose as stick bones, switching back must re-show the model.
+			// draw the retargeted pose as stick bones - VISIBLY (cyan pixels) - and
+			// switching back must re-show the model.
 			try
 			{
 				preview.SkeletonOnly = true;
 				preview.ApplyCurrentFrame();
 				var lines = preview.SkeletonLineCount;
+				Result.previewSkeletonPixels = preview.CountRenderedPixels(
+					c => c.b > 0.45f && c.g > 0.45f && c.r < c.g * 0.8f );
 				preview.SkeletonOnly = false;
 				preview.ApplyCurrentFrame();
-				Result.previewSkeletonViewOk = lines > 0 && !preview.SkeletonOnly;
-				Note( $"skeleton view: lines={lines} backToSkinned={!preview.SkeletonOnly} "
-					+ $"ok={Result.previewSkeletonViewOk}" );
+				Result.previewSkeletonViewOk = lines > 0 && !preview.SkeletonOnly
+					&& Result.previewSkeletonPixels > 30;
+				Note( $"skeleton view: lines={lines} pixels={Result.previewSkeletonPixels} "
+					+ $"backToSkinned={!preview.SkeletonOnly} ok={Result.previewSkeletonViewOk}" );
 			}
 			catch ( Exception e )
 			{
@@ -652,6 +662,18 @@ public static class UiSmokeGate
 		SourceFileEntry motionEntry, string fixturePath, EditorPipeline.WriteResult standaloneWrite )
 	{
 		Result.customMode = true;
+
+		// HR_UI_FIXTURE_MOTION: animation converted onto the custom targets (user-repro
+		// runs point this at their own clip; default = the steps fixture).
+		var motionOverride = Environment.GetEnvironmentVariable( "HR_UI_FIXTURE_MOTION" );
+		if ( !string.IsNullOrWhiteSpace( motionOverride ) && File.Exists( motionOverride ) )
+		{
+			var loaded = SourceFileEntry.Load( motionOverride, Project.Current.GetAssetsPath() );
+			if ( loaded.Scene is not null && loaded.Mapping is not null )
+				motionEntry = loaded;
+			else
+				Note( $"custom motion fixture unreadable ({loaded.StatusDetail}) - using the default" );
+		}
 		Note( $"custom-target repro: motion fixture={motionEntry.FileName}" );
 
 		// ---- (a) baseline: the default-target vmdl must actually ANIMATE ------------
@@ -718,8 +740,27 @@ public static class UiSmokeGate
 				+ $"desc='{customFbx?.Description}' previewModel='{customFbx?.PreviewModelPath}'" );
 
 			if ( customFbx is not null )
+			{
+				var fbxLogOffset = EditorPipeline.SboxLogLength();
+
+				// The window compiles a mesh-only preview vmdl for skinned FBX targets so
+				// the preview shows the ACTUAL model - same path here; on success the
+				// preview probe below must find a model (customFbxPreviewHasModel).
+				Result.customFbxPreviewModelCompiled = await EditorPipeline
+					.CompileFbxTargetPreviewAsync( customFbx, CustomFbxDmxFolder );
+				Note( $"custom fbx preview model: compiled={Result.customFbxPreviewModelCompiled} "
+					+ $"path='{customFbx.PreviewModelPath}'" );
+
 				await ProbeCustomTargetAsync( motionEntry, customFbx, CustomFbxDmxFolder,
 					"ui_smoke_customfbx", isModelTarget: false );
+
+				// Auto-generated vmats: the mesh compiles of this leg must not report any
+				// 'Missing vmat' (the auto-vmat generation writes one per FBX material).
+				Result.customFbxMissingVmats = (EditorPipeline.ReadLogSlice( fbxLogOffset ) ?? "")
+					.Split( '\n' )
+					.Count( l => l.Contains( "Missing vmat", StringComparison.OrdinalIgnoreCase ) );
+				Note( $"custom fbx missing-vmat lines: {Result.customFbxMissingVmats}" );
+			}
 		}
 		catch ( Exception e )
 		{
@@ -731,10 +772,13 @@ public static class UiSmokeGate
 			Result.baselinePlaybackMoves
 			&& Result.customModelTargetResolved && Result.customFbxTargetResolved
 			&& Result.customModelPreviewHasModel && Result.customModelPreviewPoseOk
-			&& Result.customModelSkeletonLines > 0
+			&& Result.customModelSkeletonLines > 0 && Result.customModelSkeletonPixels > 30
 			&& Result.customModelCompiled && Result.customModelSequenceVisible
 			&& Result.customModelPlaybackMoves && Result.customModelPlaybackUpright
-			&& Result.customFbxSkeletonLines > 0
+			&& Result.customFbxSkeletonLines > 0 && Result.customFbxSkeletonPixels > 30
+			&& Result.customFbxPreviewModelCompiled && Result.customFbxPreviewHasModel
+			&& Result.customFbxPreviewPoseOk
+			&& Result.customFbxMissingVmats == 0
 			&& Result.customFbxCompiled && Result.customFbxSequenceVisible
 			&& Result.customFbxPlaybackMoves && Result.customFbxPlaybackUpright;
 		Note( $"custom-target repro => customOk={Result.customOk}" );
@@ -805,25 +849,40 @@ public static class UiSmokeGate
 			var actual = preview.GetModelBoneTransform( pelvisName )?.Position;
 			var poseOk = actual is { } a && a.Distance( expectedEngine ) < 0.5f;
 
-			// Wireframe-skeleton view: model-less targets (custom FBX) are forced onto it -
-			// it is the entire preview for them; model targets must be able to switch.
+			// Wireframe-skeleton view: model targets must be able to switch onto it (for
+			// FBX targets it is the fallback while the preview model compiles). Verified at
+			// the PIXEL level - line counts cannot see a missing line material (user
+			// report: the view rendered as a single purple blob).
 			preview.SkeletonOnly = true;
 			preview.ApplyCurrentFrame();
 			var skeletonLines = preview.SkeletonLineCount;
+			var skeletonPixels = 0;
+			try
+			{
+				skeletonPixels = preview.CountRenderedPixels(
+					c => c.b > 0.45f && c.g > 0.45f && c.r < c.g * 0.8f );
+			}
+			catch ( Exception e )
+			{
+				Note( $"{tag} skeleton pixel probe threw: {e.Message}" );
+			}
 
 			Note( $"{tag} preview: hasModel={hasModel} pelvis actual={actual} "
-				+ $"expected={expectedEngine} poseOk={poseOk} skeletonLines={skeletonLines}" );
+				+ $"expected={expectedEngine} poseOk={poseOk} skeletonLines={skeletonLines} "
+				+ $"skeletonPixels={skeletonPixels}" );
 			if ( isModelTarget )
 			{
 				Result.customModelPreviewHasModel = hasModel;
 				Result.customModelPreviewPoseOk = poseOk;
 				Result.customModelSkeletonLines = skeletonLines;
+				Result.customModelSkeletonPixels = skeletonPixels;
 			}
 			else
 			{
 				Result.customFbxPreviewHasModel = hasModel;
 				Result.customFbxPreviewPoseOk = poseOk;
 				Result.customFbxSkeletonLines = skeletonLines;
+				Result.customFbxSkeletonPixels = skeletonPixels;
 			}
 			preview.Destroy();
 		}
@@ -835,7 +894,9 @@ public static class UiSmokeGate
 
 		// ---- write + compile + playback probe ----------------------------------------
 		var write = await EditorPipeline.WriteAndCompileAsync(
-			batch, dmxFolder, augmentVmdlPath: null, standaloneVmdlName: vmdlName );
+			batch, dmxFolder, augmentVmdlPath: null, standaloneVmdlName: vmdlName,
+			compileTimeoutSeconds: string.IsNullOrEmpty( target.Spec.MeshFilePath )
+				? 120f : EditorPipeline.MeshCompileTimeoutSeconds );
 		var compiled = write.Compiled && write.VmdlAsset is not null;
 		Note( $"{tag} write+compile: vmdl={write.VmdlPath} compiled={write.Compiled} "
 			+ $"errors=[{string.Join( "; ", write.Errors )}]" );
@@ -1393,6 +1454,8 @@ public static class UiSmokeGate
 		public bool augmentOk { get; set; }
 
 		public bool previewSkeletonViewOk { get; set; }
+		public int previewSkeletonPixels { get; set; }
+		public int previewGhostPixels { get; set; }
 
 		// custom-target repro (HR_UI_SMOKE_CUSTOM)
 		public bool customMode { get; set; }
@@ -1403,6 +1466,7 @@ public static class UiSmokeGate
 		public bool customModelPreviewHasModel { get; set; }
 		public bool customModelPreviewPoseOk { get; set; }
 		public int customModelSkeletonLines { get; set; }
+		public int customModelSkeletonPixels { get; set; }
 		public bool customModelCompiled { get; set; }
 		public bool customModelSequenceVisible { get; set; }
 		public bool customModelPlaybackMoves { get; set; }
@@ -1415,6 +1479,9 @@ public static class UiSmokeGate
 		public bool customFbxPreviewHasModel { get; set; }
 		public bool customFbxPreviewPoseOk { get; set; }
 		public int customFbxSkeletonLines { get; set; }
+		public int customFbxSkeletonPixels { get; set; }
+		public bool customFbxPreviewModelCompiled { get; set; }
+		public int customFbxMissingVmats { get; set; }
 		public bool customFbxCompiled { get; set; }
 		public bool customFbxSequenceVisible { get; set; }
 		public bool customFbxPlaybackMoves { get; set; }
