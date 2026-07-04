@@ -733,6 +733,10 @@ public static class Retargeter
         });
         var frames = solved.Frames;
 
+        // ---- embedded-take fidelity: authored local translations pass through ----------
+        if (request.PreserveSourceTranslations)
+            PassThroughSourceTranslations(scene, target.Rig, frames, take, report);
+
         // ---- foot-plant cleanup (target space; up axis from the TARGET character frame) ----
         if (request.FootPlantCleanup)
         {
@@ -775,6 +779,68 @@ public static class Retargeter
 
         var looping = request.LoopingOverride ?? solved.Looping;
         return new Clip(clipName, solved.Fps, looping, frames);
+    }
+
+    /// <summary>
+    /// <see cref="RetargetRequest.PreserveSourceTranslations"/>: per-frame source local
+    /// translations onto same-named target bones. Names are compared engine-sanitized
+    /// (non-alphanumerics → <c>_</c>: the compiled-model rig the editor rebuilds carries
+    /// <c>Bip01_R_Hand</c> for the file's <c>Bip01 R Hand</c>). A matched bone whose REST
+    /// translation disagrees between the rigs is skipped — the name collision is then
+    /// coincidence, not the same joint. The hips and its ancestors always stay
+    /// solver-owned (trajectory, root-motion modes, hip rescale).
+    /// </summary>
+    private static void PassThroughSourceTranslations(
+        SourceScene scene, TargetRig rig, List<XForm[]> frames, int take,
+        MappingReportInfo report)
+    {
+        var src = scene.Skeleton;
+        var tgt = rig.Skeleton;
+        var srcClip = scene.Clips[take];
+        if (srcClip.Frames.Count != frames.Count)
+        {
+            AddNote(report, "Source translations not preserved: frame counts differ "
+                + $"({srcClip.Frames.Count} source vs {frames.Count} solved).");
+            return;
+        }
+
+        static string Key(string name)
+        {
+            Span<char> c = stackalloc char[name.Length];
+            for (var i = 0; i < name.Length; i++)
+                c[i] = char.IsLetterOrDigit(name[i]) ? char.ToLowerInvariant(name[i]) : '_';
+            return new string(c);
+        }
+
+        var srcByName = new Dictionary<string, int>();
+        for (var i = 0; i < src.Count; i++)
+        {
+            // Duplicate keys are ambiguous - poison them rather than guess.
+            var key = Key(src[i].Name);
+            srcByName[key] = srcByName.ContainsKey(key) ? -1 : i;
+        }
+
+        var excluded = new HashSet<int>();
+        if (rig.BoneForRole(BoneRole.Hips) is { } hips)
+            for (var b = hips; b >= 0; b = tgt[b].ParentIndex)
+                excluded.Add(b);
+
+        var applied = 0;
+        for (var t = 0; t < tgt.Count; t++)
+        {
+            if (excluded.Contains(t)
+                || !srcByName.TryGetValue(Key(tgt[t].Name), out var s) || s < 0)
+                continue;
+            // Same joint check: rest translations must agree (same rig, same space).
+            var restDelta = (src[s].RestLocal.Pos - tgt[t].RestLocal.Pos).Length();
+            if (restDelta > MathF.Max(1f, 0.1f * tgt[t].RestLocal.Pos.Length()))
+                continue;
+            for (var f = 0; f < frames.Count; f++)
+                frames[f][t] = new XForm(srcClip.Frames[f][s].Pos, frames[f][t].Rot);
+            applied++;
+        }
+        if (applied > 0)
+            AddNote(report, $"Embedded take: authored local translations preserved on {applied} bones.");
     }
 
     /// <summary>
@@ -1079,11 +1145,73 @@ public static class Retargeter
             return (userPreset, BuildReport(userPreset, needsUserDecision: false, skeleton));
 
         if (ProfileDetector.Detect(skeleton) is { } detected)
+        {
+            VetoImpossibleHead(skeleton, detected.Result);
             return (detected.Result, BuildReport(detected.Result, needsUserDecision: false, skeleton));
+        }
 
         var auto = AutoMapper.Map(skeleton);
+        VetoImpossibleHead(skeleton, auto);
         var needsUserDecision = auto.Confidence < ProfileDetector.DetectionThreshold;
         return (auto, BuildReport(auto, needsUserDecision, skeleton));
+    }
+
+    /// <summary>
+    /// Drops a detected/auto-mapped Head whose bone cannot anatomically drive a skull: its
+    /// rest sits clearly BELOW the neck (or the topmost mapped spine joint). Real case: an
+    /// Auto-Rig Pro export parks <c>head.x</c> at chest height ~90cm under <c>neck.x</c>
+    /// with the skin bind compensating — the mesh is correct at rest, but every skull
+    /// rotation replayed onto that bone sweeps the head geometry on the lever arm ("the
+    /// head is stretched and it stretched more when I played the animation"). With the
+    /// role unmapped the neck — whose pivot IS at the skull base on such rigs — carries
+    /// head motion, and the bone holds its rest like any other unmapped helper.
+    /// Neutral-rest corpus rigs measure the neck→head segment −8°…33° from character up
+    /// (dot ≥ 0.55 even on the posed Defenses bind at 40.7°); the veto fires only past
+    /// 101° (dot &lt; −0.2), an impossible carriage on any working rig. Explicit,
+    /// authored and user-preset mappings are authoritative and never second-guessed.
+    /// </summary>
+    private static void VetoImpossibleHead(SkeletonModel skeleton, MappingResult map)
+    {
+        if (!map.RoleToBone.TryGetValue(BoneRole.Head, out var head)
+            || !map.RoleToBone.TryGetValue(BoneRole.Hips, out var hips))
+            return;
+
+        var reference = map.RoleToBone.TryGetValue(BoneRole.Neck, out var neck)
+            ? neck
+            : SpineTop(map);
+        if (reference is not { } refBone || refBone == hips)
+            return;
+
+        var rest = skeleton.RestWorld;
+        // Axis-free "up": the body chain ascends hips → spine → neck by construction, so
+        // hips→reference is the rig's own vertical regardless of world axis convention.
+        var up = rest[refBone].Pos - rest[hips].Pos;
+        var seg = rest[head].Pos - rest[refBone].Pos;
+        if (up.LengthSquared() < 1e-6f || seg.Length() < 0.05f * up.Length())
+            return; // degenerate spine / head stacked on the neck: nothing to judge
+
+        if (Vector3.Dot(Vector3.Normalize(seg), Vector3.Normalize(up)) >= -0.2f)
+            return;
+
+        map.RoleToBone.Remove(BoneRole.Head);
+        map.Notes.Add(
+            $"Head '{skeleton[head].Name}' unmapped: its rest sits below "
+            + $"'{skeleton[refBone].Name}' - not a skull joint the solver can drive "
+            + "(rotations would sweep the head geometry on the offset lever arm). "
+            + "The neck carries head motion; map it manually to override.");
+    }
+
+    private static int? SpineTop(MappingResult map)
+    {
+        foreach (var role in new[]
+        {
+            BoneRole.Spine4, BoneRole.Spine3, BoneRole.Spine2, BoneRole.Spine1, BoneRole.Spine0,
+        })
+        {
+            if (map.RoleToBone.TryGetValue(role, out var bone))
+                return bone;
+        }
+        return null;
     }
 
     private static MappingReportInfo BuildReport(

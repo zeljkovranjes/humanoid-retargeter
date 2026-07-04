@@ -966,7 +966,9 @@ public static class UiSmokeGate
 				{
 					(HumanoidRetargeter.Mapping.BoneRole.HandR, "hand_R", 0.22f),
 					(HumanoidRetargeter.Mapping.BoneRole.HandL, "hand_L", 0.22f),
-					(HumanoidRetargeter.Mapping.BoneRole.Head, "head", 0.28f),
+					// Head camera needs more distance than the hands: at 0.28x the near plane
+					// sat INSIDE large cartoon skulls and the dump rendered a white wall.
+					(HumanoidRetargeter.Mapping.BoneRole.Head, "head", 0.4f),
 				} )
 				{
 					if ( rig.BoneForRole( role ) is { } boneIndex )

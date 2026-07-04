@@ -617,6 +617,9 @@ public static class EditorPipeline
 					RootMotion = Cleanup.RootMotionMode.Off,
 					FootPlantCleanup = false,   // authored data - transfer exactly, clean nothing
 					ArmEffectorIk = false,
+					// A Biped take animates local translations (spine sway, thigh shifts);
+					// without this they pin to rest and the authored motion stiffens.
+					PreserveSourceTranslations = true,
 					LoopingOverride = null,
 				} );
 			}

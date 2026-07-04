@@ -121,6 +121,16 @@ public sealed class RetargetRequest
     public bool FootPlantCleanup { get; init; } = true;
 
     /// <summary>
+    /// Copy the source clip's per-frame LOCAL translations onto same-named target bones
+    /// (hips and its ancestors excluded — trajectory stays solver-owned). For SAME-RIG
+    /// conversions of authored takes (a target FBX's own embedded animations): the solver
+    /// pins every non-hips bone to its rest translation, silently dropping a Biped take's
+    /// animated spine/thigh translations (~19cm of authored body sway on a death fall).
+    /// Meaningless across different rigs — leave off (default) for real retargets.
+    /// </summary>
+    public bool PreserveSourceTranslations { get; init; }
+
+    /// <summary>
     /// Optional arm end-effector IK pass pulling the wrists onto limb-length-normalized
     /// source hand positions. Default OFF: the geometric solver already matches anatomical
     /// directions, so arm IK only helps reach-critical work (props, contact poses) and can
