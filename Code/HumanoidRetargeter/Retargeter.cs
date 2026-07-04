@@ -600,8 +600,17 @@ public static class Retargeter
     {
         var events = GenerateFootsteps(request, target, context, report, frames, fps);
         var dmxFileName = SanitizeFileName(clipName) + ".dmx";
+        // Vmdls that EMBED their FBX mesh compile animations whose ROOT-LEVEL bones play
+        // yawed 90° about up versus the DMX's declared Y-up conversion (measured: all 25
+        // re-rooted bones of a real rig at exactly (0,0,1)/90.0° in the engine, child
+        // bones unaffected) - the whole character yaws/pitches in ModelDoc ("plays
+        // backwards", "totally messed up") while the solve, the preview and external
+        // renders of the same data are correct. Compensate on the DMX COPY only.
+        var dmxFrames = target.UpAxis == TargetUpAxis.YUpCm && !string.IsNullOrEmpty(target.MeshFilePath)
+            ? CompensateEmbeddedMeshRootYaw(frames, target.Rig)
+            : frames;
         var dmx = DmxWriter.Write(
-            target.Rig.Skeleton, new Clip(clipName, fps, looping, frames), new DmxWriteOptions
+            target.Rig.Skeleton, new Clip(clipName, fps, looping, dmxFrames), new DmxWriteOptions
             {
                 Name = clipName,
                 SourceNote = isMirrored ? request.SourceFileName + " (mirrored)" : request.SourceFileName,
@@ -893,6 +902,37 @@ public static class Retargeter
         AddNote(report,
             $"{tops.Count} helper bone subtree(s) outside the mapped skeleton ride the "
             + "character (cloth/physics/prop bones would otherwise freeze at their bind position).");
+    }
+
+    /// <summary>
+    /// The engine-side yaw correction for embedded-mesh vmdls (see the call site in
+    /// <see cref="EmitClip"/>): the compiler's Y-up→engine conversion for ROOT-LEVEL
+    /// animation channels lands 90° about engine-up away from where it puts the mesh
+    /// bind. An engine-up (+Z) yaw conjugated through the Y-up conversion is a yaw
+    /// about rig up (+Y): pre-rotating root-level locals by −90° about rig Y makes the
+    /// compiled playback match the compiled bind. Child bones are parent-relative and
+    /// need nothing.
+    /// </summary>
+    private static List<XForm[]> CompensateEmbeddedMeshRootYaw(
+        IReadOnlyList<XForm[]> frames, TargetRig rig)
+    {
+        var yaw = Quaternion.CreateFromAxisAngle(Vector3.UnitY, -MathF.PI * 0.5f);
+        var skeleton = rig.Skeleton;
+        var result = new List<XForm[]>(frames.Count);
+        foreach (var frame in frames)
+        {
+            var copy = new XForm[frame.Length];
+            for (var i = 0; i < frame.Length; i++)
+            {
+                copy[i] = i < skeleton.Count && skeleton[i].ParentIndex < 0
+                    ? new XForm(
+                        Vector3.Transform(frame[i].Pos, yaw),
+                        MathQ.Normalize(yaw * frame[i].Rot))
+                    : frame[i];
+            }
+            result.Add(copy);
+        }
+        return result;
     }
 
     /// <summary>Test seam for <see cref="FollowHipsWithOrphanBones"/>.</summary>
