@@ -357,7 +357,16 @@ public sealed class RetargetWindow : Widget
 		// Custom FBX target with a skin: compile a mesh-only preview vmdl in the background
 		// so the preview shows the actual model (the wireframe skeleton covers the wait and
 		// stays the fallback). Skeleton-only FBX picks (Warning set) have nothing to skin.
-		if ( resolved.FbxAbsolutePath is not null && resolved.Warning is null )
+		RefreshFbxTargetPreview( resolved );
+	}
+
+	/// <summary>(Re)compiles the FBX target's preview model in the background. Also run
+	/// after every conversion: the preview vmdl otherwise only refreshes on re-pick, so a
+	/// project carrying a preview compiled by an older library version kept showing white
+	/// placeholder materials in the preview while ModelDoc showed the fixed output.</summary>
+	void RefreshFbxTargetPreview( TargetPickers.ResolvedTarget resolved )
+	{
+		if ( resolved?.FbxAbsolutePath is not null && resolved.Warning is null )
 			_ = CompileFbxTargetPreviewAsync( resolved );
 	}
 
@@ -1143,6 +1152,12 @@ public sealed class RetargetWindow : Widget
 
 			if ( write.VmdlAsset is not null )
 				MainAssetBrowser.Instance?.Local?.UpdateAssetList();
+
+			// FBX targets: refresh the preview model too - it otherwise only recompiles on
+			// re-pick, leaving previews from older library versions (white placeholder
+			// materials) on screen while ModelDoc already shows the fixed output.
+			if ( !_augmentMode )
+				RefreshFbxTargetPreview( target );
 		}
 		catch ( Exception e )
 		{
