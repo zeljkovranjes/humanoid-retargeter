@@ -1194,11 +1194,21 @@ public static class Retargeter
             return;
 
         map.RoleToBone.Remove(BoneRole.Head);
+        // The neck of a broken skull region rests with the head. On the real case the
+        // neck bone skins the skull AND a torso column (its weights are where the head's
+        // should be), so any solved neck bend shears half the body: the source spreads
+        // its idle hunch through its spine while this target's spine stays put, and the
+        // faithful neck world replay turned into a ~19° LOCAL kink rendered as a hump
+        // grafted onto the character's back. Skull attitude rides the spine instead.
+        var neckNote = "";
+        if (map.RoleToBone.Remove(BoneRole.Neck))
+            neckNote = $" Its neck '{skeleton[neck].Name}' rests too (on such exports it "
+                + "carries the skull/torso skin the head joint should).";
         map.Notes.Add(
             $"Head '{skeleton[head].Name}' unmapped: its rest sits below "
             + $"'{skeleton[refBone].Name}' - not a skull joint the solver can drive "
-            + "(rotations would sweep the head geometry on the offset lever arm). "
-            + "The neck carries head motion; map it manually to override.");
+            + "(rotations would sweep the head geometry on the offset lever arm)."
+            + neckNote + " The spine carries the upper body; map manually to override.");
     }
 
     private static int? SpineTop(MappingResult map)

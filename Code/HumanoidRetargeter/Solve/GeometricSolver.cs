@@ -505,7 +505,15 @@ public sealed class GeometricSolver : IRetargetSolver
             int? headingSlot = null;
             var div = Quaternion.Identity;
             var headReplay = role == BoneRole.Head && mode == RoleTransferMode.CharacterDeltaFromRest;
-            var neckReplay = role == BoneRole.Neck && mode == RoleTransferMode.DeltaFromRest;
+            // The neck's carriage divergence D compares the rigs' rest neck→head leans —
+            // defined only when BOTH sides map a Head. Without one (e.g. the impossible-
+            // head veto) the neck's frame X falls back to the inherited spine→neck
+            // segment, and measuring THAT against the source's skull-base segment
+            // fabricated a ~19° constant pitch — on a rig whose neck bone skins the whole
+            // torso it read as a hump grafted onto the character's back.
+            var neckReplay = role == BoneRole.Neck && mode == RoleTransferMode.DeltaFromRest
+                && srcMap.RoleToBone.ContainsKey(BoneRole.Head)
+                && rig.BoneForRole(BoneRole.Head) is not null;
             if ((headReplay || neckReplay)
                 && srcMap.RoleToBone.TryGetValue(BoneRole.Hips, out var srcHipsBone))
             {
