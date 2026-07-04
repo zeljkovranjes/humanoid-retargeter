@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 
 namespace HumanoidRetargeter.Target;
 
@@ -134,7 +135,8 @@ public static class VmdlWriter
     public static string GenerateStandalone(string baseModelPath, IEnumerable<AnimEntry> anims,
         float scale, string defaultRootBone,
         IReadOnlyList<LocomotionSetSpec>? locomotionSets = null,
-        string meshFilePath = "", float meshImportScale = 1.0f)
+        string meshFilePath = "", float meshImportScale = 1.0f,
+        IReadOnlyDictionary<string, string>? materialRemaps = null)
     {
         ArgumentNullException.ThrowIfNull(baseModelPath);
         ArgumentNullException.ThrowIfNull(anims);
@@ -143,35 +145,9 @@ public static class VmdlWriter
         var children = new KvArray();
 
         if (!string.IsNullOrEmpty(meshFilePath))
-        {
-            // Field set mirrors the shipped citizen_human_male_staging.vmdl RenderMeshFile.
-            var meshChildren = new KvArray();
-            meshChildren.Items.Add(new KvObject
-            {
-                ["_class"] = new KvString("RenderMeshFile"),
-                ["name"] = new KvString(Path.GetFileNameWithoutExtension(meshFilePath)),
-                ["filename"] = new KvString(meshFilePath),
-                ["import_translation"] = MakeVector3(0, 0, 0),
-                ["import_rotation"] = MakeVector3(0, 0, 0),
-                ["import_scale"] = new KvDouble(
-                    double.Parse(meshImportScale.ToString("R", CultureInfo.InvariantCulture),
-                        CultureInfo.InvariantCulture)),
-                ["align_origin_x_type"] = new KvString("None"),
-                ["align_origin_y_type"] = new KvString("None"),
-                ["align_origin_z_type"] = new KvString("None"),
-                ["parent_bone"] = new KvString(""),
-                ["import_filter"] = new KvObject
-                {
-                    ["exclude_by_default"] = new KvBool(false),
-                    ["exception_list"] = new KvArray(),
-                },
-            });
-            children.Items.Add(new KvObject
-            {
-                ["_class"] = new KvString("RenderMeshList"),
-                ["children"] = meshChildren,
-            });
-        }
+            children.Items.Add(BuildRenderMeshListNode(meshFilePath, meshImportScale));
+        if (materialRemaps is { Count: > 0 })
+            children.Items.Add(BuildMaterialGroupListNode(materialRemaps));
 
         if (scale != 1.0f)
         {
@@ -314,6 +290,74 @@ public static class VmdlWriter
     /// (key order <c>Attachment</c>, <c>Foot</c>, <c>Volume</c>, exactly like the shipped
     /// data; null-valued keys are omitted, and an all-null key set omits the object).
     /// </summary>
+    /// <summary>A <c>RenderMeshList</c> node with one <c>RenderMeshFile</c> child (field
+    /// set mirrors the shipped citizen_human_male_staging.vmdl). Shared with
+    /// <see cref="VmdlAugmenter.EnsureMeshFile"/> so accumulated pipeline-owned vmdls that
+    /// predate mesh embedding can be healed in place.</summary>
+    internal static KvObject BuildRenderMeshListNode(string meshFilePath, float meshImportScale)
+    {
+        var meshChildren = new KvArray();
+        meshChildren.Items.Add(new KvObject
+        {
+            ["_class"] = new KvString("RenderMeshFile"),
+            ["name"] = new KvString(Path.GetFileNameWithoutExtension(meshFilePath)),
+            ["filename"] = new KvString(meshFilePath),
+            ["import_translation"] = MakeVector3(0, 0, 0),
+            ["import_rotation"] = MakeVector3(0, 0, 0),
+            ["import_scale"] = new KvDouble(
+                double.Parse(meshImportScale.ToString("R", CultureInfo.InvariantCulture),
+                    CultureInfo.InvariantCulture)),
+            ["align_origin_x_type"] = new KvString("None"),
+            ["align_origin_y_type"] = new KvString("None"),
+            ["align_origin_z_type"] = new KvString("None"),
+            ["parent_bone"] = new KvString(""),
+            ["import_filter"] = new KvObject
+            {
+                ["exclude_by_default"] = new KvBool(false),
+                ["exception_list"] = new KvArray(),
+            },
+        });
+        return new KvObject
+        {
+            ["_class"] = new KvString("RenderMeshList"),
+            ["children"] = meshChildren,
+        };
+    }
+
+    /// <summary>
+    /// A <c>MaterialGroupList</c> with one <c>DefaultMaterialGroup</c> carrying material
+    /// remaps (bare mesh material reference → assets-relative vmat path) — the shipped
+    /// citizen vmdl's own mechanism. FBX materials are bare names the compiler cannot
+    /// resolve as resource paths; without the remap every mesh logs
+    /// 'Missing vmat "&lt;name&gt;.vmat"' and renders placeholder materials.
+    /// </summary>
+    internal static KvObject BuildMaterialGroupListNode(IReadOnlyDictionary<string, string> remaps)
+    {
+        var remapArray = new KvArray();
+        foreach (var (from, to) in remaps.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+        {
+            remapArray.Items.Add(new KvObject
+            {
+                ["from"] = new KvString(from),
+                ["to"] = new KvString(to),
+            });
+        }
+
+        var groupChildren = new KvArray();
+        groupChildren.Items.Add(new KvObject
+        {
+            ["_class"] = new KvString("DefaultMaterialGroup"),
+            ["remaps"] = remapArray,
+            ["use_global_default"] = new KvBool(false),
+            ["global_default_material"] = new KvString(""),
+        });
+        return new KvObject
+        {
+            ["_class"] = new KvString("MaterialGroupList"),
+            ["children"] = groupChildren,
+        };
+    }
+
     /// <summary>KV3 <c>[ x, y, z ]</c> double array (RenderMeshFile import vectors).</summary>
     private static KvArray MakeVector3(double x, double y, double z)
     {

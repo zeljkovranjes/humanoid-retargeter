@@ -353,6 +353,26 @@ public sealed class RetargetWindow : Widget
 			SetStatus( resolved.Warning, Theme.Yellow );
 		else
 			RefreshStatus();
+
+		// Custom FBX target with a skin: compile a mesh-only preview vmdl in the background
+		// so the preview shows the actual model (the wireframe skeleton covers the wait and
+		// stays the fallback). Skeleton-only FBX picks (Warning set) have nothing to skin.
+		if ( resolved.FbxAbsolutePath is not null && resolved.Warning is null )
+			_ = CompileFbxTargetPreviewAsync( resolved );
+	}
+
+	async Task CompileFbxTargetPreviewAsync( TargetPickers.ResolvedTarget resolved )
+	{
+		SetStatus( $"Target: {resolved.Description}   ·   compiling its preview model…", Theme.Blue );
+		var ok = await EditorPipeline.CompileFbxTargetPreviewAsync( resolved, NormalizedOutputFolder() );
+		await EditorPipeline.SwitchToMainThread();
+		if ( !ReferenceEquals( _target, resolved ) )
+			return; // user picked something else meanwhile
+		if ( ok )
+			RefreshStatus();
+		else
+			SetStatus( $"Target: {resolved.Description}   ·   preview model could not be compiled - "
+				+ "the preview will show the wireframe skeleton instead.", Theme.Yellow );
 	}
 
 	/// <summary>Manual-mapping fallback for unrecognized custom targets: the same
@@ -886,7 +906,11 @@ public sealed class RetargetWindow : Widget
 			return (batch, null);
 
 		var write = await EditorPipeline.WriteAndCompileAsync(
-			batch, options.DmxFolderRelative, augmentVmdlPath );
+			batch, options.DmxFolderRelative, augmentVmdlPath,
+			// Mesh-embedding vmdls import the whole target FBX at compile time - a real
+			// 27 MB character exceeded the plain 120 s poll while still compiling fine.
+			compileTimeoutSeconds: string.IsNullOrEmpty( target.Spec.MeshFilePath )
+				? 120f : EditorPipeline.MeshCompileTimeoutSeconds );
 		await EditorPipeline.SwitchToMainThread();
 		return (batch, write);
 	}
@@ -952,6 +976,19 @@ public sealed class RetargetWindow : Widget
 			return;
 		}
 
+		// Custom FBX target + standalone output: embed the target mesh in the generated
+		// vmdl (copy the FBX + sidecar textures into the output folder, point the spec's
+		// MeshFilePath at it). Without a base model OR a mesh source the vmdl compiles
+		// into an empty model - 0 bones, 0 sequences - and "playing" it does nothing
+		// (user report 2026-07-04). Runs BEFORE the accumulate branch below so an existing
+		// output vmdl can be healed with the mesh node too.
+		if ( !_augmentMode
+			&& !EditorPipeline.PrepareFbxTargetMesh( _target, NormalizedOutputFolder(), out var meshError ) )
+		{
+			SetStatus( meshError, Theme.Red );
+			return;
+		}
+
 		string augmentPath = null;
 		string augmentText = null;
 		if ( _augmentMode )
@@ -1002,6 +1039,17 @@ public sealed class RetargetWindow : Widget
 					{
 						var text = File.ReadAllText( standalonePath );
 						HumanoidRetargeter.Target.Kv3.Parse( text ); // reject corrupt files up front
+
+						// Custom FBX target: heal accumulate targets that predate mesh
+						// embedding (base_model_name "" and no RenderMeshList - an empty
+						// model that can never play). Pipeline-owned file, safe to patch.
+						if ( !string.IsNullOrEmpty( _target.Spec.MeshFilePath ) )
+						{
+							text = HumanoidRetargeter.Target.VmdlAugmenter.EnsureMeshFile(
+								text, _target.Spec.MeshFilePath, _target.Spec.MeshImportScale,
+								_target.Spec.MaterialRemaps );
+						}
+
 						augmentPath = standalonePath;
 						augmentText = text;
 					}
@@ -1012,17 +1060,6 @@ public sealed class RetargetWindow : Widget
 					}
 				}
 			}
-		}
-
-		// Custom FBX target + standalone output: embed the target mesh in the generated
-		// vmdl (copy the FBX into the output folder, point the spec's MeshFilePath at it).
-		// Without a base model OR a mesh source the vmdl compiles into an empty model -
-		// 0 bones, 0 sequences - and "playing" it does nothing (user report 2026-07-04).
-		if ( !_augmentMode
-			&& !EditorPipeline.PrepareFbxTargetMesh( _target, NormalizedOutputFolder(), out var meshError ) )
-		{
-			SetStatus( meshError, Theme.Red );
-			return;
 		}
 
 		_converting = true;

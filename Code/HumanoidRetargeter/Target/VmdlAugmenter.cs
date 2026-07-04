@@ -106,6 +106,65 @@ public static class VmdlAugmenter
     /// rootNode object.</exception>
     /// <exception cref="VmdlAugmentException">Thrown on name collisions with non-AnimFile
     /// nodes.</exception>
+    /// <summary>
+    /// Ensures a PIPELINE-OWNED standalone vmdl embeds <paramref name="meshFilePath"/> as a
+    /// RenderMeshList/RenderMeshFile node. Standalone outputs generated before mesh
+    /// embedding existed carry <c>base_model_name = ""</c> and no mesh — and because the
+    /// standalone output ACCUMULATES (each conversion augments the existing file in place),
+    /// such a vmdl would stay an empty model (0 bones, 0 playable sequences) forever, no
+    /// matter how many new conversions run against it. A RenderMeshList referencing a
+    /// DIFFERENT mesh is replaced wholesale (the user switched target FBX; the file is
+    /// pipeline-owned). Never use on a user's own model vmdl — augment mode passes real
+    /// models through untouched. Returns the (possibly unchanged) vmdl text.
+    /// </summary>
+    public static string EnsureMeshFile(string vmdlText, string meshFilePath, float meshImportScale,
+        IReadOnlyDictionary<string, string>? materialRemaps = null)
+    {
+        ArgumentNullException.ThrowIfNull(vmdlText);
+        if (string.IsNullOrEmpty(meshFilePath))
+            return vmdlText;
+
+        var doc = Kv3.Parse(vmdlText);
+        if (doc.Root is not KvObject root || root.GetOrNull("rootNode") is not KvObject rootNode)
+            throw new FormatException("vmdl has no rootNode object.");
+
+        if (rootNode.GetOrNull("children") is not KvArray children)
+        {
+            children = new KvArray();
+            rootNode["children"] = children;
+        }
+
+        var changed = false;
+
+        var meshList = children.Items.OfType<KvObject>()
+            .FirstOrDefault(o => o.GetString("_class") == "RenderMeshList");
+        var alreadyEmbedded = meshList?.GetOrNull("children") is KvArray existing
+            && existing.Items.OfType<KvObject>().Any(o =>
+                o.GetString("_class") == "RenderMeshFile"
+                && string.Equals(o.GetString("filename"), meshFilePath, StringComparison.OrdinalIgnoreCase));
+        if (!alreadyEmbedded)
+        {
+            var replacement = VmdlWriter.BuildRenderMeshListNode(meshFilePath, meshImportScale);
+            if (meshList is null)
+                children.Items.Insert(0, replacement);
+            else
+                meshList["children"] = replacement.GetOrNull("children")!;
+            changed = true;
+        }
+
+        // Material remaps ride along the same healing pass: a pre-remap output would keep
+        // logging 'Missing vmat' / rendering placeholders forever. Only ADDED when absent -
+        // an existing MaterialGroupList may carry user edits and is left alone.
+        if (materialRemaps is { Count: > 0 }
+            && !children.Items.OfType<KvObject>().Any(o => o.GetString("_class") == "MaterialGroupList"))
+        {
+            children.Items.Add(VmdlWriter.BuildMaterialGroupListNode(materialRemaps));
+            changed = true;
+        }
+
+        return changed ? Kv3.Serialize(doc) : vmdlText;
+    }
+
     public static string Augment(string vmdlText, IEnumerable<AnimEntry> anims,
         out string backupOfOriginal, AugmentOptions? options = null,
         ICollection<string>? removedSequences = null)

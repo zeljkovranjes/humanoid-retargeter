@@ -257,6 +257,14 @@ public static class TargetPickers
 			return null;
 		}
 
+		// The engine sanitizes bone names when importing the mesh (observed: 3ds Max
+		// Biped's "Bip01 R Finger22" compiles to "Bip01_R_Finger22"), and DMX animation
+		// channels bind BY NAME - a rig built on the raw names produces sequences that
+		// play ZERO motion on the compiled model (the user's "animation doesn't play").
+		// Build the whole target on the sanitized names; preset detection is separator-
+		// insensitive, so recognition is unaffected.
+		skeleton = SanitizeBoneNamesLikeEngine( skeleton );
+
 		var map = DetectHumanoid( skeleton, out error, out var bestEffort );
 		if ( map is null )
 		{
@@ -280,6 +288,46 @@ public static class TargetPickers
 				+ "animations to an existing vmdl of this model instead, or re-export the FBX with skin.";
 		}
 		return resolved;
+	}
+
+	/// <summary>Resourcecompiler's bone-name sanitization (non-alphanumeric → underscore),
+	/// applied to a candidate TARGET skeleton so the generated animation channels match the
+	/// compiled model's bones exactly. Kept as-is when nothing changes or when sanitizing
+	/// would collide two names (e.g. "a b" vs "a_b" - better recognizable than broken).</summary>
+	static SkeletonModel SanitizeBoneNamesLikeEngine( SkeletonModel skeleton )
+	{
+		var changed = false;
+		var definitions = new List<HumanoidRetargeter.Skeleton.BoneDefinition>( skeleton.Count );
+		foreach ( var bone in skeleton.Bones )
+		{
+			var safe = SanitizeBoneName( bone.Name );
+			changed |= safe != bone.Name;
+			definitions.Add( new HumanoidRetargeter.Skeleton.BoneDefinition(
+				safe,
+				bone.ParentIndex >= 0 ? SanitizeBoneName( skeleton[bone.ParentIndex].Name ) : null,
+				bone.RestLocal ) );
+		}
+
+		if ( !changed )
+			return skeleton;
+
+		try
+		{
+			return SkeletonModel.Create( definitions );
+		}
+		catch ( Exception e )
+		{
+			Log.Warning( $"[humanoid-retargeter] could not sanitize target bone names ({e.Message}) - keeping the originals" );
+			return skeleton;
+		}
+	}
+
+	static string SanitizeBoneName( string name )
+	{
+		var builder = new System.Text.StringBuilder( name.Length );
+		foreach ( var c in name )
+			builder.Append( char.IsLetterOrDigit( c ) || c == '_' ? c : '_' );
+		return builder.ToString();
 	}
 
 	/// <summary>Byte-level token scan (works for binary and ASCII FBX alike).</summary>

@@ -245,6 +245,17 @@ public sealed class RetargetTargetSpec
     /// </summary>
     public float MeshImportScale { get; set; } = 1.0f;
 
+    /// <summary>
+    /// Material remaps written into generated standalone vmdls as a
+    /// MaterialGroupList/DefaultMaterialGroup (bare mesh material reference → assets-relative
+    /// vmat path, e.g. <c>"mi_dante_head.vmat" → "animations/retargeted/mi_dante_head.vmat"</c>).
+    /// FBX materials carry bare names the compiler cannot resolve as resource paths
+    /// ("Trying to load an illegal resource name X.vmat"); this remap table — the same
+    /// mechanism the shipped citizen vmdl uses — points them at real files. Null/empty =
+    /// no material group node (default).
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? MaterialRemaps { get; set; }
+
     /// <summary>default_root_bone_name of the generated AnimationList (also the bone vmdl
     /// ExtractMotion nodes operate on).</summary>
     public string DefaultRootBone { get; init; } = "pelvis";
