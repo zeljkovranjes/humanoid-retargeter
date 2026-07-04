@@ -406,7 +406,15 @@ public static class EditorPipeline
 					// map carries the garment's actual detail and reads far better than
 					// flat placeholder white.
 					?? BestTextureMatch( material, textures,
-						new[] { "_s", "_spec", "_m", "_metal", "_ao", "_mask", "_e", "_emissive" } );
+						new[] { "_s", "_spec", "_m", "_metal", "_ao", "_mask", "_e", "_emissive" } )
+					// Last resort: ANY distinctively named non-normal image. Plain-named
+					// texture sets carry no suffix at all (real case: material "homer"
+					// shipping "homer.png" - both suffix passes skipped it and the model
+					// rendered untextured).
+					?? BestTextureMatch( material, textures
+						.Where( t => !Path.GetFileNameWithoutExtension( t )
+							.ToLowerInvariant().EndsWith( "_n" ) )
+						.ToList(), new[] { "" } );
 				var normal = BestTextureMatch( material, textures, new[] { "_n", "_normal" } );
 
 				// Card/strand geometry (lashes, hair, brows, anything the modeler named
