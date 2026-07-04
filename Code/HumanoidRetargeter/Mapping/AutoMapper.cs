@@ -349,6 +349,11 @@ public static class AutoMapper
     private static string? SegmentOf(NameInfo info) => info switch
     {
         _ when info.Core.Contains("meta") => "Meta",
+        // Auto-Rig Pro chains: index1_base → index1 → index2 → index3. The '_base' bone
+        // is the metacarpal inside the palm; its digit belongs to the FINGER, not the
+        // phalanx (digit-only reading collided it with the true first knuckle, whose
+        // curls then bent the palm while the knuckle froze — "the fingers look weird").
+        _ when info.Core.Contains("base") => "Meta",
         { Digit: 0 } => "Meta",
         { Digit: 1 } => "Prox",
         { Digit: 2 } => "Mid",
