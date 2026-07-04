@@ -285,6 +285,40 @@ public static class EditorPipeline
 
 			target.Spec.MeshFilePath = relative;
 			target.Spec.MeshImportScale = target.FbxUnitScaleCm;
+
+			// The FBX's OWN embedded animations must survive the conversion (user report:
+			// "if I import an fbx with an animation and retarget another one onto it, it
+			// should have two animations"). Each take becomes an AnimFile referencing the
+			// copied FBX directly - the same lossless mechanism the shipped citizen
+			// animation list uses for its Citizen@*.fbx files.
+			try
+			{
+				var takes = ExtractFbxTakeNames( File.ReadAllBytes( destination ) );
+				if ( takes.Count > 0 )
+				{
+					var extras = new List<HumanoidRetargeter.Target.AnimEntry>();
+					foreach ( var take in takes )
+					{
+						var takeName = takes.Count == 1
+							? safeStem
+							: safeStem + "_" + new string(
+								take.Select( c => char.IsLetterOrDigit( c ) ? c : '_' ).ToArray() );
+						extras.Add( new HumanoidRetargeter.Target.AnimEntry
+						{
+							Name = takeName,
+							SourceFilename = relative,
+						} );
+					}
+					target.Spec.ExtraAnimFiles = extras;
+					Log.Info( $"[humanoid-retargeter] preserving {extras.Count} embedded animation(s) "
+						+ $"from the target FBX: {string.Join( ", ", extras.Select( e => e.Name ) )}" );
+				}
+			}
+			catch ( Exception e )
+			{
+				Log.Warning( $"[humanoid-retargeter] could not read embedded takes: {e.Message}" );
+			}
+
 			return true;
 		}
 		catch ( Exception e )
@@ -329,6 +363,21 @@ public static class EditorPipeline
 					textures.AddRange( Directory.GetFiles( texturesDir, pattern, SearchOption.AllDirectories ) );
 			}
 
+			// Tokens shared by most of the texture set (the character's base name, e.g.
+			// dante+dark) must never decide a match on their own - "mi_danteDark_vest"
+			// would otherwise take the hair texture purely on those (observed: the hair
+			// mask ended up on the eyes). A match needs at least one DISTINCTIVE token.
+			var tokenCounts = new Dictionary<string, int>( StringComparer.Ordinal );
+			foreach ( var candidate in textures )
+			{
+				foreach ( var token in NameTokens( Path.GetFileNameWithoutExtension( candidate ) ) )
+					tokenCounts[token] = tokenCounts.GetValueOrDefault( token ) + 1;
+			}
+			var ubiquitous = tokenCounts
+				.Where( kv => kv.Value >= 2 && kv.Value * 2 >= textures.Count )
+				.Select( kv => kv.Key )
+				.ToHashSet( StringComparer.Ordinal );
+
 			var remaps = new Dictionary<string, string>( StringComparer.OrdinalIgnoreCase );
 			foreach ( var material in materials )
 			{
@@ -369,19 +418,25 @@ public static class EditorPipeline
 				var bestScore = 0;
 				foreach ( var candidate in candidates )
 				{
-					var stem = Path.GetFileNameWithoutExtension( candidate ).ToLowerInvariant();
-					if ( !suffixes.Any( s => stem.EndsWith( s, StringComparison.Ordinal ) ) )
+					// Tokenize the RAW stem: lower-casing first would erase its camelCase
+					// boundaries ("t_danteDark_head_d" -> one "dantedark" token that can
+					// never match the material's dante+dark tokens - observed as the head
+					// and lower body rendering untextured white while the arms worked).
+					var stem = Path.GetFileNameWithoutExtension( candidate );
+					if ( !suffixes.Any( s => stem.EndsWith( s, StringComparison.OrdinalIgnoreCase ) ) )
 						continue;
-					var score = NameTokens( stem ).Count( materialTokens.Contains );
+					var shared = NameTokens( stem ).Where( materialTokens.Contains ).ToList();
+					var distinctive = shared.Count( t => !ubiquitous.Contains( t ) );
+					var score = distinctive * 10 + shared.Count;
 					if ( score > bestScore )
 					{
 						bestScore = score;
 						best = candidate;
 					}
 				}
-				// One shared token is too weak (every texture of a character set shares its
-				// base name - the vest would get the face texture); demand two.
-				if ( best is null || bestScore < 2 )
+				// A match requires at least one DISTINCTIVE shared token (score >= 10) -
+				// base-name-only overlap picks unrelated textures.
+				if ( best is null || bestScore < 10 )
 					return null;
 				return Path.GetRelativePath( assetsPath, best ).Replace( '\\', '/' );
 			}
@@ -425,11 +480,19 @@ public static class EditorPipeline
 		return tokens;
 	}
 
-	/// <summary>
-	/// Material object names from an FBX: binary FBX stores object names as
-	/// <c>"&lt;name&gt;\0\x01Material"</c>, ASCII as <c>"Material::&lt;name&gt;"</c>.
-	/// </summary>
+	/// <summary>Material object names from an FBX (see <see cref="ExtractFbxObjectNames"/>).</summary>
 	internal static List<string> ExtractFbxMaterialNames( byte[] data )
+		=> ExtractFbxObjectNames( data, "Material" );
+
+	/// <summary>Animation take (AnimStack) names from an FBX.</summary>
+	internal static List<string> ExtractFbxTakeNames( byte[] data )
+		=> ExtractFbxObjectNames( data, "AnimStack" );
+
+	/// <summary>
+	/// Object names of one FBX class: binary FBX stores object names as
+	/// <c>"&lt;name&gt;\0\x01&lt;Class&gt;"</c>, ASCII as <c>"&lt;Class&gt;::&lt;name&gt;"</c>.
+	/// </summary>
+	internal static List<string> ExtractFbxObjectNames( byte[] data, string className )
 	{
 		var names = new List<string>();
 		var seen = new HashSet<string>( StringComparer.OrdinalIgnoreCase );
@@ -441,8 +504,8 @@ public static class EditorPipeline
 				names.Add( name );
 		}
 
-		// Binary: <name> 0x00 0x01 "Material"
-		var marker = System.Text.Encoding.ASCII.GetBytes( "\0\u0001Material" );
+		// Binary: <name> 0x00 0x01 <Class>
+		var marker = System.Text.Encoding.ASCII.GetBytes( "\0\u0001" + className );
 		for ( var i = IndexOfBytes( data, marker, 0 ); i >= 0; i = IndexOfBytes( data, marker, i + 1 ) )
 		{
 			var start = i;
@@ -452,8 +515,8 @@ public static class EditorPipeline
 				Add( System.Text.Encoding.ASCII.GetString( data, start, i - start ) );
 		}
 
-		// ASCII: Material::<name>
-		var ascii = System.Text.Encoding.ASCII.GetBytes( "Material::" );
+		// ASCII: <Class>::<name>
+		var ascii = System.Text.Encoding.ASCII.GetBytes( className + "::" );
 		for ( var i = IndexOfBytes( data, ascii, 0 ); i >= 0; i = IndexOfBytes( data, ascii, i + 1 ) )
 		{
 			var start = i + ascii.Length;
@@ -499,10 +562,18 @@ public static class EditorPipeline
 			if ( string.Equals( sourceDir, destDir, StringComparison.OrdinalIgnoreCase ) )
 				return;
 
+			// Every copied file must be REGISTERED: assets copied onto disk mid-session are
+			// unknown to the asset system, so the material chain cannot generate their vtex
+			// resources - the renderer then logs "Texture manager doesn't know about
+			// texture ...generated.vtex" MANY TIMES PER FRAME, which is both the
+			// purple/black flicker and a preview running at ~2 fps (user report).
 			foreach ( var file in Directory.GetFiles( sourceDir ) )
 			{
-				if ( TextureExtensions.Contains( Path.GetExtension( file ).ToLowerInvariant() ) )
-					Try( () => { File.Copy( file, Path.Combine( destDir, Path.GetFileName( file ) ), true ); return true; } );
+				if ( !TextureExtensions.Contains( Path.GetExtension( file ).ToLowerInvariant() ) )
+					continue;
+				var destFile = Path.Combine( destDir, Path.GetFileName( file ) );
+				Try( () => { File.Copy( file, destFile, true ); return true; } );
+				Try( () => AssetSystem.RegisterFile( destFile ) );
 			}
 
 			foreach ( var candidate in new[]
@@ -525,6 +596,7 @@ public static class EditorPipeline
 						File.Copy( file, destFile, true );
 						return true;
 					} );
+					Try( () => AssetSystem.RegisterFile( destFile ) );
 				}
 				break; // first existing candidate wins
 			}
