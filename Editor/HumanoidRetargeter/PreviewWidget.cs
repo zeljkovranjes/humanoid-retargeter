@@ -610,13 +610,29 @@ public sealed class PreviewWidget : SceneRenderingWidget
 				sequenceModel.CurrentSequence.Duration * Math.Clamp( fraction, 0f, 1f );
 			sequenceModel.Update( 0.001f );
 			var png = RenderToPng( size );
-			var thigh = sequenceModel.Model?.Bones?.AllBones?.FirstOrDefault(
-				b => b.Name.Contains( "thigh", StringComparison.OrdinalIgnoreCase ) );
-			if ( thigh is not null )
+
+			// Full bone-state dump of the RENDER-world model (gate forensics: this world
+			// evaluates sequences differently from a bare SceneWorld; the dump names
+			// exactly which bones diverge). Written to the given folder when armed.
+			var dumpDir = Environment.GetEnvironmentVariable( "HR_RENDER_MODEL_DUMP_DIR" );
+			if ( !string.IsNullOrEmpty( dumpDir ) && sequenceModel.Model?.Bones?.AllBones is { } dumpBones )
 			{
-				var t = sequenceModel.GetBoneWorldTransform( thigh.Name );
-				Log.Info( $"[humanoid-retargeter] render-model probe '{thigh.Name}' rot={t.Rotation} "
-					+ $"time={sequenceModel.CurrentSequence.Time:0.###}" );
+				try
+				{
+					var lines = dumpBones.Select( b =>
+					{
+						var t = sequenceModel.GetBoneWorldTransform( b.Name );
+						return $"{{\"name\":\"{b.Name}\",\"rot\":[{t.Rotation.x},{t.Rotation.y},{t.Rotation.z},{t.Rotation.w}],"
+							+ $"\"pos\":[{t.Position.x},{t.Position.y},{t.Position.z}]}}";
+					} );
+					System.IO.File.WriteAllText(
+						System.IO.Path.Combine( dumpDir, $"render_model_bones_{(int)(fraction * 100)}.json" ),
+						"[" + string.Join( ",\n", lines ) + "]" );
+				}
+				catch ( Exception e )
+				{
+					Log.Info( $"[humanoid-retargeter] render-model dump failed: {e.Message}" );
+				}
 			}
 			return png;
 		}
