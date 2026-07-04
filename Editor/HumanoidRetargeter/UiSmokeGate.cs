@@ -121,7 +121,8 @@ public static class UiSmokeGate
 			&& Result.windowConstructed && Result.optionsPlumbingOk
 			&& Result.locomotionSmartDisableOk
 			&& Result.dlSolverOk && Result.citizenTargetOk
-			&& (!Result.augmentMode || Result.augmentOk);
+			&& (!Result.augmentMode || Result.augmentOk)
+			&& (!Result.customMode || Result.customOk);
 		Flush();
 		Note( $"UI smoke gate finished, passed={Result.passed}" );
 
@@ -394,6 +395,26 @@ public static class UiSmokeGate
 			}
 			Result.previewWidgetOk &= Result.previewGhostOk;
 
+			// Wireframe-skeleton view (the dialog's "Skeleton" toggle): switching over must
+			// draw the retargeted pose as stick bones, switching back must re-show the model.
+			try
+			{
+				preview.SkeletonOnly = true;
+				preview.ApplyCurrentFrame();
+				var lines = preview.SkeletonLineCount;
+				preview.SkeletonOnly = false;
+				preview.ApplyCurrentFrame();
+				Result.previewSkeletonViewOk = lines > 0 && !preview.SkeletonOnly;
+				Note( $"skeleton view: lines={lines} backToSkinned={!preview.SkeletonOnly} "
+					+ $"ok={Result.previewSkeletonViewOk}" );
+			}
+			catch ( Exception e )
+			{
+				Result.previewSkeletonViewOk = false;
+				Note( $"skeleton view FAILED: {e}" );
+			}
+			Result.previewWidgetOk &= Result.previewSkeletonViewOk;
+
 			// Axis-conversion assertions (Y-up cm rig → Z-up inch engine model). Without the
 			// conversion the preview lies on its back; these pin it upright.
 			if ( preview.HasModel )
@@ -596,10 +617,377 @@ public static class UiSmokeGate
 			+ $"additiveSequenceVisible={Result.additiveSequenceVisible}" );
 		Flush();
 
+		// ---- 8.5 custom-target repro (HR_UI_SMOKE_CUSTOM) ------------------------
+		// User report (2026-07-04): custom vmdl / custom FBX targets show no model in the
+		// preview and their converted animations play NOTHING in ModelDoc (the shipped
+		// citizen/human presets work). Reproduces both picker flows headlessly.
+		if ( Environment.GetEnvironmentVariable( "HR_UI_SMOKE_CUSTOM" ) == "1" )
+			await RunCustomTargetAsync( stepsEntry ?? entry, fixture, write );
+
 		// ---- 9. augment mode: the EXACT Convert-All window path -----------------
 		var augmentTarget = Environment.GetEnvironmentVariable( "HR_UI_SMOKE_AUGMENT" );
 		if ( !string.IsNullOrWhiteSpace( augmentTarget ) )
 			await RunAugmentAsync( entry, target, augmentTarget );
+	}
+
+	/// <summary>DMX folder for the custom-target runs (separate so their writes never
+	/// re-trigger the standalone vmdl's compile).</summary>
+	const string CustomDmxFolder = OutputFolder + "/custom";
+	const string CustomFbxDmxFolder = OutputFolder + "/customfbx";
+
+	/// <summary>
+	/// Reproduces the custom-target user report end-to-end:
+	/// (a) BASELINE - drives the default-target vmdl compiled in step 7 through actual
+	///     sequence playback (SceneModel.CurrentSequence) and requires bones to move,
+	///     proving the probe methodology on the known-good path;
+	/// (b) custom MODEL target - the mounted citizen human male picked through
+	///     TargetPickers.FromModelAsset (the window's "custom model" flow, ZUpEngine):
+	///     preview widget must show the model and pose it, the converted clip must
+	///     compile and its playback must move bones AND stay upright (pelvis height
+	///     matching the solved frames - catches axis double-conversion);
+	/// (c) custom FBX target - the main fixture picked through FromFbxFile: converted
+	///     clip written + compiled, playback probed the same way.
+	/// </summary>
+	static async Task RunCustomTargetAsync(
+		SourceFileEntry motionEntry, string fixturePath, EditorPipeline.WriteResult standaloneWrite )
+	{
+		Result.customMode = true;
+		Note( $"custom-target repro: motion fixture={motionEntry.FileName}" );
+
+		// ---- (a) baseline: the default-target vmdl must actually ANIMATE ------------
+		try
+		{
+			if ( standaloneWrite?.VmdlAsset is not null && Result.clipNames.Length > 0 )
+			{
+				var baseline = Model.Load( standaloneWrite.VmdlAsset.Path );
+				var probe = ProbeSequencePlayback( baseline, Result.clipNames[0], "pelvis" );
+				Result.baselinePlaybackMoves = probe.Moved;
+				Result.baselinePlaybackDetail = probe.Detail;
+				Note( $"baseline playback: {probe.Detail} moved={probe.Moved}" );
+			}
+			else
+				Note( "baseline playback skipped: no compiled standalone vmdl" );
+		}
+		catch ( Exception e )
+		{
+			Note( $"baseline playback FAILED: {e}" );
+		}
+		Flush();
+
+		// ---- (b) custom MODEL target (FromModelAsset on the mounted citizen male) ---
+		try
+		{
+			var asset = AssetSystem.FindByPath( RetargetTargetSpec.SboxHumanMalePath );
+			if ( asset is null )
+			{
+				Note( $"custom model target: asset not found at {RetargetTargetSpec.SboxHumanMalePath}" );
+			}
+			else
+			{
+				var custom = TargetPickers.FromModelAsset( asset, out var error );
+				Result.customModelTargetResolved = custom is not null;
+				Result.customModelTargetError = error;
+				Note( $"custom model target: resolved={custom is not null} error='{error}' "
+					+ $"desc='{custom?.Description}' previewModel='{custom?.PreviewModelPath}'" );
+
+				if ( custom is not null )
+					await ProbeCustomTargetAsync( motionEntry, custom, CustomDmxFolder,
+						"ui_smoke_custom", isModelTarget: true );
+			}
+		}
+		catch ( Exception e )
+		{
+			Note( $"custom model target FAILED: {e}" );
+		}
+		Flush();
+
+		// ---- (c) custom FBX target ---------------------------------------------------
+		// HR_UI_FIXTURE_TARGETFBX should be a SKINNED humanoid FBX: the embedded
+		// RenderMeshFile is where the compiled model's bones and skin come from, and a
+		// skeleton-only animation FBX (the main fixture) embeds to an empty model.
+		try
+		{
+			var targetFbxPath = Environment.GetEnvironmentVariable( "HR_UI_FIXTURE_TARGETFBX" );
+			if ( string.IsNullOrWhiteSpace( targetFbxPath ) || !File.Exists( targetFbxPath ) )
+				targetFbxPath = fixturePath;
+			Note( $"custom fbx target fixture: {targetFbxPath}" );
+			var customFbx = TargetPickers.FromFbxFile( targetFbxPath, out var fbxError );
+			Result.customFbxTargetResolved = customFbx is not null;
+			Result.customFbxTargetError = fbxError;
+			Note( $"custom fbx target: resolved={customFbx is not null} error='{fbxError}' "
+				+ $"desc='{customFbx?.Description}' previewModel='{customFbx?.PreviewModelPath}'" );
+
+			if ( customFbx is not null )
+				await ProbeCustomTargetAsync( motionEntry, customFbx, CustomFbxDmxFolder,
+					"ui_smoke_customfbx", isModelTarget: false );
+		}
+		catch ( Exception e )
+		{
+			Note( $"custom fbx target FAILED: {e}" );
+		}
+		Flush();
+
+		Result.customOk =
+			Result.baselinePlaybackMoves
+			&& Result.customModelTargetResolved && Result.customFbxTargetResolved
+			&& Result.customModelPreviewHasModel && Result.customModelPreviewPoseOk
+			&& Result.customModelSkeletonLines > 0
+			&& Result.customModelCompiled && Result.customModelSequenceVisible
+			&& Result.customModelPlaybackMoves && Result.customModelPlaybackUpright
+			&& Result.customFbxSkeletonLines > 0
+			&& Result.customFbxCompiled && Result.customFbxSequenceVisible
+			&& Result.customFbxPlaybackMoves && Result.customFbxPlaybackUpright;
+		Note( $"custom-target repro => customOk={Result.customOk}" );
+		Flush();
+	}
+
+	/// <summary>Converts the motion fixture onto <paramref name="target"/>, probes the
+	/// PreviewWidget (model visible + posed pelvis matching the solved frame), writes +
+	/// compiles a standalone vmdl and probes actual sequence playback on the compiled
+	/// model. Fills the customModel*/customFbx* result fields.</summary>
+	static async Task ProbeCustomTargetAsync(
+		SourceFileEntry motionEntry, TargetPickers.ResolvedTarget target,
+		string dmxFolder, string vmdlName, bool isModelTarget )
+	{
+		var tag = isModelTarget ? "custom model" : "custom fbx";
+
+		// Custom FBX targets: same mesh-embed preparation the window's convert path runs
+		// (copy the FBX into the output folder + set the spec's MeshFilePath) - without it
+		// the standalone vmdl compiles into an empty model.
+		if ( !EditorPipeline.PrepareFbxTargetMesh( target, dmxFolder, out var meshError ) )
+			Note( $"{tag}: PrepareFbxTargetMesh FAILED: {meshError}" );
+		else if ( target.FbxAbsolutePath is not null )
+			Note( $"{tag}: mesh embedded as '{target.Spec.MeshFilePath}' importScale={target.Spec.MeshImportScale}" );
+
+		var request = new RetargetRequest
+		{
+			SourceData = motionEntry.Bytes,
+			SourceFileName = motionEntry.FileName,
+			SourceId = motionEntry.FilePath,
+			MappingOverride = motionEntry.Mapping,
+			RootMotion = Cleanup.RootMotionMode.Off,
+			FootPlantCleanup = true,
+			ArmEffectorIk = false,
+			LoopingOverride = null,
+		};
+		var batch = await Task.Run( () => Retargeter.ConvertBatch(
+			new[] { request }, target.Spec,
+			new BatchOptions { DmxFolderRelative = dmxFolder } ) );
+
+		var clip = batch.Clips.FirstOrDefault( c => c.Success && c.SolvedFrames is { Count: > 0 } );
+		Note( $"{tag}: convert clips={batch.Clips.Count} solved={clip is not null} "
+			+ $"errors=[{string.Join( "; ", batch.Clips.Where( c => !c.Success ).Select( c => c.Error ) )}]" );
+		if ( clip is null )
+			return;
+
+		// Expected pelvis (rig space) at a mid frame, FK'd from the solved locals.
+		var rig = target.Spec.Rig;
+		var hipsIndex = rig.BoneForRole( HumanoidRetargeter.Mapping.BoneRole.Hips ) ?? 0;
+		var pelvisName = rig.Skeleton[hipsIndex].Name;
+		var frameIndex = Math.Min( clip.SolvedFrames.Count - 1, clip.SolvedFrames.Count / 2 );
+		var rigPelvis = new HumanoidRetargeter.Skeleton.Pose( clip.SolvedFrames[frameIndex] )
+			.ToWorld( rig.Skeleton )[hipsIndex].Pos;
+		// Engine-space expectation mirrors PreviewWidget.RigWorldToEngine (Y-up rigs get
+		// the basis rotation; Z-up rigs - engine models AND Z-up FBX exports - do not).
+		var expectedEngine = target.Spec.UpAxis == TargetUpAxis.YUpCm
+			? new Vector3( rigPelvis.X, -rigPelvis.Z, rigPelvis.Y ) * target.PreviewPositionScale
+			: new Vector3( rigPelvis.X, rigPelvis.Y, rigPelvis.Z ) * target.PreviewPositionScale;
+
+		// ---- preview widget probe ---------------------------------------------------
+		try
+		{
+			var preview = new PreviewWidget(
+				null, rig, target.PreviewModelPath, target.PreviewPositionScale, target.Spec.UpAxis );
+			var hasModel = preview.HasModel;
+			preview.SetClip( clip );
+			preview.Scrub( frameIndex );
+			preview.ApplyCurrentFrame();
+			var actual = preview.GetModelBoneTransform( pelvisName )?.Position;
+			var poseOk = actual is { } a && a.Distance( expectedEngine ) < 0.5f;
+
+			// Wireframe-skeleton view: model-less targets (custom FBX) are forced onto it -
+			// it is the entire preview for them; model targets must be able to switch.
+			preview.SkeletonOnly = true;
+			preview.ApplyCurrentFrame();
+			var skeletonLines = preview.SkeletonLineCount;
+
+			Note( $"{tag} preview: hasModel={hasModel} pelvis actual={actual} "
+				+ $"expected={expectedEngine} poseOk={poseOk} skeletonLines={skeletonLines}" );
+			if ( isModelTarget )
+			{
+				Result.customModelPreviewHasModel = hasModel;
+				Result.customModelPreviewPoseOk = poseOk;
+				Result.customModelSkeletonLines = skeletonLines;
+			}
+			else
+			{
+				Result.customFbxPreviewHasModel = hasModel;
+				Result.customFbxPreviewPoseOk = poseOk;
+				Result.customFbxSkeletonLines = skeletonLines;
+			}
+			preview.Destroy();
+		}
+		catch ( Exception e )
+		{
+			Note( $"{tag} preview FAILED: {e}" );
+		}
+		Flush();
+
+		// ---- write + compile + playback probe ----------------------------------------
+		var write = await EditorPipeline.WriteAndCompileAsync(
+			batch, dmxFolder, augmentVmdlPath: null, standaloneVmdlName: vmdlName );
+		var compiled = write.Compiled && write.VmdlAsset is not null;
+		Note( $"{tag} write+compile: vmdl={write.VmdlPath} compiled={write.Compiled} "
+			+ $"errors=[{string.Join( "; ", write.Errors )}]" );
+
+		var sequenceVisible = false;
+		var playbackMoved = false;
+		var playbackUpright = false;
+		var lateralAngle = 0f;
+		string playbackDetail = null;
+		if ( compiled )
+		{
+			var model = Model.Load( write.VmdlAsset.Path );
+			var names = model?.AnimationNames?.ToArray() ?? Array.Empty<string>();
+			sequenceVisible = model is not null && !model.IsError
+				&& names.Any( n => string.Equals( n, clip.ClipName, StringComparison.OrdinalIgnoreCase ) );
+			Note( $"{tag} compiled model: error={model?.IsError} bones={model?.BoneCount} "
+				+ $"anims=[{string.Join( ", ", names )}] sequenceVisible={sequenceVisible}" );
+
+			if ( model is not null && !model.IsError )
+			{
+				var legL = rig.BoneForRole( HumanoidRetargeter.Mapping.BoneRole.UpperLegL );
+				var legR = rig.BoneForRole( HumanoidRetargeter.Mapping.BoneRole.UpperLegR );
+				var probe = ProbeSequencePlayback( model, clip.ClipName, pelvisName,
+					legL is { } l ? rig.Skeleton[l].Name : null,
+					legR is { } r ? rig.Skeleton[r].Name : null );
+				playbackMoved = probe.Moved;
+				playbackDetail = probe.Detail;
+				// Upright check: compiled pelvis height must match the solved frames
+				// (an axis double-conversion lays the character down / buries it).
+				playbackUpright = probe.PelvisMid is { } mid
+					&& MathF.Abs( mid.z - expectedEngine.z ) < 3f;
+
+				// Axis diagnostic (informational, not gated): angle between the compiled
+				// mid-frame hip line and the SOLVED mid frame's (engine-converted). A
+				// GLOBAL yaw here is benign - the skin follows the bones, the character
+				// just faces a different compass direction (the compiler's Z-up handling
+				// includes one); per-bone axis garbage is caught by upright + preview-pose.
+				if ( probe.HipLineMid is { } actualHip && legL is { } el && legR is { } er )
+				{
+					var world = new HumanoidRetargeter.Skeleton.Pose( clip.SolvedFrames[frameIndex] )
+						.ToWorld( rig.Skeleton );
+					var rigHip = world[el].Pos - world[er].Pos;
+					var expectedHip = target.Spec.UpAxis == TargetUpAxis.YUpCm
+						? new Vector3( rigHip.X, -rigHip.Z, rigHip.Y )
+						: new Vector3( rigHip.X, rigHip.Y, rigHip.Z );
+					var a = actualHip.WithZ( 0 );
+					var e2 = expectedHip.WithZ( 0 );
+					if ( a.Length > 0.1f && e2.Length > 0.1f )
+					{
+						var dot = Math.Clamp( a.Normal.Dot( e2.Normal ), -1f, 1f );
+						lateralAngle = MathX.RadianToDegree( MathF.Acos( dot ) );
+					}
+				}
+
+				Note( $"{tag} playback: {probe.Detail} moved={probe.Moved} "
+					+ $"pelvisMid={probe.PelvisMid} expectedZ={expectedEngine.z:0.##} upright={playbackUpright} "
+					+ $"solvedVsCompiledHipLine={lateralAngle:0.#}deg" );
+			}
+		}
+
+		if ( isModelTarget )
+		{
+			Result.customModelCompiled = compiled;
+			Result.customModelSequenceVisible = sequenceVisible;
+			Result.customModelPlaybackMoves = playbackMoved;
+			Result.customModelPlaybackUpright = playbackUpright;
+			Result.customModelPlaybackDetail = playbackDetail;
+			Result.customModelSolvedVsCompiledHipDeg = lateralAngle;
+			Result.customModelWriteErrors = write.Errors.ToArray();
+		}
+		else
+		{
+			Result.customFbxCompiled = compiled;
+			Result.customFbxSequenceVisible = sequenceVisible;
+			Result.customFbxPlaybackMoves = playbackMoved;
+			Result.customFbxPlaybackUpright = playbackUpright;
+			Result.customFbxPlaybackDetail = playbackDetail;
+			Result.customFbxSolvedVsCompiledHipDeg = lateralAngle;
+			Result.customFbxWriteErrors = write.Errors.ToArray();
+		}
+		Flush();
+	}
+
+	/// <summary>Drives a compiled sequence directly (SceneModel.CurrentSequence - the same
+	/// mechanism ModelDoc playback uses) and measures whether any bone actually moves
+	/// between t=0 and the sequence midpoint. When <paramref name="lateralBoneL"/>/<paramref name="lateralBoneR"/>
+	/// are given (the rig's upper legs), additionally returns the mid-frame hip line
+	/// (L−R, engine space) - the caller compares it against the SOLVED frames' hip line at
+	/// the same normalized time to prove the compiled animation plays in the axes the
+	/// solver produced (a ~90° disagreement is the Z-up mismatch class).</summary>
+	static (bool Moved, string Detail, Vector3? PelvisMid, Vector3? HipLineMid) ProbeSequencePlayback(
+		Model model, string sequenceName, string pelvisName,
+		string lateralBoneL = null, string lateralBoneR = null )
+	{
+		SceneWorld world = null;
+		SceneModel sceneModel = null;
+		try
+		{
+			world = new SceneWorld();
+			sceneModel = new SceneModel( world, model, Transform.Zero );
+			sceneModel.UseAnimGraph = false;
+			var boneCount = model.BoneCount;
+			sceneModel.CurrentSequence.Name = sequenceName;
+			var duration = sceneModel.CurrentSequence.Duration;
+
+			Vector3[] Sample( float time )
+			{
+				sceneModel.CurrentSequence.Time = time;
+				sceneModel.Update( 0.001f );
+				var positions = new Vector3[boneCount];
+				for ( var i = 0; i < boneCount; i++ )
+					positions[i] = sceneModel.GetBoneWorldTransform( i ).Position;
+				return positions;
+			}
+
+			var start = Sample( 0f );
+			var midTime = MathF.Max( duration * 0.5f, 0.05f );
+			var mid = Sample( midTime );
+
+			float maxDelta = 0;
+			var maxBone = -1;
+			for ( var i = 0; i < boneCount; i++ )
+			{
+				var d = start[i].Distance( mid[i] );
+				if ( d > maxDelta ) { maxDelta = d; maxBone = i; }
+			}
+
+			Vector3? pelvisMid = null;
+			var pelvisBone = model.Bones?.GetBone( pelvisName );
+			if ( pelvisBone is not null )
+				pelvisMid = mid[pelvisBone.Index];
+
+			Vector3? hipLineMid = null;
+			var boneL = lateralBoneL is not null ? model.Bones?.GetBone( lateralBoneL ) : null;
+			var boneR = lateralBoneR is not null ? model.Bones?.GetBone( lateralBoneR ) : null;
+			if ( boneL is not null && boneR is not null )
+				hipLineMid = mid[boneL.Index] - mid[boneR.Index];
+
+			var detail = $"seq='{sequenceName}' duration={duration:0.###}s bones={boneCount} "
+				+ $"maxDelta={maxDelta:0.###}in (bone "
+				+ $"{(maxBone >= 0 ? model.Bones.AllBones.ElementAtOrDefault( maxBone )?.Name ?? maxBone.ToString() : "none")})";
+			return (maxDelta > 0.5f, detail, pelvisMid, hipLineMid);
+		}
+		catch ( Exception e )
+		{
+			return (false, $"playback probe threw: {e.Message}", null, null);
+		}
+		finally
+		{
+			sceneModel?.Delete();
+			world?.Delete();
+		}
 	}
 
 	/// <summary>Assets-relative DMX folder for the augment run (separate from the
@@ -1003,6 +1391,38 @@ public static class UiSmokeGate
 		public bool augmentOnMainThreadAfter { get; set; }
 		public string[] augmentWriteErrors { get; set; } = Array.Empty<string>();
 		public bool augmentOk { get; set; }
+
+		public bool previewSkeletonViewOk { get; set; }
+
+		// custom-target repro (HR_UI_SMOKE_CUSTOM)
+		public bool customMode { get; set; }
+		public bool baselinePlaybackMoves { get; set; }
+		public string baselinePlaybackDetail { get; set; }
+		public bool customModelTargetResolved { get; set; }
+		public string customModelTargetError { get; set; }
+		public bool customModelPreviewHasModel { get; set; }
+		public bool customModelPreviewPoseOk { get; set; }
+		public int customModelSkeletonLines { get; set; }
+		public bool customModelCompiled { get; set; }
+		public bool customModelSequenceVisible { get; set; }
+		public bool customModelPlaybackMoves { get; set; }
+		public bool customModelPlaybackUpright { get; set; }
+		public float customModelSolvedVsCompiledHipDeg { get; set; }
+		public string customModelPlaybackDetail { get; set; }
+		public string[] customModelWriteErrors { get; set; } = Array.Empty<string>();
+		public bool customFbxTargetResolved { get; set; }
+		public string customFbxTargetError { get; set; }
+		public bool customFbxPreviewHasModel { get; set; }
+		public bool customFbxPreviewPoseOk { get; set; }
+		public int customFbxSkeletonLines { get; set; }
+		public bool customFbxCompiled { get; set; }
+		public bool customFbxSequenceVisible { get; set; }
+		public bool customFbxPlaybackMoves { get; set; }
+		public bool customFbxPlaybackUpright { get; set; }
+		public float customFbxSolvedVsCompiledHipDeg { get; set; }
+		public string customFbxPlaybackDetail { get; set; }
+		public string[] customFbxWriteErrors { get; set; } = Array.Empty<string>();
+		public bool customOk { get; set; }
 
 		public bool refusedWrongProject { get; set; }
 		public bool completed { get; set; }
