@@ -800,12 +800,14 @@ public static class Retargeter
     /// <summary>
     /// Unmapped bone subtrees OUTSIDE the mapped skeleton (no mapped ancestor — cloth and
     /// physics helpers parented to the scene root; real case: a skirt of 48 kilt bones on
-    /// a Sketchfab catgirl, siblings of the body root) ride the HIPS rigidly. Left at
-    /// their rest locals they freeze at the bind spot while the body animates away
+    /// a Sketchfab catgirl, siblings of the body root) ride the character rigidly. Left
+    /// at their rest locals they freeze at the bind spot while the body animates away
     /// ("one part of the body doesn't move at all") and the mesh skinned across the
-    /// boundary shears ("completely stretched"). Only each subtree's topmost bone is
-    /// re-anchored — its descendants ride along on their rest locals. Bones on the
-    /// hips' own ancestor path stay solver-owned (trajectory).
+    /// boundary shears ("completely stretched"). Each subtree's topmost bone anchors to
+    /// the HIPS — or to an extremity (hand/foot/head) when its rest sits clearly closer
+    /// to it (a sword resting in the hand follows the hand, not the pelvis). Descendants
+    /// ride along on their rest locals; bones on the hips' own ancestor path stay
+    /// solver-owned (trajectory).
     /// </summary>
     private static void FollowHipsWithOrphanBones(
         TargetRig rig, List<XForm[]> frames, MappingReportInfo report)
@@ -828,39 +830,82 @@ public static class Retargeter
             return false;
         }
 
+        var rest = skeleton.RestWorld;
+
+        // Extremity anchors: adopted only when the orphan rests at less than half its
+        // hips distance — near-torso helpers (skirts, tails, capes) stay on the hips,
+        // which never mistakes a skirt panel brushing a thigh for hand luggage.
+        var extremities = new List<int>();
+        foreach (var role in new[]
+        {
+            BoneRole.HandL, BoneRole.HandR, BoneRole.FootL, BoneRole.FootR, BoneRole.Head,
+        })
+        {
+            if (rig.BoneForRole(role) is { } bone)
+                extremities.Add(bone);
+        }
+
         // Topmost orphans: unmapped, off the hips' ancestor path, no mapped ancestor,
         // and the parent is either the scene root path or absent (children of deeper
         // orphans ride along unchanged).
-        var tops = new List<int>();
+        var tops = new List<(int Bone, int Anchor)>();
         for (var i = 0; i < skeleton.Count; i++)
         {
             if (rig.RoleOf(i) is not null || hipsPath.Contains(i) || HasMappedAncestor(i))
                 continue;
             var parent = skeleton[i].ParentIndex;
-            if (parent < 0 || hipsPath.Contains(parent))
-                tops.Add(i);
+            if (parent >= 0 && !hipsPath.Contains(parent))
+                continue;
+
+            var anchor = hips;
+            var hipsDistance = (rest[i].Pos - rest[hips].Pos).Length();
+            var best = hipsDistance * 0.5f;
+            foreach (var candidate in extremities)
+            {
+                var distance = (rest[i].Pos - rest[candidate].Pos).Length();
+                if (distance < best)
+                {
+                    best = distance;
+                    anchor = candidate;
+                }
+            }
+            tops.Add((i, anchor));
         }
         if (tops.Count == 0)
             return;
 
-        var rest = skeleton.RestWorld;
-        var hipsRestInverse = rest[hips].Inverse();
+        var anchorRestInverse = new Dictionary<int, XForm>();
+        foreach (var (_, anchor) in tops)
+            anchorRestInverse[anchor] = rest[anchor].Inverse();
+
         foreach (var frame in frames)
         {
             var world = new Skeleton.Pose(frame).ToWorld(skeleton);
-            var hipsDelta = XForm.Compose(world[hips], hipsRestInverse);
-            foreach (var top in tops)
+            foreach (var (top, anchor) in tops)
             {
+                var delta = XForm.Compose(world[anchor], anchorRestInverse[anchor]);
                 var parent = skeleton[top].ParentIndex;
                 var parentWorld = parent >= 0 ? world[parent] : XForm.Identity;
                 frame[top] = XForm.ToLocal(
-                    parentWorld, XForm.Compose(hipsDelta, rest[top]));
+                    parentWorld, XForm.Compose(delta, rest[top]));
             }
         }
         AddNote(report,
-            $"{tops.Count} helper bone subtree(s) outside the mapped skeleton ride the hips "
-            + "(cloth/physics bones would otherwise freeze at their bind position).");
+            $"{tops.Count} helper bone subtree(s) outside the mapped skeleton ride the "
+            + "character (cloth/physics/prop bones would otherwise freeze at their bind position).");
     }
+
+    /// <summary>Test seam for <see cref="FollowHipsWithOrphanBones"/>.</summary>
+    public static void TestHook_FollowOrphans(TargetRig rig, List<XForm[]> frames)
+        => FollowHipsWithOrphanBones(rig, frames, new MappingReportInfo
+        {
+            ProfileName = "test",
+            Source = MappingSource.Manual,
+            Confidence = 1f,
+            NeedsUserDecision = false,
+            MappedRoleCount = 0,
+            SkeletonSignature = "",
+        });
 
     /// <summary>
     /// <see cref="RetargetRequest.PreserveSourceTranslations"/>: per-frame source local
