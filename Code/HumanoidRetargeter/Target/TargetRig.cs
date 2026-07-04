@@ -27,7 +27,8 @@ public sealed class TargetRig
     private readonly Vector3?[]? _tailWorld;
 
     private TargetRig(string name, SkeletonModel skeleton, BoneClass[] classes, BoneRole?[] roles,
-        Dictionary<BoneRole, int> boneByRole, Vector3?[]? tailWorld = null)
+        Dictionary<BoneRole, int> boneByRole, Vector3?[]? tailWorld = null,
+        bool helpersAreConstraintDriven = true)
     {
         Name = name;
         Skeleton = skeleton;
@@ -35,10 +36,22 @@ public sealed class TargetRig
         _roles = roles;
         _boneByRole = boneByRole;
         _tailWorld = tailWorld;
+        HelpersAreConstraintDriven = helpersAreConstraintDriven;
     }
 
     /// <summary>Rig name (e.g. <c>sbox_human_male</c>).</summary>
     public string Name { get; }
+
+    /// <summary>
+    /// True when the target model's own vmdl re-drives the
+    /// <see cref="BoneClass.ConstraintDriven"/> helpers at runtime (the shipped s&amp;box
+    /// rigs: their AnimConstraintList drives twist/helper bones, so clips exclude those
+    /// channels). False for rigs built from plain skeletons
+    /// (<see cref="FromSkeleton"/> — custom FBX targets): the generated vmdl carries NO
+    /// constraints, so twist-named bones must keep baked channels or they freeze at rest
+    /// (candy-wrapped wrists on an Auto-Rig Pro export).
+    /// </summary>
+    public bool HelpersAreConstraintDriven { get; }
 
     /// <summary>The target skeleton (rest pose in centimeters, parents before children).</summary>
     public SkeletonModel Skeleton { get; }
@@ -190,7 +203,10 @@ public sealed class TargetRig
         for (var i = 0; i < skeleton.Count; i++)
             classes[i] = roles[i] is not null ? BoneClass.Animated : rules.Classify(skeleton[i].Name);
 
-        return new TargetRig(map.ProfileName, skeleton, classes, roles, boneByRole);
+        // No curated vmdl backs this rig: whatever we generate for it carries no
+        // AnimConstraintList, so its helper bones need real baked channels.
+        return new TargetRig(map.ProfileName, skeleton, classes, roles, boneByRole,
+            tailWorld: null, helpersAreConstraintDriven: false);
     }
 
 }

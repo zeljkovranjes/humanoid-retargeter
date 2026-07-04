@@ -609,8 +609,12 @@ public static class Retargeter
                 // bind in the DMX but get NO channels — the model's AnimConstraintList
                 // drives them. Face bones are exempt from the exclusion (rest-local
                 // channels): nothing drives them in a compiled sequence, and channel-less
-                // face joints bake statically (eyes out of sockets in ModelDoc).
-                ChannelExcludedBones = context.ConstraintDrivenBones,
+                // face joints bake statically (eyes out of sockets in ModelDoc). Custom
+                // rigs (FromSkeleton) have NO constraint list — their helpers keep baked
+                // channels or twist bones freeze (candy-wrapped wrists).
+                ChannelExcludedBones = target.Rig.HelpersAreConstraintDriven
+                    ? context.ConstraintDrivenBones
+                    : null,
                 UpAxisY = target.UpAxis == TargetUpAxis.YUpCm,
             });
 
@@ -776,6 +780,14 @@ public static class Retargeter
         // ---- IK helper bones (root_IK, IK targets, ikrule) need real baked channels ----
         if (context.HasIkBakedBones)
             IkBoneBaker.Bake(frames, target.Rig);
+
+        // ---- unmapped limb twist bones follow their joint's roll ------------------------
+        // (on shipped s&box rigs the model's own AnimConstraintList owns those instead)
+        var twistCount = TwistBoneFollow.Apply(frames, target.Rig,
+            target.Rig.HelpersAreConstraintDriven ? context.ConstraintDrivenBones : null);
+        if (twistCount > 0)
+            AddNote(report, $"{twistCount} limb twist bone(s) follow their joint's roll "
+                + "(left at rest they candy-wrap the skin at wrists/knees).");
 
         // ---- orphan helper bones ride the hips (LAST: anchored to the FINAL hips, after
         // foot-plant pinning / root motion have settled the trajectory) -------------------
