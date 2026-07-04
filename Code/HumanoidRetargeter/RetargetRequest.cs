@@ -256,6 +256,16 @@ public sealed class RetargetTargetSpec
     /// </summary>
     public IReadOnlyDictionary<string, string>? MaterialRemaps { get; set; }
 
+    /// <summary>
+    /// Additional AnimFile entries appended to generated/augmented vmdls verbatim —
+    /// the target FBX's OWN embedded animations (an FBX with an animation on it must keep
+    /// that animation when new ones are retargeted onto it; the AnimFile references the
+    /// FBX directly, exactly like the shipped citizen animation list references its
+    /// Citizen@*.fbx files, so the import is lossless). Augmentation skips entries the
+    /// existing vmdl already carries (idempotent re-runs). Null/empty = none (default).
+    /// </summary>
+    public IReadOnlyList<Target.AnimEntry>? ExtraAnimFiles { get; set; }
+
     /// <summary>default_root_bone_name of the generated AnimationList (also the bone vmdl
     /// ExtractMotion nodes operate on).</summary>
     public string DefaultRootBone { get; init; } = "pelvis";

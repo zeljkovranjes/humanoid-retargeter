@@ -135,6 +135,20 @@ public static class Retargeter
                 locomotionSets = sets;
         }
 
+        // The target's OWN embedded animations ride along every generated vmdl (an FBX
+        // picked as target keeps its animation next to the retargeted ones). Skipped when
+        // a same-named entry is already registered (idempotent re-runs / augment targets
+        // that carry them from an earlier conversion); the retargeted clips claimed their
+        // names first, so an embedded take never displaces a converted clip.
+        if (target.ExtraAnimFiles is { Count: > 0 })
+        {
+            foreach (var extra in target.ExtraAnimFiles)
+            {
+                if (usedNames.Add(extra.Name))
+                    entries.Add(extra);
+            }
+        }
+
         result.StandaloneVmdl = VmdlWriter.GenerateStandalone(
             target.BaseModelPath, entries, target.VmdlScale, target.DefaultRootBone,
             locomotionSets, target.MeshFilePath, target.MeshImportScale, target.MaterialRemaps);
