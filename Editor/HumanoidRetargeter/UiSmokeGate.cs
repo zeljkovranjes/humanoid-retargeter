@@ -755,11 +755,16 @@ public static class UiSmokeGate
 					"ui_smoke_customfbx", isModelTarget: false );
 
 				// Auto-generated vmats: the mesh compiles of this leg must not report any
-				// 'Missing vmat' (the auto-vmat generation writes one per FBX material).
-				Result.customFbxMissingVmats = (EditorPipeline.ReadLogSlice( fbxLogOffset ) ?? "")
-					.Split( '\n' )
+				// 'Missing vmat' (the auto-vmat generation writes one per FBX material),
+				// and the renderer must not spam unresolved-vtex lookups (unregistered
+				// textures - the per-frame retry behind the user's 2 fps preview).
+				var fbxSlice = EditorPipeline.ReadLogSlice( fbxLogOffset ) ?? "";
+				Result.customFbxMissingVmats = fbxSlice.Split( '\n' )
 					.Count( l => l.Contains( "Missing vmat", StringComparison.OrdinalIgnoreCase ) );
-				Note( $"custom fbx missing-vmat lines: {Result.customFbxMissingVmats}" );
+				Result.customFbxTextureSpamLines = fbxSlice.Split( '\n' )
+					.Count( l => l.Contains( "doesn't know about texture", StringComparison.OrdinalIgnoreCase ) );
+				Note( $"custom fbx missing-vmat lines: {Result.customFbxMissingVmats} "
+					+ $"unresolved-vtex lines: {Result.customFbxTextureSpamLines}" );
 			}
 		}
 		catch ( Exception e )
@@ -773,16 +778,46 @@ public static class UiSmokeGate
 			&& Result.customModelTargetResolved && Result.customFbxTargetResolved
 			&& Result.customModelPreviewHasModel && Result.customModelPreviewPoseOk
 			&& Result.customModelSkeletonLines > 0 && Result.customModelSkeletonPixels > 30
+			&& Result.customModelNoWildBones && Result.customFbxNoWildBones
 			&& Result.customModelCompiled && Result.customModelSequenceVisible
 			&& Result.customModelPlaybackMoves && Result.customModelPlaybackUpright
 			&& Result.customFbxSkeletonLines > 0 && Result.customFbxSkeletonPixels > 30
 			&& Result.customFbxPreviewModelCompiled && Result.customFbxPreviewHasModel
 			&& Result.customFbxPreviewPoseOk
 			&& Result.customFbxMissingVmats == 0
+			// Texture ground truth on the rendered pixels: no error material anywhere,
+			// real chromatic (textured) surface present (calibrated on a real character
+			// with a monochrome outfit: skin tones measure ~130 chromatic pixels; an
+			// all-placeholder or error-material render measures ~0), no unresolved-vtex
+			// render spam.
+			&& Result.customFbxErrorPixels == 0 && Result.customFbxColoredPixels > 60
+			&& Result.customFbxTextureSpamLines == 0
 			&& Result.customFbxCompiled && Result.customFbxSequenceVisible
-			&& Result.customFbxPlaybackMoves && Result.customFbxPlaybackUpright;
+			&& Result.customFbxPlaybackMoves && Result.customFbxPlaybackUpright
+			&& Result.customFbxEmbeddedVisible && Result.customFbxEmbeddedMoves;
 		Note( $"custom-target repro => customOk={Result.customOk}" );
 		Flush();
+	}
+
+	/// <summary>Saves a preview render next to the result JSON (preview_dumps/) so the
+	/// harness can LOOK at what the user sees - texture resolution, overlay shapes, hand
+	/// posture are all visual complaints pixel counts cannot diagnose.</summary>
+	static void DumpPreviewRender( PreviewWidget preview, string name )
+	{
+		try
+		{
+			var png = preview.RenderToPng();
+			if ( png is null )
+				return;
+			var directory = Path.Combine( Path.GetDirectoryName( _resultPath ), "preview_dumps" );
+			Directory.CreateDirectory( directory );
+			File.WriteAllBytes( Path.Combine( directory, name + ".png" ), png );
+			Note( $"preview render dumped: preview_dumps/{name}.png" );
+		}
+		catch ( Exception e )
+		{
+			Note( $"preview render dump failed ({name}): {e.Message}" );
+		}
 	}
 
 	/// <summary>Converts the motion fixture onto <paramref name="target"/>, probes the
@@ -849,6 +884,52 @@ public static class UiSmokeGate
 			var actual = preview.GetModelBoneTransform( pelvisName )?.Position;
 			var poseOk = actual is { } a && a.Distance( expectedEngine ) < 0.5f;
 
+			// No bone may sit farther from the pelvis than ~3 character heights: exploded
+			// FK (world-as-local bind transforms) kept the pelvis exactly right while the
+			// head compounded to 220in away - pelvis-only asserts can never catch it.
+			var wildRadius = MathF.Max( 150f, expectedEngine.z * 3f );
+			var wildReport = hasModel ? preview.WildBoneReport( pelvisName, wildRadius ) : "(no model)";
+			var wildOk = !hasModel || wildReport == "(none)";
+			if ( hasModel )
+				Note( $"{tag} wild bones (>{wildRadius:0}in from pelvis): {wildReport}" );
+
+			// TEXTURE CORRECTNESS, asserted on the FINAL RENDERED PIXELS (the fool-proof
+			// ground truth): no error-magenta anywhere, and a real amount of chromatic
+			// (textured) surface - a placeholder-gray or error-material model fails both.
+			var errorPixels = 0;
+			var coloredPixels = 0;
+			if ( hasModel )
+			{
+				try
+				{
+					errorPixels = preview.CountRenderedPixels(
+						c => c.r > 0.7f && c.b > 0.7f && c.g < 0.35f );
+					coloredPixels = preview.CountRenderedPixels(
+						c => MathF.Abs( c.r - c.g ) + MathF.Abs( c.g - c.b ) > 0.15f );
+				}
+				catch ( Exception e )
+				{
+					Note( $"{tag} texture pixel probe threw: {e.Message}" );
+				}
+			}
+			DumpPreviewRender( preview, $"{vmdlName}_skinned" );
+
+			// Source ghost with THIS motion fixture (user reports "two bars" instead of a
+			// skeleton) - rendered for visual diagnosis alongside the pose asserts.
+			try
+			{
+				preview.SetSourceGhost( motionEntry.Scene.Skeleton, motionEntry.Scene.Clips[0],
+					motionEntry.Mapping );
+				preview.ShowSourceGhost = true;
+				preview.ApplyCurrentFrame();
+				DumpPreviewRender( preview, $"{vmdlName}_ghost" );
+				preview.ShowSourceGhost = false;
+			}
+			catch ( Exception e )
+			{
+				Note( $"{tag} ghost dump failed: {e.Message}" );
+			}
+
 			// Wireframe-skeleton view: model targets must be able to switch onto it (for
 			// FBX targets it is the fallback while the preview model compiles). Verified at
 			// the PIXEL level - line counts cannot see a missing line material (user
@@ -866,16 +947,21 @@ public static class UiSmokeGate
 			{
 				Note( $"{tag} skeleton pixel probe threw: {e.Message}" );
 			}
+			DumpPreviewRender( preview, $"{vmdlName}_skeleton" );
+			Note( $"{tag} skeleton geometry: {preview.SkeletonDebug}" );
+			preview.SkeletonOnly = false;
+			preview.ApplyCurrentFrame();
 
 			Note( $"{tag} preview: hasModel={hasModel} pelvis actual={actual} "
 				+ $"expected={expectedEngine} poseOk={poseOk} skeletonLines={skeletonLines} "
-				+ $"skeletonPixels={skeletonPixels}" );
+				+ $"skeletonPixels={skeletonPixels} errorPixels={errorPixels} coloredPixels={coloredPixels}" );
 			if ( isModelTarget )
 			{
 				Result.customModelPreviewHasModel = hasModel;
 				Result.customModelPreviewPoseOk = poseOk;
 				Result.customModelSkeletonLines = skeletonLines;
 				Result.customModelSkeletonPixels = skeletonPixels;
+				Result.customModelNoWildBones = wildOk;
 			}
 			else
 			{
@@ -883,6 +969,9 @@ public static class UiSmokeGate
 				Result.customFbxPreviewPoseOk = poseOk;
 				Result.customFbxSkeletonLines = skeletonLines;
 				Result.customFbxSkeletonPixels = skeletonPixels;
+				Result.customFbxErrorPixels = errorPixels;
+				Result.customFbxColoredPixels = coloredPixels;
+				Result.customFbxNoWildBones = wildOk;
 			}
 			preview.Destroy();
 		}
@@ -917,6 +1006,19 @@ public static class UiSmokeGate
 
 			if ( model is not null && !model.IsError )
 			{
+				// The target FBX's own embedded animations must be ON the compiled model
+				// and actually play (user: "it should have two animations").
+				if ( !isModelTarget && target.Spec.ExtraAnimFiles is { Count: > 0 } embedded )
+				{
+					Result.customFbxEmbeddedVisible = embedded.All( e =>
+						names.Any( n => string.Equals( n, e.Name, StringComparison.OrdinalIgnoreCase ) ) );
+					var embeddedProbe = ProbeSequencePlayback( model, embedded[0].Name, pelvisName );
+					Result.customFbxEmbeddedMoves = embeddedProbe.Moved;
+					Note( $"{tag} embedded animation(s) [{string.Join( ", ", embedded.Select( e => e.Name ) )}]: "
+						+ $"visible={Result.customFbxEmbeddedVisible} playback: {embeddedProbe.Detail} "
+						+ $"moved={embeddedProbe.Moved}" );
+				}
+
 				var legL = rig.BoneForRole( HumanoidRetargeter.Mapping.BoneRole.UpperLegL );
 				var legR = rig.BoneForRole( HumanoidRetargeter.Mapping.BoneRole.UpperLegR );
 				var probe = ProbeSequencePlayback( model, clip.ClipName, pelvisName,
@@ -1467,6 +1569,8 @@ public static class UiSmokeGate
 		public bool customModelPreviewPoseOk { get; set; }
 		public int customModelSkeletonLines { get; set; }
 		public int customModelSkeletonPixels { get; set; }
+		public bool customModelNoWildBones { get; set; }
+		public bool customFbxNoWildBones { get; set; }
 		public bool customModelCompiled { get; set; }
 		public bool customModelSequenceVisible { get; set; }
 		public bool customModelPlaybackMoves { get; set; }
@@ -1482,6 +1586,11 @@ public static class UiSmokeGate
 		public int customFbxSkeletonPixels { get; set; }
 		public bool customFbxPreviewModelCompiled { get; set; }
 		public int customFbxMissingVmats { get; set; }
+		public int customFbxTextureSpamLines { get; set; }
+		public int customFbxErrorPixels { get; set; }
+		public int customFbxColoredPixels { get; set; }
+		public bool customFbxEmbeddedVisible { get; set; }
+		public bool customFbxEmbeddedMoves { get; set; }
 		public bool customFbxCompiled { get; set; }
 		public bool customFbxSequenceVisible { get; set; }
 		public bool customFbxPlaybackMoves { get; set; }
