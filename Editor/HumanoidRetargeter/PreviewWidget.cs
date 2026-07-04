@@ -56,6 +56,12 @@ public sealed class PreviewWidget : SceneRenderingWidget
 	float _yaw = 35f;
 	Vector2 _lastMouse;
 
+	// ---- target skeleton wireframe (the RETARGETED pose as stick skeleton) --------------
+	SceneLineObject _skeletonLines;
+	bool _skeletonOnly;
+	Vector3 _skeletonCenter = Vector3.Up * 32f;
+	float _skeletonRadius = 40f;
+
 	// ---- source ghost (stick-skeleton overlay of the SOURCE clip) -----------------------
 	SceneLineObject _ghost;
 	SourceSkeleton _ghostSkeleton;
@@ -75,6 +81,9 @@ public sealed class PreviewWidget : SceneRenderingWidget
 	static readonly Color GhostBoneColor = new( 1f, 0.75f, 0.25f, 0.5f );   // amber, ~50%
 	static readonly Color GhostJointColor = new( 1f, 0.8f, 0.35f, 0.65f );
 
+	static readonly Color SkeletonBoneColor = new( 0.35f, 0.9f, 1f, 0.95f ); // cyan, solid
+	static readonly Color SkeletonJointColor = new( 0.6f, 1f, 1f, 1f );
+
 	/// <summary>Whether playback advances (play/pause).</summary>
 	public bool Playing { get; set; } = true;
 
@@ -89,6 +98,29 @@ public sealed class PreviewWidget : SceneRenderingWidget
 
 	/// <summary>True when a preview model could be loaded for the target.</summary>
 	public bool HasModel => _sceneModel.IsValid();
+
+	/// <summary>
+	/// Wireframe-skeleton view of the RETARGETED animation: the target skeleton drawn as
+	/// stick bones instead of (or, without a model, in place of) the skinned mesh. Targets
+	/// with no compiled preview model (custom FBX targets) force this ON — the preview used
+	/// to show nothing at all for them. Toggling back OFF restores the skinned view.
+	/// </summary>
+	public bool SkeletonOnly
+	{
+		get => _skeletonOnly || !HasModel;
+		set
+		{
+			_skeletonOnly = value;
+			if ( _sceneModel.IsValid() )
+				_sceneModel.RenderingEnabled = !SkeletonOnly;
+			if ( _skeletonLines is not null )
+				_skeletonLines.RenderingEnabled = SkeletonOnly;
+		}
+	}
+
+	/// <summary>Line segments the skeleton view drew on its last update (bones + joint
+	/// ticks). Exposed for the UI smoke gate's headless assertion.</summary>
+	public int SkeletonLineCount { get; private set; }
 
 	/// <summary>
 	/// Creates the preview scene. <paramref name="previewModelPath"/> is the compiled
@@ -135,6 +167,24 @@ public sealed class PreviewWidget : SceneRenderingWidget
 		}
 
 		_worldScratch = new XForm[rig.Skeleton.Count];
+
+		// Rest-pose bounds in engine space: camera zoom for the wireframe-skeleton view
+		// (kept fixed so the zoom doesn't pulse with the animation; the center follows).
+		var restBounds = ComputeRestBounds();
+		_skeletonCenter = restBounds.Center;
+		_skeletonRadius = MathF.Max( restBounds.Size.Length * 0.5f, 8f );
+	}
+
+	BBox ComputeRestBounds()
+	{
+		var skeleton = _rig.Skeleton;
+		if ( skeleton.Count == 0 )
+			return BBox.FromPositionAndSize( Vector3.Up * 32f, 64f );
+		var first = RigWorldToEngine( skeleton.RestWorld[0] ).Position;
+		var bounds = new BBox( first, first );
+		for ( var i = 1; i < skeleton.Count; i++ )
+			bounds = bounds.AddPoint( RigWorldToEngine( skeleton.RestWorld[i] ).Position );
+		return bounds;
 	}
 
 	/// <summary>Switches the clip being previewed (restarts playback).</summary>
@@ -198,24 +248,25 @@ public sealed class PreviewWidget : SceneRenderingWidget
 		ApplyCurrentFrame();
 	}
 
-	/// <summary>Applies the current frame's solved pose to the scene model (no-op without a
-	/// model or clip), then syncs the source ghost overlay to the same normalized time.
+	/// <summary>Applies the current frame's solved pose (no-op without a clip), then syncs
+	/// the wireframe-skeleton view and the source ghost overlay. Works with or without a
+	/// preview model — the skeleton view is all a model-less target (custom FBX) shows.
 	/// Public so the UI smoke gate can drive a frame headlessly.</summary>
 	public void ApplyCurrentFrame()
 	{
-		if ( _sceneModel.IsValid() && _clip?.SolvedFrames is { Count: > 0 } frames )
+		if ( _clip?.SolvedFrames is { Count: > 0 } frames )
 			ApplyPose( frames[Math.Clamp( CurrentFrame, 0, frames.Count - 1 )] );
 		UpdateGhost();
 	}
 
 	/// <summary>
 	/// Applies an arbitrary pose (local transforms in target-skeleton bone order) to the
-	/// scene model. Public so the UI smoke gate can drive the rig's rest pose headlessly and
-	/// assert engine-space bone positions.
+	/// scene model and the wireframe-skeleton view. Public so the UI smoke gate can drive
+	/// the rig's rest pose headlessly and assert engine-space bone positions.
 	/// </summary>
 	public void ApplyPose( XForm[] locals )
 	{
-		if ( !_sceneModel.IsValid() || locals is null )
+		if ( locals is null )
 			return;
 
 		var skeleton = _rig.Skeleton;
@@ -226,21 +277,74 @@ public sealed class PreviewWidget : SceneRenderingWidget
 			_worldScratch[i] = parent < 0 ? locals[i] : XForm.Compose( _worldScratch[parent], locals[i] );
 		}
 
-		for ( var i = 0; i < count; i++ )
+		if ( _sceneModel.IsValid() )
 		{
-			var modelBone = _rigToModelBone[i];
-			if ( modelBone < 0 )
-				continue;
+			for ( var i = 0; i < count; i++ )
+			{
+				var modelBone = _rigToModelBone[i];
+				if ( modelBone < 0 )
+					continue;
 
-			_sceneModel.SetBoneOverride( modelBone, RigWorldToEngine( _worldScratch[i] ) );
+				_sceneModel.SetBoneOverride( modelBone, RigWorldToEngine( _worldScratch[i] ) );
+			}
+
+			// Flush the overrides into the model's bone state NOW: SetBoneOverride only takes
+			// effect on the model's next Update, so without this the rendered pose lags one
+			// frame and headless readers (the UI smoke gate's GetModelBoneTransform asserts)
+			// would read the previous pose. Verified empirically: before the flush the gate read
+			// the bind pose back; with it, the overridden pose.
+			_sceneModel.Update( 0f );
 		}
 
-		// Flush the overrides into the model's bone state NOW: SetBoneOverride only takes
-		// effect on the model's next Update, so without this the rendered pose lags one
-		// frame and headless readers (the UI smoke gate's GetModelBoneTransform asserts)
-		// would read the previous pose. Verified empirically: before the flush the gate read
-		// the bind pose back; with it, the overridden pose.
-		_sceneModel.Update( 0f );
+		UpdateSkeletonLines( count );
+	}
+
+	/// <summary>Redraws the wireframe-skeleton view from the freshly FK'd pose: parent→child
+	/// bone segments plus joint ticks, engine-space, and moves the model-less camera anchor
+	/// with the posed bounds (fixed rest-pose zoom so it doesn't pulse).</summary>
+	void UpdateSkeletonLines( int count )
+	{
+		if ( _skeletonLines is null )
+		{
+			_skeletonLines = new SceneLineObject( Scene.SceneWorld );
+			_skeletonLines.Opaque = false;
+			_skeletonLines.Lighting = false;
+		}
+		_skeletonLines.RenderingEnabled = SkeletonOnly;
+		if ( !SkeletonOnly )
+			return;
+
+		var skeleton = _rig.Skeleton;
+		_skeletonLines.Clear();
+		SkeletonLineCount = 0;
+		var min = new Vector3( float.MaxValue );
+		var max = new Vector3( float.MinValue );
+		for ( var i = 0; i < count; i++ )
+		{
+			var pos = RigWorldToEngine( _worldScratch[i] ).Position;
+			min = Vector3.Min( min, pos );
+			max = Vector3.Max( max, pos );
+
+			var parent = skeleton[i].ParentIndex;
+			if ( parent >= 0 && parent < count )
+			{
+				var parentPos = RigWorldToEngine( _worldScratch[parent] ).Position;
+				_skeletonLines.StartLine();
+				_skeletonLines.AddLinePoint( parentPos, SkeletonBoneColor, 0.6f );
+				_skeletonLines.AddLinePoint( pos, SkeletonBoneColor, 0.6f );
+				_skeletonLines.EndLine();
+				SkeletonLineCount++;
+			}
+
+			_skeletonLines.StartLine();
+			_skeletonLines.AddLinePoint( pos - Vector3.Up * 0.4f, SkeletonJointColor, 1.1f );
+			_skeletonLines.AddLinePoint( pos + Vector3.Up * 0.4f, SkeletonJointColor, 1.1f );
+			_skeletonLines.EndLine();
+			SkeletonLineCount++;
+		}
+
+		if ( count > 0 )
+			_skeletonCenter = (min + max) * 0.5f;
 	}
 
 	/// <summary>
@@ -513,14 +617,13 @@ public sealed class PreviewWidget : SceneRenderingWidget
 		// anchored at the scene origin, so clips that start offset or travel (BVH mocap
 		// especially) would walk out of a frame built from it. SceneObject.Bounds follows
 		// the current pose; the bind-pose SIZE is kept for the zoom so it doesn't pulse
-		// with the animation (arms out ≠ zoom out).
-		var center = _sceneModel.IsValid()
-			? _sceneModel.Bounds.Center
-			: Vector3.Up * 32f;
-		var sizeBounds = _sceneModel.IsValid()
-			? _sceneModel.Model.Bounds
-			: BBox.FromPositionAndSize( Vector3.Up * 32f, 64f );
-		var radius = MathF.Max( sizeBounds.Size.Length * 0.5f, 8f );
+		// with the animation (arms out ≠ zoom out). In the wireframe-skeleton view (and
+		// for model-less targets) the same policy runs off the FK'd skeleton instead.
+		var useModelBounds = _sceneModel.IsValid() && !SkeletonOnly;
+		var center = useModelBounds ? _sceneModel.Bounds.Center : _skeletonCenter;
+		var radius = useModelBounds
+			? MathF.Max( _sceneModel.Model.Bounds.Size.Length * 0.5f, 8f )
+			: _skeletonRadius;
 		var distance = MathX.SphereCameraDistance( radius, Camera.FieldOfView ) * 1.05f;
 
 		var yawRad = MathX.DegreeToRadian( _yaw );

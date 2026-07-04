@@ -20,6 +20,7 @@ public sealed class PreviewDialog : Dialog
 	readonly Label _frameLabel;
 	readonly Button _playButton;
 	readonly Button _ghostButton;
+	readonly Button _skeletonButton;
 	readonly Checkbox _savePresetCheckbox;
 	readonly List<HumanoidRetargeter.ClipResult> _clips;
 
@@ -72,7 +73,7 @@ public sealed class PreviewDialog : Dialog
 		{
 			Layout.Add( new Label( this )
 			{
-				Text = "No compiled preview model exists for this target - the clip was solved, but cannot be shown skinned.",
+				Text = "No compiled preview model exists for this target - showing the retargeted animation as a wireframe skeleton.",
 				WordWrap = true,
 			} );
 		}
@@ -112,6 +113,24 @@ public sealed class PreviewDialog : Dialog
 			+ "root-aligned and hip-height-scaled onto the target, synced to the scrub position.";
 		_ghostButton.Enabled = _preview.HasSourceGhost;
 		_ghostButton.Clicked = () => _preview.ShowSourceGhost = _ghostButton.IsChecked;
+
+		// Wireframe-skeleton view: switches the preview between the skinned model and the
+		// retargeted animation drawn as a stick skeleton (and back). Targets with no
+		// compiled preview model are locked to the skeleton view - it is all they have.
+		_skeletonButton = transport.Add( new Button( "Skeleton", "polyline" ) { IsToggle = true, FixedHeight = 24 } );
+		if ( _preview.HasModel )
+		{
+			_skeletonButton.ToolTip = "Switch to a wireframe view of the retargeted skeleton "
+				+ "(click again to switch back to the skinned model).";
+			_skeletonButton.Clicked = () => _preview.SkeletonOnly = _skeletonButton.IsChecked;
+		}
+		else
+		{
+			_skeletonButton.IsChecked = true;
+			_skeletonButton.Enabled = false;
+			_skeletonButton.ToolTip = "No compiled model exists for this target - the wireframe "
+				+ "skeleton is the only available view.";
+		}
 
 		_preview.FrameChanged = frame =>
 		{
