@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Editor;
 using HumanoidRetargeter.Mapping;
 using HumanoidRetargeter.Maths;
@@ -57,13 +58,20 @@ public sealed class PreviewWidget : SceneRenderingWidget
 	Vector2 _lastMouse;
 
 	// ---- target skeleton wireframe (the RETARGETED pose as stick skeleton) --------------
-	SceneLineObject _skeletonLines;
+	// One SceneLineObject per skeleton CHAIN: the object holds a single polyline (every
+	// StartLine restarts it - per-bone Start/End cycles left only the last segment on
+	// screen, the user's "two bars"), and bridging disjoint segments through one strip
+	// leaks connector streaks (the line shader ignores vertex alpha). A chain - spine,
+	// each limb, each finger - IS a connected polyline, so this is the supported usage.
+	readonly List<SceneLineObject> _skeletonChainObjects = new();
+	int[][] _skeletonChains;
 	bool _skeletonOnly;
 	Vector3 _skeletonCenter = Vector3.Up * 32f;
 	float _skeletonRadius = 40f;
 
 	// ---- source ghost (stick-skeleton overlay of the SOURCE clip) -----------------------
-	SceneLineObject _ghost;
+	readonly List<SceneLineObject> _ghostChainObjects = new();
+	int[][] _ghostChains;
 	SourceSkeleton _ghostSkeleton;
 	SourceClip _ghostClip;
 	XForm[] _ghostScratch;
@@ -118,6 +126,74 @@ public sealed class PreviewWidget : SceneRenderingWidget
 	/// which is what the user reported).</summary>
 	float OverlayLineWidth => MathF.Max( 1.2f, _skeletonRadius * 0.03f );
 
+	/// <summary>
+	/// Splits a skeleton hierarchy into connected CHAINS (spine, each limb, each finger):
+	/// runs of single-child bones, restarted at every branch point (the branch bone leads
+	/// each child chain so the polylines connect). Each chain renders as its own
+	/// SceneLineObject - the object holds a single polyline, so this is the only layout
+	/// that draws a full skeleton (per-segment Start/End left one segment; alpha/width
+	/// bridge tricks leak connector streaks).
+	/// </summary>
+	static int[][] BuildChains( Func<int, int> parentOf, int count )
+	{
+		var children = new List<int>[count];
+		for ( var i = 0; i < count; i++ )
+			children[i] = new List<int>();
+		var roots = new List<int>();
+		for ( var i = 0; i < count; i++ )
+		{
+			var parent = parentOf( i );
+			if ( parent < 0 || parent >= count )
+				roots.Add( i );
+			else
+				children[parent].Add( i );
+		}
+
+		var chains = new List<int[]>();
+		var stack = new Stack<List<int>>();
+		foreach ( var root in roots )
+			stack.Push( new List<int> { root } );
+		while ( stack.Count > 0 )
+		{
+			var path = stack.Pop();
+			var node = path[^1];
+			while ( children[node].Count == 1 )
+			{
+				node = children[node][0];
+				path.Add( node );
+			}
+			if ( path.Count > 1 )
+				chains.Add( path.ToArray() );
+			foreach ( var child in children[node] )
+				stack.Push( new List<int> { node, child } );
+		}
+		return chains.ToArray();
+	}
+
+	/// <summary>Grows/shrinks a chain-object pool to the chain count.</summary>
+	void EnsureChainObjects( List<SceneLineObject> pool, int count )
+	{
+		while ( pool.Count < count )
+			pool.Add( CreateLineObject() );
+		while ( pool.Count > count )
+		{
+			pool[^1].Delete();
+			pool.RemoveAt( pool.Count - 1 );
+		}
+	}
+
+	/// <summary>Redraws one chain object as a single polyline through the given points.</summary>
+	static void DrawChain( SceneLineObject lines, IReadOnlyList<Vector3> points, Color color, float width )
+	{
+		lines.Clear();
+		if ( points.Count < 2 )
+			return;
+		lines.StartLine();
+		foreach ( var point in points )
+			lines.AddLinePoint( point, color, width );
+		lines.EndLine();
+	}
+
 	/// <summary>Whether playback advances (play/pause).</summary>
 	public bool Playing { get; set; } = true;
 
@@ -147,14 +223,18 @@ public sealed class PreviewWidget : SceneRenderingWidget
 			_skeletonOnly = value;
 			if ( _sceneModel.IsValid() )
 				_sceneModel.RenderingEnabled = !SkeletonOnly;
-			if ( _skeletonLines is not null )
-				_skeletonLines.RenderingEnabled = SkeletonOnly;
+			foreach ( var chain in _skeletonChainObjects )
+				chain.RenderingEnabled = SkeletonOnly;
 		}
 	}
 
 	/// <summary>Line segments the skeleton view drew on its last update (bones + joint
 	/// ticks). Exposed for the UI smoke gate's headless assertion.</summary>
 	public int SkeletonLineCount { get; private set; }
+
+	/// <summary>Geometry diagnostics of the last skeleton-view redraw (drawn extents,
+	/// camera anchor, line width) for the UI smoke gate's notes.</summary>
+	public string SkeletonDebug { get; private set; } = "";
 
 	/// <summary>
 	/// Creates the preview scene. <paramref name="previewModelPath"/> is the compiled
@@ -202,6 +282,21 @@ public sealed class PreviewWidget : SceneRenderingWidget
 
 		_worldScratch = new XForm[rig.Skeleton.Count];
 
+		// Camera anchor bones: the MAPPED role bones only. Character FBX files routinely
+		// carry stray far-away nodes (Biped dummies, exporter helpers) - bounds taken over
+		// every node put the camera fifty character-heights away, shrinking the wireframe
+		// skeleton and the source ghost to a bar-sized smudge (user report: "it shows
+		// like two bars"). The mapped roles ARE the character.
+		var mapped = new List<int>();
+		foreach ( var role in Enum.GetValues<HumanoidRetargeter.Mapping.BoneRole>() )
+		{
+			if ( rig.BoneForRole( role ) is { } index )
+				mapped.Add( index );
+		}
+		_cameraBones = mapped.Count >= 4
+			? mapped.ToArray()
+			: Enumerable.Range( 0, rig.Skeleton.Count ).ToArray();
+
 		// Rest-pose bounds in engine space: camera zoom for the wireframe-skeleton view
 		// (kept fixed so the zoom doesn't pulse with the animation; the center follows).
 		var restBounds = ComputeRestBounds();
@@ -209,15 +304,17 @@ public sealed class PreviewWidget : SceneRenderingWidget
 		_skeletonRadius = MathF.Max( restBounds.Size.Length * 0.5f, 8f );
 	}
 
+	int[] _cameraBones;
+
 	BBox ComputeRestBounds()
 	{
 		var skeleton = _rig.Skeleton;
-		if ( skeleton.Count == 0 )
+		if ( skeleton.Count == 0 || _cameraBones.Length == 0 )
 			return BBox.FromPositionAndSize( Vector3.Up * 32f, 64f );
-		var first = RigWorldToEngine( skeleton.RestWorld[0] ).Position;
+		var first = RigWorldToEngine( skeleton.RestWorld[_cameraBones[0]] ).Position;
 		var bounds = new BBox( first, first );
-		for ( var i = 1; i < skeleton.Count; i++ )
-			bounds = bounds.AddPoint( RigWorldToEngine( skeleton.RestWorld[i] ).Position );
+		foreach ( var index in _cameraBones )
+			bounds = bounds.AddPoint( RigWorldToEngine( skeleton.RestWorld[index] ).Position );
 		return bounds;
 	}
 
@@ -333,51 +430,64 @@ public sealed class PreviewWidget : SceneRenderingWidget
 		UpdateSkeletonLines( count );
 	}
 
-	/// <summary>Redraws the wireframe-skeleton view from the freshly FK'd pose: parent→child
-	/// bone segments plus joint ticks, engine-space, and moves the model-less camera anchor
-	/// with the posed bounds (fixed rest-pose zoom so it doesn't pulse).</summary>
+	/// <summary>Redraws the wireframe-skeleton view from the freshly FK'd pose: one
+	/// polyline object per skeleton chain, engine-space, and moves the model-less camera
+	/// anchor with the posed bounds (fixed rest-pose zoom so it doesn't pulse).</summary>
 	void UpdateSkeletonLines( int count )
 	{
-		_skeletonLines ??= CreateLineObject();
-		_skeletonLines.RenderingEnabled = SkeletonOnly;
+		_skeletonChains ??= BuildChains( i => _rig.Skeleton[i].ParentIndex, _rig.Skeleton.Count );
+		EnsureChainObjects( _skeletonChainObjects, _skeletonChains.Length );
+		foreach ( var chain in _skeletonChainObjects )
+			chain.RenderingEnabled = SkeletonOnly;
 		if ( !SkeletonOnly )
 			return;
 
-		var skeleton = _rig.Skeleton;
-		_skeletonLines.Clear();
 		SkeletonLineCount = 0;
 		var boneWidth = OverlayLineWidth;
-		var jointWidth = boneWidth * 1.6f;
+		// Culling bounds cover EVERYTHING drawn; the camera center tracks only the
+		// mapped character bones (stray far-away FBX nodes must not drag it off).
 		var min = new Vector3( float.MaxValue );
 		var max = new Vector3( float.MinValue );
+		var cameraMin = new Vector3( float.MaxValue );
+		var cameraMax = new Vector3( float.MinValue );
+		foreach ( var index in _cameraBones )
+		{
+			if ( index >= count )
+				continue;
+			var cameraPos = RigWorldToEngine( _worldScratch[index] ).Position;
+			cameraMin = Vector3.Min( cameraMin, cameraPos );
+			cameraMax = Vector3.Max( cameraMax, cameraPos );
+		}
+
+		var engine = new Vector3[count];
 		for ( var i = 0; i < count; i++ )
 		{
-			var pos = RigWorldToEngine( _worldScratch[i] ).Position;
-			min = Vector3.Min( min, pos );
-			max = Vector3.Max( max, pos );
+			engine[i] = RigWorldToEngine( _worldScratch[i] ).Position;
+			min = Vector3.Min( min, engine[i] );
+			max = Vector3.Max( max, engine[i] );
+		}
 
-			var parent = skeleton[i].ParentIndex;
-			if ( parent >= 0 && parent < count )
+		var points = new List<Vector3>();
+		for ( var c = 0; c < _skeletonChains.Length; c++ )
+		{
+			points.Clear();
+			foreach ( var index in _skeletonChains[c] )
 			{
-				var parentPos = RigWorldToEngine( _worldScratch[parent] ).Position;
-				_skeletonLines.StartLine();
-				_skeletonLines.AddLinePoint( parentPos, SkeletonBoneColor, boneWidth );
-				_skeletonLines.AddLinePoint( pos, SkeletonBoneColor, boneWidth );
-				_skeletonLines.EndLine();
-				SkeletonLineCount++;
+				if ( index < count )
+					points.Add( engine[index] );
 			}
-
-			_skeletonLines.StartLine();
-			_skeletonLines.AddLinePoint( pos - Vector3.Up * (boneWidth * 0.5f), SkeletonJointColor, jointWidth );
-			_skeletonLines.AddLinePoint( pos + Vector3.Up * (boneWidth * 0.5f), SkeletonJointColor, jointWidth );
-			_skeletonLines.EndLine();
-			SkeletonLineCount++;
+			DrawChain( _skeletonChainObjects[c], points, SkeletonBoneColor, boneWidth );
+			FitBounds( _skeletonChainObjects[c], min, max );
+			SkeletonLineCount += Math.Max( points.Count - 1, 0 );
 		}
 
 		if ( count > 0 )
 		{
-			_skeletonCenter = (min + max) * 0.5f;
-			FitBounds( _skeletonLines, min, max );
+			if ( cameraMin.x <= cameraMax.x )
+				_skeletonCenter = (cameraMin + cameraMax) * 0.5f;
+			SkeletonDebug = $"drawn=[{min} .. {max}] cam=[{cameraMin} .. {cameraMax}] "
+				+ $"center={_skeletonCenter} radius={_skeletonRadius:0.#} width={boneWidth:0.##} "
+				+ $"count={count} chains={_skeletonChains.Length}";
 		}
 	}
 
@@ -412,7 +522,10 @@ public sealed class PreviewWidget : SceneRenderingWidget
 		if ( !Camera.IsValid() )
 			return 0;
 
-		Scene.EditorTick( RealTime.Now, RealTime.Delta );
+		// Fixed small tick: headless probe calls arrive with arbitrarily large real-time
+		// deltas, which destabilizes procedural bones (citizen jiggle exploded into
+		// stretched geometry in a gate render).
+		Scene.EditorTick( RealTime.Now, 0.016f );
 		UpdateCamera();
 
 		var bitmap = new Bitmap( size, size );
@@ -425,6 +538,43 @@ public sealed class PreviewWidget : SceneRenderingWidget
 				count++;
 		}
 		return count;
+	}
+
+	/// <summary>Renders the preview camera to a PNG (gate diagnostics — lets the harness
+	/// LOOK at what the user sees instead of inferring from pixel counts). Null when the
+	/// camera is unavailable.</summary>
+	public byte[] RenderToPng( int size = 512 )
+	{
+		if ( !Camera.IsValid() )
+			return null;
+
+		Scene.EditorTick( RealTime.Now, 0.016f ); // fixed tick - see CountRenderedPixels
+		UpdateCamera();
+
+		var bitmap = new Bitmap( size, size );
+		Camera.RenderToBitmap( bitmap );
+		return bitmap.ToPng();
+	}
+
+	/// <summary>Names and positions of model bones sitting farther than
+	/// <paramref name="radius"/> from the given anchor bone — gate diagnostics for
+	/// stretched-mesh reports (skinning webs point at bones left at wild transforms).</summary>
+	public string WildBoneReport( string anchorBoneName, float radius )
+	{
+		if ( !_sceneModel.IsValid() )
+			return "(no model)";
+		var anchor = GetModelBoneTransform( anchorBoneName )?.Position ?? Vector3.Zero;
+		var wild = new List<string>();
+		var bones = _sceneModel.Model?.Bones?.AllBones;
+		if ( bones is null )
+			return "(no bones)";
+		foreach ( var bone in bones )
+		{
+			var position = _sceneModel.GetBoneWorldTransform( bone.Index ).Position;
+			if ( position.Distance( anchor ) > radius )
+				wild.Add( $"{bone.Name}@{position}" );
+		}
+		return wild.Count == 0 ? "(none)" : string.Join( "; ", wild );
 	}
 
 	/// <summary>World transform of a model bone (by name) as currently posed; null when the
@@ -452,8 +602,8 @@ public sealed class PreviewWidget : SceneRenderingWidget
 		set
 		{
 			_showSourceGhost = value;
-			if ( _ghost is not null )
-				_ghost.RenderingEnabled = value && HasSourceGhost;
+			foreach ( var chain in _ghostChainObjects )
+				chain.RenderingEnabled = value && HasSourceGhost;
 		}
 	}
 
@@ -478,7 +628,15 @@ public sealed class PreviewWidget : SceneRenderingWidget
 		int? SrcBone( BoneRole role )
 			=> mapping.RoleToBone.TryGetValue( role, out var index ) ? index : null;
 
-		if ( !TryCharacterBasis( SrcBone, skeleton.RestWorld, out _srcLat, out _srcUp, out _srcFwd,
+		// The source basis comes from the clip's FRAME 0 pose, not the rest skeleton:
+		// stick-bind rigs (NVIDIA SOMA - every rest bone along one axis) have no usable
+		// rest geometry, and a near-degenerate basis normalizes into garbage axes that
+		// smear the ghost into long streaks (user report). Frame 0 of a real clip is a
+		// real pose on every rig.
+		var scratch = new XForm[skeleton.Count];
+		var hipsIndex = SrcBone( BoneRole.Hips ) ?? 0;
+		var hips0 = FkPosition( skeleton, clip.Frames[0], scratch, hipsIndex );
+		if ( !TryCharacterBasis( SrcBone, scratch, out _srcLat, out _srcUp, out _srcFwd,
 			out _srcHipHeight, out var srcGround ) )
 		{
 			Log.Info( "[humanoid-retargeter] preview: source ghost unavailable (mapping lacks the hips/legs/shoulder bones the alignment needs)." );
@@ -487,17 +645,17 @@ public sealed class PreviewWidget : SceneRenderingWidget
 
 		_ghostSkeleton = skeleton;
 		_ghostClip = clip;
-		_ghostScratch = new XForm[skeleton.Count];
+		_ghostScratch = scratch;
 		_ghostAlignedClip = null;
 
 		// Anchor = the source hips' ground projection at frame 0 (clips that start offset
 		// from the origin - BVH mocap especially - must not push the ghost away).
-		var hipsIndex = SrcBone( BoneRole.Hips ) ?? 0;
-		var hips0 = FkPosition( skeleton, clip.Frames[0], _ghostScratch, hipsIndex );
 		_srcAnchor = hips0 + _srcUp * (srcGround - VecN.Dot( hips0, _srcUp ));
 
-		_ghost ??= CreateLineObject(); // vertex alpha = the ~50% ghost dimming
-		_ghost.RenderingEnabled = _showSourceGhost;
+		_ghostChains = BuildChains( i => skeleton[i].ParentIndex, skeleton.Count );
+		EnsureChainObjects( _ghostChainObjects, _ghostChains.Length );
+		foreach ( var chain in _ghostChainObjects )
+			chain.RenderingEnabled = _showSourceGhost;
 	}
 
 	/// <summary>Target-side alignment: anchor on the TARGET's hips ground-projection at
@@ -530,15 +688,14 @@ public sealed class PreviewWidget : SceneRenderingWidget
 	/// line segments plus small joint ticks.</summary>
 	void UpdateGhost()
 	{
-		if ( _ghost is null || _ghostClip is null )
+		if ( _ghostChains is null || _ghostClip is null )
 			return;
 
-		if ( !_showSourceGhost || !EnsureGhostAlignment() )
-		{
-			_ghost.RenderingEnabled = false;
+		var visible = _showSourceGhost && EnsureGhostAlignment();
+		foreach ( var chain in _ghostChainObjects )
+			chain.RenderingEnabled = visible;
+		if ( !visible )
 			return;
-		}
-		_ghost.RenderingEnabled = true;
 
 		// Normalized-time sync (fence-post frames: first→first, last→last).
 		var ghostFrames = _ghostClip.Frames;
@@ -554,38 +711,31 @@ public sealed class PreviewWidget : SceneRenderingWidget
 			_ghostScratch[i] = parent < 0 ? locals[i] : XForm.Compose( _ghostScratch[parent], locals[i] );
 		}
 
-		_ghost.Clear();
 		GhostLineCount = 0;
 		var boneWidth = OverlayLineWidth * 0.8f;
-		var jointWidth = boneWidth * 1.7f;
 		var min = new Vector3( float.MaxValue );
 		var max = new Vector3( float.MinValue );
+		var engine = new Vector3[count];
 		for ( var i = 0; i < count; i++ )
 		{
-			var pos = GhostToEngine( _ghostScratch[i].Pos );
-			min = Vector3.Min( min, pos );
-			max = Vector3.Max( max, pos );
-
-			var parent = skeleton[i].ParentIndex;
-			if ( parent >= 0 && parent < count )
-			{
-				var parentPos = GhostToEngine( _ghostScratch[parent].Pos );
-				_ghost.StartLine();
-				_ghost.AddLinePoint( parentPos, GhostBoneColor, boneWidth );
-				_ghost.AddLinePoint( pos, GhostBoneColor, boneWidth );
-				_ghost.EndLine();
-				GhostLineCount++;
-			}
-
-			// Joint marker: a stubby wide segment reads as a small sphere at preview scale.
-			_ghost.StartLine();
-			_ghost.AddLinePoint( pos - Vector3.Up * (boneWidth * 0.5f), GhostJointColor, jointWidth );
-			_ghost.AddLinePoint( pos + Vector3.Up * (boneWidth * 0.5f), GhostJointColor, jointWidth );
-			_ghost.EndLine();
-			GhostLineCount++;
+			engine[i] = GhostToEngine( _ghostScratch[i].Pos );
+			min = Vector3.Min( min, engine[i] );
+			max = Vector3.Max( max, engine[i] );
 		}
 
-		FitBounds( _ghost, min, max );
+		var points = new List<Vector3>();
+		for ( var c = 0; c < _ghostChains.Length; c++ )
+		{
+			points.Clear();
+			foreach ( var index in _ghostChains[c] )
+			{
+				if ( index < count )
+					points.Add( engine[index] );
+			}
+			DrawChain( _ghostChainObjects[c], points, GhostBoneColor, boneWidth );
+			FitBounds( _ghostChainObjects[c], min, max );
+			GhostLineCount += Math.Max( points.Count - 1, 0 );
+		}
 	}
 
 	/// <summary>Source world position (cm, native axes) → engine space: express the offset
