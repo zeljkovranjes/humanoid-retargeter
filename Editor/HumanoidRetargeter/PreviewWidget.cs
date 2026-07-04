@@ -84,6 +84,40 @@ public sealed class PreviewWidget : SceneRenderingWidget
 	static readonly Color SkeletonBoneColor = new( 0.35f, 0.9f, 1f, 0.95f ); // cyan, solid
 	static readonly Color SkeletonJointColor = new( 0.6f, 1f, 1f, 1f );
 
+	/// <summary>
+	/// Builds a line overlay object ready to actually RENDER: without an explicit line
+	/// material a SceneLineObject draws with the engine's error material (user report: the
+	/// skeleton view and the source ghost showed up as a single purple blob), and without
+	/// generous explicit Bounds a SceneCustomObject can be culled entirely (its default
+	/// bounds don't follow the added line points).
+	/// </summary>
+	SceneLineObject CreateLineObject()
+	{
+		var lines = new SceneLineObject( Scene.SceneWorld );
+		lines.Opaque = false;
+		lines.Lighting = false;
+		var material = Material.Load( "materials/default/default_line.vmat" );
+		if ( material is not null )
+			lines.Material = material;
+		return lines;
+	}
+
+	/// <summary>Expands a scene object's bounds around freshly drawn line points so the
+	/// renderer never culls the overlay (called after every redraw).</summary>
+	static void FitBounds( SceneLineObject lines, Vector3 min, Vector3 max )
+	{
+		if ( lines is null || min.x > max.x )
+			return;
+		var bounds = new BBox( min, max );
+		lines.Bounds = bounds.Grow( MathF.Max( bounds.Size.Length * 0.25f, 16f ) );
+	}
+
+	/// <summary>Line width scaled to the character: the camera frames the whole skeleton,
+	/// so a fixed sub-inch width collapses below one pixel on large rigs (measured: a
+	/// 190-segment skeleton rendered ~5 pixels at 0.6in width - effectively invisible,
+	/// which is what the user reported).</summary>
+	float OverlayLineWidth => MathF.Max( 1.2f, _skeletonRadius * 0.03f );
+
 	/// <summary>Whether playback advances (play/pause).</summary>
 	public bool Playing { get; set; } = true;
 
@@ -304,12 +338,7 @@ public sealed class PreviewWidget : SceneRenderingWidget
 	/// with the posed bounds (fixed rest-pose zoom so it doesn't pulse).</summary>
 	void UpdateSkeletonLines( int count )
 	{
-		if ( _skeletonLines is null )
-		{
-			_skeletonLines = new SceneLineObject( Scene.SceneWorld );
-			_skeletonLines.Opaque = false;
-			_skeletonLines.Lighting = false;
-		}
+		_skeletonLines ??= CreateLineObject();
 		_skeletonLines.RenderingEnabled = SkeletonOnly;
 		if ( !SkeletonOnly )
 			return;
@@ -317,6 +346,8 @@ public sealed class PreviewWidget : SceneRenderingWidget
 		var skeleton = _rig.Skeleton;
 		_skeletonLines.Clear();
 		SkeletonLineCount = 0;
+		var boneWidth = OverlayLineWidth;
+		var jointWidth = boneWidth * 1.6f;
 		var min = new Vector3( float.MaxValue );
 		var max = new Vector3( float.MinValue );
 		for ( var i = 0; i < count; i++ )
@@ -330,21 +361,24 @@ public sealed class PreviewWidget : SceneRenderingWidget
 			{
 				var parentPos = RigWorldToEngine( _worldScratch[parent] ).Position;
 				_skeletonLines.StartLine();
-				_skeletonLines.AddLinePoint( parentPos, SkeletonBoneColor, 0.6f );
-				_skeletonLines.AddLinePoint( pos, SkeletonBoneColor, 0.6f );
+				_skeletonLines.AddLinePoint( parentPos, SkeletonBoneColor, boneWidth );
+				_skeletonLines.AddLinePoint( pos, SkeletonBoneColor, boneWidth );
 				_skeletonLines.EndLine();
 				SkeletonLineCount++;
 			}
 
 			_skeletonLines.StartLine();
-			_skeletonLines.AddLinePoint( pos - Vector3.Up * 0.4f, SkeletonJointColor, 1.1f );
-			_skeletonLines.AddLinePoint( pos + Vector3.Up * 0.4f, SkeletonJointColor, 1.1f );
+			_skeletonLines.AddLinePoint( pos - Vector3.Up * (boneWidth * 0.5f), SkeletonJointColor, jointWidth );
+			_skeletonLines.AddLinePoint( pos + Vector3.Up * (boneWidth * 0.5f), SkeletonJointColor, jointWidth );
 			_skeletonLines.EndLine();
 			SkeletonLineCount++;
 		}
 
 		if ( count > 0 )
+		{
 			_skeletonCenter = (min + max) * 0.5f;
+			FitBounds( _skeletonLines, min, max );
+		}
 	}
 
 	/// <summary>
@@ -365,6 +399,32 @@ public sealed class PreviewWidget : SceneRenderingWidget
 		return new Transform(
 			new Vector3( pos.X, pos.Y, pos.Z ) * _positionScale,
 			new Rotation( rot.X, rot.Y, rot.Z, rot.W ) );
+	}
+
+	/// <summary>
+	/// Renders the preview camera to an offscreen bitmap and counts the pixels matching
+	/// <paramref name="predicate"/>. Used by the UI smoke gate to prove the overlays
+	/// actually REACH THE SCREEN — line counts alone cannot see a missing line material
+	/// (user report: skeleton view and source ghost rendered as a single purple blob).
+	/// </summary>
+	public int CountRenderedPixels( Func<Color, bool> predicate, int size = 384 )
+	{
+		if ( !Camera.IsValid() )
+			return 0;
+
+		Scene.EditorTick( RealTime.Now, RealTime.Delta );
+		UpdateCamera();
+
+		var bitmap = new Bitmap( size, size );
+		Camera.RenderToBitmap( bitmap );
+
+		var count = 0;
+		foreach ( var pixel in bitmap.GetPixels() )
+		{
+			if ( predicate( pixel ) )
+				count++;
+		}
+		return count;
 	}
 
 	/// <summary>World transform of a model bone (by name) as currently posed; null when the
@@ -436,12 +496,7 @@ public sealed class PreviewWidget : SceneRenderingWidget
 		var hips0 = FkPosition( skeleton, clip.Frames[0], _ghostScratch, hipsIndex );
 		_srcAnchor = hips0 + _srcUp * (srcGround - VecN.Dot( hips0, _srcUp ));
 
-		if ( _ghost is null )
-		{
-			_ghost = new SceneLineObject( Scene.SceneWorld );
-			_ghost.Opaque = false;     // vertex alpha = the ~50% ghost dimming
-			_ghost.Lighting = false;
-		}
+		_ghost ??= CreateLineObject(); // vertex alpha = the ~50% ghost dimming
 		_ghost.RenderingEnabled = _showSourceGhost;
 	}
 
@@ -501,28 +556,36 @@ public sealed class PreviewWidget : SceneRenderingWidget
 
 		_ghost.Clear();
 		GhostLineCount = 0;
+		var boneWidth = OverlayLineWidth * 0.8f;
+		var jointWidth = boneWidth * 1.7f;
+		var min = new Vector3( float.MaxValue );
+		var max = new Vector3( float.MinValue );
 		for ( var i = 0; i < count; i++ )
 		{
 			var pos = GhostToEngine( _ghostScratch[i].Pos );
+			min = Vector3.Min( min, pos );
+			max = Vector3.Max( max, pos );
 
 			var parent = skeleton[i].ParentIndex;
 			if ( parent >= 0 && parent < count )
 			{
 				var parentPos = GhostToEngine( _ghostScratch[parent].Pos );
 				_ghost.StartLine();
-				_ghost.AddLinePoint( parentPos, GhostBoneColor, 0.5f );
-				_ghost.AddLinePoint( pos, GhostBoneColor, 0.5f );
+				_ghost.AddLinePoint( parentPos, GhostBoneColor, boneWidth );
+				_ghost.AddLinePoint( pos, GhostBoneColor, boneWidth );
 				_ghost.EndLine();
 				GhostLineCount++;
 			}
 
 			// Joint marker: a stubby wide segment reads as a small sphere at preview scale.
 			_ghost.StartLine();
-			_ghost.AddLinePoint( pos - Vector3.Up * 0.4f, GhostJointColor, 1.2f );
-			_ghost.AddLinePoint( pos + Vector3.Up * 0.4f, GhostJointColor, 1.2f );
+			_ghost.AddLinePoint( pos - Vector3.Up * (boneWidth * 0.5f), GhostJointColor, jointWidth );
+			_ghost.AddLinePoint( pos + Vector3.Up * (boneWidth * 0.5f), GhostJointColor, jointWidth );
 			_ghost.EndLine();
 			GhostLineCount++;
 		}
+
+		FitBounds( _ghost, min, max );
 	}
 
 	/// <summary>Source world position (cm, native axes) → engine space: express the offset
