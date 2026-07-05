@@ -168,7 +168,10 @@ public static class FbxTokenizer
             case 'd': return ReadArray(data, ref pos, owner, 8, ToDoubleArray);
             case 'l': return ReadArray(data, ref pos, owner, 8, ToLongArray);
             case 'i': return ReadArray(data, ref pos, owner, 4, ToIntArray);
-            case 'b': return ReadArray(data, ref pos, owner, 1, b => b); // bool array kept as raw bytes
+            // bool arrays become bool[] (NOT byte[]) so a re-serializer can tell them
+            // apart from 'R' blobs and write the correct type code back.
+            case 'b': return ReadArray(data, ref pos, owner, 1,
+                b => Array.ConvertAll(b, x => (x & 1) == 1));
 
             case 'S':
             {

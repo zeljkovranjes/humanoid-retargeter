@@ -253,7 +253,20 @@ public static class EditorPipeline
 				StringComparison.OrdinalIgnoreCase ) )
 			{
 				Directory.CreateDirectory( Path.GetDirectoryName( destination ) );
-				File.Copy( target.FbxAbsolutePath, destination, overwrite: true );
+
+				// Repair mid-pose exports on the way in: files whose node transforms hold
+				// an animation snapshot instead of the bind (common on Auto-Rig Pro / store
+				// assets saved with IK'd hands or feet posed) compile into a skeleton whose
+				// "rest" is that snapshot - self-consistent skin, so it LOOKS fine, but the
+				// solver's anatomy (leg chains down, mirrored hands) is silently wrong and
+				// the retarget mangles exactly the posed limbs. The BindPose section holds
+				// the truth; rewrite the node transforms to it.
+				var fbxBytes = File.ReadAllBytes( target.FbxAbsolutePath );
+				var repaired = HumanoidRetargeter.Formats.Fbx.FbxBindPoseFixer.TryFix(
+					fbxBytes, out var bindReport );
+				File.WriteAllBytes( destination, repaired ?? fbxBytes );
+				Log.Info( $"[humanoid-retargeter] target FBX bind check: {bindReport}"
+					+ (repaired is not null ? " - repaired copy embedded" : "") );
 			}
 
 			// Sidecar textures FIRST: FBX exports commonly ship a "textures" folder next to

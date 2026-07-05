@@ -80,6 +80,7 @@ public sealed class FbxNode
         long[] l => Array.ConvertAll(l, x => (double)x),
         int[] n => Array.ConvertAll(n, x => (double)x),
         byte[] b => Array.ConvertAll(b, x => (double)x),
+        bool[] o => Array.ConvertAll(o, x => x ? 1.0 : 0.0),
         var v => throw TypeError(i, v, "double[]"),
     };
 
@@ -91,6 +92,7 @@ public sealed class FbxNode
         long[] l => Array.ConvertAll(l, x => (float)x),
         int[] n => Array.ConvertAll(n, x => (float)x),
         byte[] b => Array.ConvertAll(b, x => (float)x),
+        bool[] o => Array.ConvertAll(o, x => x ? 1f : 0f),
         var v => throw TypeError(i, v, "float[]"),
     };
 
@@ -100,6 +102,7 @@ public sealed class FbxNode
         long[] l => l,
         int[] n => Array.ConvertAll(n, x => (long)x),
         byte[] b => Array.ConvertAll(b, x => (long)x),
+        bool[] o => Array.ConvertAll(o, x => x ? 1L : 0L),
         double[] d => Array.ConvertAll(d, x => checked((long)x)),
         float[] f => Array.ConvertAll(f, x => checked((long)x)),
         var v => throw TypeError(i, v, "long[]"),
@@ -111,6 +114,7 @@ public sealed class FbxNode
         int[] n => n,
         long[] l => Array.ConvertAll(l, x => checked((int)x)),
         byte[] b => Array.ConvertAll(b, x => (int)x),
+        bool[] o => Array.ConvertAll(o, x => x ? 1 : 0),
         double[] d => Array.ConvertAll(d, x => checked((int)x)),
         float[] f => Array.ConvertAll(f, x => checked((int)x)),
         var v => throw TypeError(i, v, "int[]"),

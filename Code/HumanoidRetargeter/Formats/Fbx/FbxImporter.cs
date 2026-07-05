@@ -51,6 +51,7 @@ public static class FbxImporter
         var ctx = new ImportContext(scene, bones, unitScale);
 
         // ---- rest pose -------------------------------------------------------------
+        var notes = new List<string>();
         var restWorlds = EvaluateWorlds(ctx, null, 0);
         if (IsRestDegenerate(ctx))
         {
@@ -60,8 +61,19 @@ public static class FbxImporter
                      FirstSampleableStack(ctx) is { } stack)
                 restWorlds = EvaluateWorlds(ctx, stack, ClipStartTicks(ctx, stack));
         }
-
-        var notes = new List<string>();
+        else if (IsGrosslyPosedVsBindPose(ctx, restWorlds))
+        {
+            // Mid-pose export: node transforms hold an animation snapshot (IK'd hands or
+            // feet half a meter from their bind) while Pose/BindPose holds the true rest.
+            // NOT auto-corrected for sources: clips are authored against the statics (the
+            // UE-mannequin evidence below), and the static-channel override stage would mix
+            // the two spaces. TARGET files get repaired on disk by FbxBindPoseFixer instead
+            // (see EditorPipeline.PrepareFbxTargetMesh); this note surfaces the condition
+            // for source files so the report explains any posed-rest artifacts.
+            notes.Add("node transforms hold an animation snapshot (mid-pose export); "
+                + "rest-relative retargeting may carry that pose - fix the export "
+                + "or use the file as a TARGET (repaired automatically)");
+        }
         var restLocals = WorldsToLocals(ctx, restWorlds);
         ApplyStaticTranslationChannels(ctx, restWorlds, restLocals, notes);
         var skeleton = BuildSkeleton(ctx, restLocals);
@@ -296,6 +308,43 @@ public static class FbxImporter
                 zeroed++;
         }
         return nonRoot > 0 && zeroed * 2 > nonRoot;
+    }
+
+    /// <summary>
+    /// True when at least one bone's statically-evaluated world sits GROSSLY away from its
+    /// BindPose matrix (5% of skeleton height, or 30°) — the signature of a file exported
+    /// mid-pose. Small disagreements do NOT trigger (clips are authored against the statics;
+    /// UE mannequin toes differ ~8° legitimately).
+    /// </summary>
+    private static bool IsGrosslyPosedVsBindPose(ImportContext ctx, Matrix4x4[] restWorlds)
+    {
+        if (ctx.Scene.BindPose.Count == 0)
+            return false;
+
+        float min = float.MaxValue, max = float.MinValue;
+        foreach (var w in restWorlds)
+        {
+            var t = w.Translation;
+            float up = MathF.Max(MathF.Abs(t.Y), MathF.Abs(t.Z));
+            min = MathF.Min(min, up);
+            max = MathF.Max(max, up);
+        }
+        float posThreshold = MathF.Max(0.001f, (max - min) * 0.05f);
+        const float rotThresholdRad = 30f * MathF.PI / 180f;
+
+        for (int i = 0; i < ctx.Bones.Count; i++)
+        {
+            if (!ctx.Scene.BindPose.TryGetValue(ctx.Bones[i].Id, out var bind))
+                continue;
+            var fk = FbxTransform.ToRigid(restWorlds[i]);
+            var target = FbxTransform.ToRigid(bind);
+            if ((fk.Pos - target.Pos).Length() > posThreshold
+                || Maths.MathQ.AngleBetween(fk.Rot, target.Rot) > rotThresholdRad)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     /// <summary>Bind-pose worlds when a Pose/BindPose node covers at least half the bones.</summary>
