@@ -343,6 +343,7 @@ public static class Retargeter
             // ride the mapping report so UIs can surface them next to the conversion result.
             foreach (var note in scene.Notes)
                 AddNote(report, note);
+            scene = MaybeAdoptBindRest(scene, map, report);
         }
         catch (Exception e)
         {
@@ -380,7 +381,8 @@ public static class Retargeter
             // runtime even though the DMX carries real pinky channels.
             AddNote(report,
                 "Pinky channels are exported, but the base model's CopyPinky constraints "
-                + "(ring → pinky copy) cannot be overridden from a standalone vmdl — use "
+                + "(ring → pinky copy) cannot be overridden from a standalone vmdl, so the "
+                + "pinky will visibly mirror the ring finger's motion in engine — use "
                 + "augment mode (add to the existing vmdl) to neutralize them.");
         }
         if (target.UpAxis == TargetUpAxis.ZUpEngine)
@@ -1189,6 +1191,71 @@ public static class Retargeter
     {
         if (!report.Notes.Contains(note))
             report.Notes.Add(note);
+    }
+
+    /// <summary>
+    /// Mid-pose FBX sources: adopts the importer's bind-rest alternate skeleton when it
+    /// makes the character stand STRAIGHTER along the file's own up axis. Solving on a
+    /// posed rest breaks the solver's anatomical reasoning on exactly the posed limbs
+    /// (measured 48° mean world-rot off ground truth on a real rig, left foot 124°); but
+    /// a bind rest can also tilt the character-up estimate (shoulders behind hips on one
+    /// real rig tilted it 7°, starving plant/stance detection), so the straighter rest
+    /// wins. Clips are authored playback either way — same bones, same order.
+    /// </summary>
+    private static SourceScene MaybeAdoptBindRest(
+        SourceScene scene, MappingResult map, MappingReportInfo report)
+    {
+        if (scene.MidPoseBindSkeleton is not { } bindSkeleton)
+            return scene;
+
+        var fileUp = scene.UpAxis switch
+        {
+            0 => new Vector3(scene.UpAxisSign, 0, 0),
+            2 => new Vector3(0, 0, scene.UpAxisSign),
+            _ => new Vector3(0, scene.UpAxisSign, 0),
+        };
+
+        float UpTiltDeg(SkeletonModel skeleton)
+        {
+            var (norm, _) = RestNormalizer.Normalize(skeleton, map);
+            var up = Vector3.Normalize(
+                CanonicalFrames.Build(skeleton, map, norm.WorldRest).CharacterUp);
+            return MathF.Acos(Math.Clamp(Vector3.Dot(up, fileUp), -1f, 1f)) * 180f / MathF.PI;
+        }
+
+        try
+        {
+            float tiltStatics = UpTiltDeg(scene.Skeleton);
+            float tiltBind = UpTiltDeg(bindSkeleton);
+            if (tiltBind > tiltStatics + 1f)
+            {
+                AddNote(report,
+                    $"mid-pose export: kept the exported pose as rest - the file's bind "
+                    + $"data stands {tiltBind:0.#} deg off the file up axis "
+                    + $"(vs {tiltStatics:0.#} deg)");
+                return scene;
+            }
+
+            AddNote(report,
+                "mid-pose export: rest pose restored from the file's own bind data "
+                + "(clips keep their authored playback)");
+            return new SourceScene(
+                bindSkeleton, scene.Clips, scene.UnitScaleCm,
+                scene.UpAxis, scene.UpAxisSign,
+                scene.FrontAxis, scene.FrontAxisSign,
+                scene.CoordAxis, scene.CoordAxisSign,
+                scene.OriginalUpAxis, scene.Notes)
+            {
+                AuthoredMapping = scene.AuthoredMapping,
+                RestPlacementAuthored = scene.RestPlacementAuthored,
+            };
+        }
+        catch (Exception)
+        {
+            // Anatomy not measurable (mapping lacks the frame's roles, degenerate rest):
+            // keep today's behavior.
+            return scene;
+        }
     }
 
     // ================================================================ import + mapping

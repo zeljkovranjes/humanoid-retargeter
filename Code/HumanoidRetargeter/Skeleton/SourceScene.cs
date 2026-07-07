@@ -77,6 +77,18 @@ public sealed class SourceScene
     /// </summary>
     public MappingResult? AuthoredMapping { get; set; }
 
+    /// <summary>
+    /// Alternate skeleton whose rest is the file's Pose/BindPose, offered by the FBX
+    /// importer when the node transforms are GROSSLY posed away from it (a mid-pose
+    /// export — the primary <see cref="Skeleton"/> then rests in an animation snapshot:
+    /// a foot at hip height, IK'd hands). Same bones in the same order, so
+    /// <see cref="Clips"/> and mappings apply to either. The retargeter adopts it after
+    /// mapping when it makes the character stand straighter along the file's up axis
+    /// (solving on a posed rest was measured 48° mean off ground truth on a real rig);
+    /// null for consistent exports and non-FBX sources.
+    /// </summary>
+    public Skeleton? MidPoseBindSkeleton { get; set; }
+
     /// <summary>Creates a source scene container.</summary>
     public SourceScene(
         Skeleton skeleton,

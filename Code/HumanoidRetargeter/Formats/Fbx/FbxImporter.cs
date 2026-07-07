@@ -54,6 +54,7 @@ public static class FbxImporter
 
         // ---- rest pose -------------------------------------------------------------
         var notes = new List<string>();
+        Skeleton.Skeleton? bindSkeleton = null;
         var restWorlds = EvaluateWorlds(ctx, null, 0);
         if (IsRestDegenerate(ctx))
         {
@@ -67,11 +68,14 @@ public static class FbxImporter
         {
             // Mid-pose export: node transforms hold an animation snapshot (IK'd hands or
             // feet half a meter from their bind) while Pose/BindPose holds the true rest.
-            // NOT auto-corrected for sources: clips are authored against the statics (the
-            // UE-mannequin evidence below), and the static-channel override stage would mix
-            // the two spaces. TARGET files get repaired on disk by FbxBindPoseFixer instead
-            // (see EditorPipeline.PrepareFbxTargetMesh); this note surfaces the condition
-            // for source files so the report explains any posed-rest artifacts.
+            // The statics stay the PRIMARY rest here (clips are authored against them - the
+            // UE-mannequin evidence below - and the static-channel override stage must not
+            // mix spaces); the bind rest is offered as an ALTERNATE skeleton the retargeter
+            // adopts after mapping, when standing anatomy allows (Retargeter's up-axis
+            // veto). Clip playback is untouched either way. TARGET files get repaired on
+            // disk by FbxBindPoseFixer instead (see EditorPipeline.PrepareFbxTargetMesh).
+            if (TryBindPoseWorlds(ctx, out var bindWorlds))
+                bindSkeleton = BuildSkeleton(ctx, WorldsToLocals(ctx, bindWorlds));
             notes.Add("node transforms hold an animation snapshot (mid-pose export); "
                 + "rest-relative retargeting may carry that pose - fix the export "
                 + "or use the file as a TARGET (repaired automatically)");
@@ -94,7 +98,10 @@ public static class FbxImporter
             scene.UpAxis, scene.UpAxisSign,
             scene.FrontAxis, scene.FrontAxisSign,
             scene.CoordAxis, scene.CoordAxisSign,
-            scene.OriginalUpAxis, notes);
+            scene.OriginalUpAxis, notes)
+        {
+            MidPoseBindSkeleton = bindSkeleton,
+        };
     }
 
     // =====================================================================================
