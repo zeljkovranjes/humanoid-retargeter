@@ -1,3 +1,5 @@
+#nullable enable annotations
+
 // Global usings for the s&box in-engine compiler.
 //
 // The plain net8.0 dev harness gets these automatically via <ImplicitUsings>,

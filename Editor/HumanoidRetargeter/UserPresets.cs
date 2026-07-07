@@ -1,3 +1,5 @@
+#nullable enable annotations
+
 // User preset profiles - the "preset learning" half of the preview flow (design §6).
 //
 // The Code/ facade can do no file IO, so user presets live entirely Editor-side:

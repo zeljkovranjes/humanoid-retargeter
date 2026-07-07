@@ -1,3 +1,5 @@
+#nullable enable annotations
+
 using System.Buffers.Binary;
 using System.Globalization;
 using System.IO.Compression;

@@ -1,3 +1,5 @@
+#nullable enable annotations
+
 using HumanoidRetargeter.Maths;
 using SkeletonModel = HumanoidRetargeter.Skeleton.Skeleton;
 

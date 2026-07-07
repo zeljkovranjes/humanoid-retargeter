@@ -1,3 +1,5 @@
+#nullable enable annotations
+
 // UI smoke gate: headless end-to-end through the SAME code paths the retarget window uses.
 //
 // Only runs when the HR_UI_SMOKE environment variable is set (done by

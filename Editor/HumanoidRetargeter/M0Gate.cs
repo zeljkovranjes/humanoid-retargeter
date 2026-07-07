@@ -1,3 +1,5 @@
+#nullable enable annotations
+
 // M0 editor-process compile gate.
 //
 // This only runs when the HR_M0_RESULT environment variable is set (done by

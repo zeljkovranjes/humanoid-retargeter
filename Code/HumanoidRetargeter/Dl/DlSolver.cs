@@ -1,3 +1,5 @@
+#nullable enable annotations
+
 using System;
 using HumanoidRetargeter.Mapping;
 using HumanoidRetargeter.Skeleton;

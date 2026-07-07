@@ -1,3 +1,5 @@
+#nullable enable annotations
+
 namespace HumanoidRetargeter;
 
 public static class CoreInfo
