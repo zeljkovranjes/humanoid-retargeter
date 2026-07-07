@@ -64,6 +64,9 @@ public sealed class RetargetWindow : Widget
 	Widget _progressBar;
 	float _progress;
 	bool _converting;
+	Widget _reportGroup;
+	Layout _reportLines;
+	Button _reportToggle;
 
 	/// <summary>Dock constructor (called by the editor's dock manager).</summary>
 	public RetargetWindow( Widget parent ) : base( parent )
@@ -251,11 +254,31 @@ public sealed class RetargetWindow : Widget
 
 		options.Layout.AddStretchCell();
 
+		// ---- conversion report --------------------------------------------------------------
+		// "What happened" panel: import diagnostics (mid-pose exports, static-channel
+		// disagreements), mapping/pipeline notes, per-clip failures and write warnings that
+		// previously only went to the console log. Populated after every conversion; the
+		// status-strip Report button toggles it, and it opens itself when something warned.
+		_reportGroup = Layout.Add( new Group( this ) { Title = "Conversion report", Icon = "receipt_long" } );
+		_reportGroup.Layout = Layout.Column();
+		_reportGroup.Layout.Margin = new Sandbox.UI.Margin( 14, 30, 14, 10 );
+		var reportScroll = new ScrollArea( _reportGroup );
+		reportScroll.MaximumHeight = 140;
+		reportScroll.Canvas = new Widget( reportScroll );
+		reportScroll.Canvas.Layout = Layout.Column();
+		reportScroll.Canvas.Layout.Spacing = 2;
+		_reportLines = reportScroll.Canvas.Layout;
+		_reportGroup.Layout.Add( reportScroll );
+		_reportGroup.Visible = false;
+
 		// ---- status strip -----------------------------------------------------------------
 		var strip = Layout.AddRow();
 		strip.Margin = new Sandbox.UI.Margin( 8, 4, 8, 6 );
 		strip.Spacing = 8;
 		_statusLabel = strip.Add( new Label( this ) { Text = "Add animation files to get started." }, 1 );
+		_reportToggle = strip.Add( new Button( "Report", "receipt_long" ) );
+		_reportToggle.Visible = false;
+		_reportToggle.Clicked = () => _reportGroup.Visible = !_reportGroup.Visible;
 		_progressBar = strip.Add( new Widget( this ) { FixedHeight = 12, FixedWidth = 200 } );
 		_progressBar.OnPaintOverride = PaintProgress;
 		_progressBar.Visible = false;
@@ -997,8 +1020,9 @@ public sealed class RetargetWindow : Widget
 		// into an empty model - 0 bones, 0 sequences - and "playing" it does nothing
 		// (user report 2026-07-04). Runs BEFORE the accumulate branch below so an existing
 		// output vmdl can be healed with the mesh node too.
+		var prepNotes = new List<string>();
 		if ( !_augmentMode
-			&& !EditorPipeline.PrepareFbxTargetMesh( _target, NormalizedOutputFolder(), out var meshError ) )
+			&& !EditorPipeline.PrepareFbxTargetMesh( _target, NormalizedOutputFolder(), out var meshError, prepNotes ) )
 		{
 			SetStatus( meshError, Theme.Red );
 			return;
@@ -1165,6 +1189,8 @@ public sealed class RetargetWindow : Widget
 					write.Compiled ? Theme.Green : Theme.Red );
 			}
 
+			ShowConversionReport( BuildConversionReport( batch, write, prepNotes ) );
+
 			if ( write.VmdlAsset is not null )
 				MainAssetBrowser.Instance?.Local?.UpdateAssetList();
 
@@ -1233,6 +1259,78 @@ public sealed class RetargetWindow : Widget
 	{
 		var folder = (_outputFolderEdit?.Text ?? "").Trim().Replace( '\\', '/' ).Trim( '/' );
 		return folder.Length == 0 ? "animations/retargeted" : folder;
+	}
+
+	// ============================================================================ report
+
+	/// <summary>
+	/// Flattens one conversion's diagnostics into report lines: target preparation notes,
+	/// per-file mapping summaries with their import/pipeline notes (deduplicated - every
+	/// take of a file shares the file's mapping report), clip failures, and batch/write
+	/// warnings. All of this already existed; it just only went to the console log.
+	/// </summary>
+	List<(string Icon, Color Color, string Text)> BuildConversionReport(
+		HumanoidRetargeter.RetargetBatchResult batch, EditorPipeline.WriteResult write,
+		List<string> prepNotes )
+	{
+		var lines = new List<(string, Color, string)>();
+
+		foreach ( var note in prepNotes )
+			lines.Add( ("build", Theme.Yellow, note) );
+
+		// One block per source FILE: mapping summary first, then its notes (mapping +
+		// importer + pipeline). Notes live on the shared per-file report, so dedup by file.
+		var seenFiles = new HashSet<string>();
+		foreach ( var clip in batch.Clips )
+		{
+			if ( clip.Mapping is not { } m || !seenFiles.Add( clip.SourceFileName ) )
+				continue;
+			lines.Add( ("badge", Theme.Blue,
+				$"{clip.SourceFileName}: mapped via '{m.ProfileName}' "
+				+ $"({m.Confidence:0%} confidence, {m.MappedRoleCount} roles)") );
+			foreach ( var note in m.Notes )
+				lines.Add( ("sticky_note_2", Theme.TextLight, $"{clip.SourceFileName}: {note}") );
+		}
+
+		foreach ( var clip in batch.Clips.Where( c => !c.Success ) )
+			lines.Add( ("error", Theme.Red,
+				$"{clip.SourceFileName} · {clip.ClipName}: {clip.Error ?? "failed."}") );
+
+		foreach ( var warning in batch.Warnings )
+			lines.Add( ("warning", Theme.Yellow, warning) );
+		foreach ( var error in write?.Errors ?? Enumerable.Empty<string>() )
+			lines.Add( ("warning", Theme.Yellow, FirstLine( error )) );
+		if ( write is { Compiled: false } )
+			lines.Add( ("error", Theme.Red, "The output vmdl did not compile - see the console log.") );
+
+		return lines;
+	}
+
+	/// <summary>Populates the report panel. Auto-opens when anything warned or failed;
+	/// otherwise stays behind the status-strip Report button.</summary>
+	void ShowConversionReport( List<(string Icon, Color Color, string Text)> lines )
+	{
+		if ( !_reportGroup.IsValid() )
+			return;
+
+		_reportLines.Clear( true );
+		if ( lines.Count == 0 )
+			lines.Add( ("check_circle", Theme.Green, "Converted clean - nothing to report.") );
+
+		foreach ( var (icon, color, text) in lines )
+		{
+			var row = _reportLines.AddRow();
+			row.Spacing = 6;
+			row.Add( new IconButton( icon ) { ToolTip = text } );
+			var label = row.Add( new Label( this ) { Text = text, ToolTip = text }, 1 );
+			label.SetStyles( $"color: {color.Hex};" );
+		}
+
+		var notable = lines.Count( l => l.Color == Theme.Red || l.Color == Theme.Yellow );
+		_reportToggle.Text = notable > 0 ? $"Report ({notable})" : "Report";
+		_reportToggle.Visible = true;
+		if ( notable > 0 )
+			_reportGroup.Visible = true;
 	}
 
 	// ============================================================================ refresh

@@ -222,9 +222,12 @@ public static class EditorPipeline
 	/// Without this the vmdl has no base model and no mesh — it compiles into an empty
 	/// model (0 bones, 0 sequences) and playing it does nothing. Returns false with
 	/// <paramref name="error"/> set when the copy fails; no-op for non-FBX targets.
+	/// <paramref name="report"/> (optional) collects user-facing notes about what the
+	/// preparation did (e.g. a mid-pose export repaired at embed time).
 	/// </summary>
 	public static bool PrepareFbxTargetMesh(
-		TargetPickers.ResolvedTarget target, string outputFolderRelative, out string error )
+		TargetPickers.ResolvedTarget target, string outputFolderRelative, out string error,
+		List<string> report = null )
 	{
 		error = null;
 		if ( target?.FbxAbsolutePath is null )
@@ -269,6 +272,9 @@ public static class EditorPipeline
 				File.WriteAllBytes( destination, repaired ?? fbxBytes );
 				Log.Info( $"[humanoid-retargeter] target FBX bind check: {bindReport}"
 					+ (repaired is not null ? " - repaired copy embedded" : "") );
+				if ( repaired is not null )
+					report?.Add( $"Target FBX was exported mid-pose ({bindReport}) - "
+						+ "the embedded copy was repaired from the file's own bind data." );
 			}
 
 			// Sidecar textures FIRST: FBX exports commonly ship a "textures" folder next to

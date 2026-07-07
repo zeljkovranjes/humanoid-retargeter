@@ -339,6 +339,10 @@ public static class Retargeter
                 request.SourceData, request.SourceFileName, request.SampleFps, request.SkeletonData);
             (map, report) = ResolveMapping(
                 scene.Skeleton, request.MappingOverride, authoredMapping: scene.AuthoredMapping);
+            // Import diagnostics (mid-pose exports, cross-stack static disagreements, ...)
+            // ride the mapping report so UIs can surface them next to the conversion result.
+            foreach (var note in scene.Notes)
+                AddNote(report, note);
         }
         catch (Exception e)
         {
