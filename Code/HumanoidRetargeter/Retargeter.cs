@@ -568,13 +568,25 @@ public static class Retargeter
                 SanitizeClipName(clipName + "_M"), usedNames, options.AutoSuffixCollisions);
             try
             {
-                var mirroredFrames = ClipMirror.Mirror(clip.Frames, target.Rig);
-                // IK helper bones derive from the body: re-bake them from the MIRRORED body
-                // (their mirrored channels are placeholders the baker overwrites).
-                if (context.HasIkBakedBones)
-                    IkBoneBaker.Bake(mirroredFrames, target.Rig);
+                // SOURCE-SIDE MIRROR (southpaw G8 mirror fix, gate3_review.md 3.4 and the
+                // G8 bisect evidence): the SOURCE clip is mirrored across the source
+                // character's sagittal plane and the twin then runs through the COMPLETE
+                // unmodified primary pipeline (solver, cleanups, ground alignment, IK
+                // bake, orphan re-anchor). The emitted _M clip is a first-class primary
+                // clip in every representational respect, indistinguishable from a clip
+                // an animator authored mirrored. Target-space channel mirroring, however
+                // geometrically exact, produced data the ENGINE's render-side sequence
+                // evaluation mangles (measured: a mirrored pelvis channel alone renders
+                // the whole model upside down while every CPU-side bone API reports a
+                // perfect upright mirror); no data conjugation convention survived that
+                // stage, so the mirror moved to the source side where no alien data
+                // shape can exist.
+                var mirroredScene = SourceMirror.MirrorTake(scene, map, take);
+                var mirroredClip = SolveAndClean(
+                    request, target, context, mirroredScene, map, report, take, mirroredName);
                 EmitClip(request, target, context, options, usedNames, clips, entries, report,
-                    sourceId, mirroredName, mirroredFrames, clip.Fps, clip.Looping, isMirrored: true);
+                    sourceId, mirroredName, mirroredClip.Frames, mirroredClip.Fps,
+                    clip.Looping, isMirrored: true);
             }
             catch (Exception e)
             {
@@ -629,6 +641,12 @@ public static class Retargeter
                 // face joints bake statically (eyes out of sockets in ModelDoc). Custom
                 // rigs (FromSkeleton) have NO constraint list — their helpers keep baked
                 // channels or twist bones freeze (candy-wrapped wrists).
+                // MIRRORED clips use the IDENTICAL exclusion set (data-shape parity with
+                // primary clips, southpaw G8 mirror fix): a channel-less constraint-driven
+                // bone on a mirrored-body clip is no different from one on any leftward
+                // primary pose; the model's AnimConstraintList drives it at runtime either
+                // way. (ClipMirror.MirrorSafeExclusions remains available for consumers
+                // that need reflection-exact data for excluded bones.)
                 ChannelExcludedBones = target.Rig.HelpersAreConstraintDriven
                     ? context.ConstraintDrivenBones
                     : null,
@@ -775,6 +793,11 @@ public static class Retargeter
                 FootPlant.Apply(
                     frames, target.Rig.Skeleton, feet.Left, feet.Right, up, solved.Fps,
                     ScaledPlantOptions(target));
+
+                // Support ground alignment: one constant vertical offset per clip that
+                // restores the SOURCE-authored foot-to-ground relationship (southpaw
+                // final regeneration package, gate4_review.md 3.1 / DEFERRED.md f2).
+                AlignSupportToGround(frames, scene, map, target.Rig, feet, up, report, take);
             }
             else
             {
@@ -1141,6 +1164,172 @@ public static class Retargeter
         FootGroundAlign.Apply(
             frames, targetSkeleton, targetFeet.Left, targetFeet.Right, targetUp,
             plantsL, plantsR);
+    }
+
+    /// <summary>
+    /// Restores the clip's SOURCE-authored foot-to-ground relationship with ONE constant
+    /// vertical offset per clip (southpaw final regeneration package: DEFERRED.md f2 and
+    /// gate4_review.md 3.1). The solver's vertical reference is the source REST pelvis;
+    /// mid-pose exports whose kept node rest erased the authored crouch leave every solved
+    /// frame hovering by exactly the erased crouch depth (measured: stance +5.9 cm, steps
+    /// +7.8 to +10.3, slips ~+9, while the source FBX is grounded everywhere). Fix, the
+    /// generalization of the BVH ClipPlacementOffset vertical logic to every source: measure
+    /// the clip's minimum foot support (ankles + toes) in the SOLVED target frames and shift
+    /// the whole clip vertically so that support equals the TARGET rest support plus the
+    /// source clip's own authored support delta (source clip support minus source rest
+    /// support, hip-height scaled). One constant per clip preserves every within-clip lift,
+    /// heel raise and step cycle exactly: authored articulation is never flattened and an
+    /// authored jump stays airborne (its source support delta rides along).
+    /// </summary>
+    private static void AlignSupportToGround(
+        List<XForm[]> frames, SourceScene scene, MappingResult map, TargetRig rig,
+        (FootChain Left, FootChain Right) feet, Vector3 up, MappingReportInfo report, int take)
+    {
+        if (frames.Count == 0)
+            return;
+        var skeleton = rig.Skeleton;
+        var rest = skeleton.RestWorld;
+        var srcClip = scene.Clips[take];
+        var src = scene.Skeleton;
+
+        // The GROUND normal is the rig-space vertical axis, not the character-lean up:
+        // the character frame's up tilts a few degrees with the rest posture, and a
+        // tilted dot-metric slants the ground line across a traveling clip (measured:
+        // 28 cm of false offset on a long corpus walk). Snap to the dominant axis.
+        var aUp = Vector3.Abs(up);
+        up = aUp.X >= aUp.Y && aUp.X >= aUp.Z
+            ? new Vector3(MathF.Sign(up.X), 0f, 0f)
+            : aUp.Y >= aUp.Z
+                ? new Vector3(0f, MathF.Sign(up.Y), 0f)
+                : new Vector3(0f, 0f, MathF.Sign(up.Z));
+
+        // ---- support-bone set: the roles mapped on BOTH rigs (metrics must compare
+        // the same anatomical points or anthropometric offsets leak into the gap) ----
+        var supportRoles = new List<BoneRole>();
+        foreach (var role in new[] { BoneRole.FootL, BoneRole.FootR, BoneRole.ToeL, BoneRole.ToeR })
+        {
+            if (map.RoleToBone.ContainsKey(role) && rig.BoneForRole(role) is not null)
+                supportRoles.Add(role);
+        }
+        var sourceMeasured = supportRoles.Contains(BoneRole.FootL) && supportRoles.Contains(BoneRole.FootR)
+            && srcClip.Frames.Count > 0 && srcClip.Frames[0].Length == src.Count;
+        if (!sourceMeasured)
+        {
+            // No reliable common support metric: fall back to the ankles the target
+            // chains provide and a zero source gap (best guess: grounded).
+            supportRoles.Clear();
+        }
+
+        var tgtSupportBones = new List<int>();
+        foreach (var role in supportRoles)
+            tgtSupportBones.Add(rig.BoneForRole(role)!.Value);
+        if (tgtSupportBones.Count == 0)
+        {
+            tgtSupportBones.Add(feet.Left.Ankle);
+            tgtSupportBones.Add(feet.Right.Ankle);
+        }
+
+        var tgtRestSupport = float.MaxValue;
+        foreach (var b in tgtSupportBones)
+            tgtRestSupport = MathF.Min(tgtRestSupport, Vector3.Dot(rest[b].Pos, up));
+
+        var solvedSupport = float.MaxValue;
+        foreach (var frame in frames)
+        {
+            var world = new Skeleton.Pose(frame).ToWorld(skeleton);
+            foreach (var b in tgtSupportBones)
+                solvedSupport = MathF.Min(solvedSupport, Vector3.Dot(world[b].Pos, up));
+        }
+
+        // ---- source-authored support gap --------------------------------------
+        float sourceRel = 0f;
+        if (sourceMeasured)
+        {
+            var srcSupportBones = new List<int>();
+            foreach (var role in supportRoles)
+                srcSupportBones.Add(map.RoleToBone[role]);
+
+            var srcUp = scene.UpAxis switch
+            {
+                0 => new Vector3(scene.UpAxisSign, 0f, 0f),
+                2 => new Vector3(0f, 0f, scene.UpAxisSign),
+                _ => new Vector3(0f, scene.UpAxisSign, 0f),
+            };
+            var srcHips = map.RoleToBone.TryGetValue(BoneRole.Hips, out var sh) ? sh : -1;
+
+            var srcRestSupport = float.MaxValue;
+            var srcRestGround = float.MaxValue;
+            for (var b = 0; b < src.Count; b++)
+            {
+                var h = Vector3.Dot(src.RestWorld[b].Pos, srcUp);
+                srcRestGround = MathF.Min(srcRestGround, h);
+            }
+            foreach (var b in srcSupportBones)
+                srcRestSupport = MathF.Min(srcRestSupport, Vector3.Dot(src.RestWorld[b].Pos, srcUp));
+
+            var srcClipSupport = float.MaxValue;
+            var srcMotionGround = float.MaxValue;
+            foreach (var frame in srcClip.Frames)
+            {
+                var world = new Skeleton.Pose(frame).ToWorld(src);
+                foreach (var b in srcSupportBones)
+                    srcClipSupport = MathF.Min(srcClipSupport, Vector3.Dot(world[b].Pos, srcUp));
+                if (!scene.RestPlacementAuthored)
+                {
+                    for (var b = 0; b < src.Count; b++)
+                        srcMotionGround = MathF.Min(srcMotionGround, Vector3.Dot(world[b].Pos, srcUp));
+                }
+            }
+
+            // AUTHORED placements (FBX): the rest stands on the authored ground, so the
+            // gap is simply clip support minus rest support (same bones, same space).
+            // UN-PLACED sources (BVH capture volumes): absolute placement is meaningless,
+            // so both terms go placement-free: the clip's support above its OWN motion
+            // ground (lowest joint anywhere, incl. static origin markers) compared to the
+            // rest pose's support above ITS lowest joint. A grounded walk reads ~0, a
+            // jump reads its true airborne height, a crawl reads its raised feet.
+            float gap;
+            if (scene.RestPlacementAuthored)
+                gap = srcClipSupport - srcRestSupport;
+            else
+                gap = (srcClipSupport - srcMotionGround) - (srcRestSupport - srcRestGround);
+
+            // Hip-height ratio scales the (small) source gap into target units,
+            // clamped against degenerate rest measurements.
+            var ratio = 1f;
+            if (srcHips >= 0 && rig.BoneForRole(BoneRole.Hips) is { } tgtHips)
+            {
+                var srcHipHeight = Vector3.Dot(src.RestWorld[srcHips].Pos, srcUp) - srcRestSupport;
+                var tgtHipHeight = Vector3.Dot(rest[tgtHips].Pos, up) - tgtRestSupport;
+                if (srcHipHeight > 1e-3f && float.IsFinite(tgtHipHeight / srcHipHeight))
+                    ratio = Math.Clamp(tgtHipHeight / srcHipHeight, 0.25f, 4f);
+            }
+            sourceRel = gap * ratio;
+        }
+
+        var delta = tgtRestSupport + sourceRel - solvedSupport;
+        if (!float.IsFinite(delta) || MathF.Abs(delta) > 100f)
+        {
+            AddNote(report, $"Support ground alignment skipped: implausible offset {delta:0.0}.");
+            return;
+        }
+        if (MathF.Abs(delta) < 0.01f)
+            return; // already aligned
+
+        var shift = up * delta;
+        foreach (var frame in frames)
+        {
+            for (var i = 0; i < skeleton.Count; i++)
+            {
+                if (skeleton[i].ParentIndex < 0)
+                    frame[i] = new XForm(frame[i].Pos + shift, frame[i].Rot);
+            }
+        }
+        AddNote(report, sourceMeasured
+            ? $"Support ground alignment: {delta:0.00} vertical offset applied "
+              + $"(source-authored support delta {sourceRel:0.00})."
+            : $"Support ground alignment: {delta:0.00} vertical offset applied "
+              + "(source feet unmapped; clip support aligned to target rest support).");
     }
 
     private static void ApplyRootMotion(

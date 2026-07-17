@@ -35,6 +35,15 @@ public sealed class AnimEventEntry
     /// <summary>event_keys <c>Volume</c> value (<c>0.7</c> in all shipped footstep events);
     /// null omits the key.</summary>
     public double? Volume { get; set; }
+
+    /// <summary>
+    /// Additional string event_keys emitted after the fixed keys, in insertion order.
+    /// (W3b addition, southpaw project: punch clips carry semantic contact tags such as
+    /// <c>Zone</c>/<c>Family</c>/<c>Hand</c> on their contact-frame AnimEvent; the shape
+    /// stays the shipped citizen AnimEvent node shape, only extra keys appear.) Null or
+    /// empty adds nothing, so existing callers are unaffected.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? ExtraKeys { get; set; }
 }
 
 /// <summary>One animation to register in a vmdl AnimationList.</summary>
@@ -386,6 +395,11 @@ public static class VmdlWriter
             keys["Foot"] = new KvString(animEvent.Foot);
         if (animEvent.Volume is { } volume)
             keys["Volume"] = new KvDouble(volume);
+        if (animEvent.ExtraKeys is not null)
+        {
+            foreach (var kv in animEvent.ExtraKeys)
+                keys[kv.Key] = new KvString(kv.Value);
+        }
         if (keys.Count > 0)
             node["event_keys"] = keys;
 

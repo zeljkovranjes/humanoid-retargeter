@@ -45,9 +45,12 @@ using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global
 /// <c>_L</c>/<c>_R</c> name-token pairing (<c>arm_upper_L_twist0</c> ↔
 /// <c>arm_upper_R_twist0</c>, <c>foot_L_IK_target</c> ↔ <c>foot_R_IK_target</c>); anything
 /// unpaired (center bones: pelvis, spine, neck, head) mirrors in place, which reflects its
-/// rotation across the sagittal plane and negates its lateral translation. IK-baked bones
-/// should be re-baked from the mirrored body afterwards (<see cref="IkBoneBaker"/>) — the
-/// pipeline does exactly that.</para>
+/// rotation across the sagittal plane and negates its lateral translation. IK-baked helper
+/// bones are NOT re-baked after mirroring: conjugation is a homomorphism, so the mirrored
+/// copies of the primary clip's final helper channels already hang in exactly the mirrored
+/// relationship over the mirrored body (re-baking encoded a divergent convention, the Gate 3
+/// review's mechanism 2 of the _M render defect; southpaw project, gate3_review.md 3.4).
+/// Channel exclusions on mirrored clips go through <see cref="MirrorSafeExclusions"/>.</para>
 /// </remarks>
 public static class ClipMirror
 {
@@ -74,8 +77,11 @@ public static class ClipMirror
         var skeleton = rig.Skeleton;
         var lateral = LateralAxis(rig);
         var pair = BuildPairing(rig);
+        var fkFix = HierarchyInconsistentBones(rig, pair);
 
         var result = new List<XForm[]>(frames.Count);
+        var baseWorld = fkFix.Count > 0 ? new XForm[skeleton.Count] : null;
+        var mirrorWorld = fkFix.Count > 0 ? new XForm[skeleton.Count] : null;
         foreach (var locals in frames)
         {
             if (locals.Length != skeleton.Count)
@@ -91,9 +97,121 @@ public static class ClipMirror
                     ReflectPoint(source.Pos, lateral),
                     ReflectRotation(source.Rot, lateral));
             }
+
+            // Hierarchy-inconsistent pairs (the citizen parents arm_elbow_helper_R under
+            // arm_lower_R_twist0 while _L hangs under arm_lower_L, the W3a-documented
+            // rig quirk): the partner's conjugated LOCAL under a non-mirrored parent
+            // chain misplaces the bone by the parent-chain difference (measured ~1 in on
+            // the elbow/knee helpers). Solve their locals by FK so the mirrored WORLD is
+            // the exact reflection of the partner's world (southpaw G8 mirror fix).
+            if (fkFix.Count > 0)
+            {
+                for (var i = 0; i < skeleton.Count; i++)
+                {
+                    var parent = skeleton[i].ParentIndex;
+                    baseWorld![i] = parent < 0
+                        ? locals[i]
+                        : XForm.Compose(baseWorld[parent], locals[i]);
+                }
+                for (var i = 0; i < skeleton.Count; i++)
+                {
+                    var parent = skeleton[i].ParentIndex;
+                    if (fkFix.Contains(i))
+                    {
+                        var desired = new XForm(
+                            ReflectPoint(baseWorld![pair[i]].Pos, lateral),
+                            ReflectRotation(baseWorld[pair[i]].Rot, lateral));
+                        mirrored[i] = parent < 0
+                            ? desired
+                            : XForm.ToLocal(mirrorWorld![parent], desired);
+                    }
+                    mirrorWorld![i] = parent < 0
+                        ? mirrored[i]
+                        : XForm.Compose(mirrorWorld[parent], mirrored[i]);
+                }
+            }
             result.Add(mirrored);
         }
         return result;
+    }
+
+    /// <summary>
+    /// Bones whose L/R pairing is NOT hierarchy-consistent (the partner hangs under a
+    /// non-mirrored parent). Only constraint-driven helpers can reach this state
+    /// (<see cref="BuildPairing"/> fails hard for any other bone); their mirrored locals
+    /// need the FK solve in <see cref="Mirror"/> and their DMX channels must be written
+    /// (<see cref="MirrorSafeExclusions"/>).
+    /// </summary>
+    private static HashSet<int> HierarchyInconsistentBones(TargetRig rig, int[] pair)
+    {
+        var skeleton = rig.Skeleton;
+        var result = new HashSet<int>();
+        for (var i = 0; i < pair.Length; i++)
+        {
+            var parent = skeleton[i].ParentIndex;
+            var partnerParent = skeleton[pair[i]].ParentIndex;
+            var consistent = parent < 0
+                ? partnerParent < 0
+                : partnerParent == pair[parent];
+            if (!consistent)
+                result.Add(i);
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Filters a channel-exclusion set for a MIRRORED clip: returns the subset of
+    /// <paramref name="excluded"/> that is still safe to leave channel-less after mirroring.
+    /// A channel-less bone is rendered/baked at its own REST local under its (mirrored)
+    /// parent; the mirrored frames instead carry the conjugated rest local of the bone's
+    /// L/R partner. Those agree only when the rig's rest locals are mirror conjugates
+    /// (restLocal(i) == conjugate(restLocal(partner(i)))). Bones breaking that symmetry
+    /// (measured on the citizen rig: leg/arm *_twist1 chains and neck_clothing, 19 to 37 cm
+    /// off) MUST keep explicit mirrored channels or every data consumer (model compiler
+    /// sequence bake, render-side helper evaluation) places them wrong: the Gate 3 review's
+    /// MECHANISM 1 of the _M render defect (southpaw project, gate3_review.md 3.4).
+    /// Truly symmetric helpers stay excluded exactly as on primary clips.
+    /// </summary>
+    /// <param name="rig">The target rig the exclusion set belongs to.</param>
+    /// <param name="excluded">The primary-clip exclusion set (constraint-driven bones).</param>
+    /// <returns>The mirror-safe subset, or null when nothing remains excluded.</returns>
+    public static IReadOnlySet<int>? MirrorSafeExclusions(TargetRig rig, IReadOnlySet<int>? excluded)
+    {
+        if (excluded is null || excluded.Count == 0)
+            return excluded;
+
+        var skeleton = rig.Skeleton;
+        var lateral = LateralAxis(rig);
+        var pair = BuildPairing(rig);
+        var inconsistent = HierarchyInconsistentBones(rig, pair);
+
+        const float posTolCm = 0.1f;
+        const float rotTolDeg = 0.5f;
+        var cosTol = MathF.Cos(rotTolDeg * MathF.PI / 360f); // half-angle for quat dot
+
+        var safe = new HashSet<int>();
+        foreach (var i in excluded)
+        {
+            // Hierarchy-inconsistent pairs always need explicit channels: their mirrored
+            // locals are FK-solved (see Mirror) and no rest local can stand in for them.
+            if (inconsistent.Contains(i))
+                continue;
+
+            var own = skeleton[i].RestLocal;
+            var partnerRest = skeleton[pair[i]].RestLocal;
+            var needed = new XForm(
+                ReflectPoint(partnerRest.Pos, lateral),
+                ReflectRotation(partnerRest.Rot, lateral));
+
+            var posOk = (own.Pos - needed.Pos).Length() <= posTolCm;
+            var dot = MathF.Abs(
+                own.Rot.X * needed.Rot.X + own.Rot.Y * needed.Rot.Y
+                + own.Rot.Z * needed.Rot.Z + own.Rot.W * needed.Rot.W);
+            var rotOk = dot >= cosTol;
+            if (posOk && rotOk)
+                safe.Add(i);
+        }
+        return safe.Count > 0 ? safe : null;
     }
 
     // ================================================================ mirror plane
@@ -180,6 +298,17 @@ public static class ClipMirror
 
         for (var i = 0; i < pair.Length; i++)
         {
+            // Constraint-driven helper bones are excluded from the output DMX (the model's
+            // AnimConstraintList re-drives them at runtime, see Retargeter.EmitClip
+            // ChannelExcludedBones), so their mirrored channels are never written. The shipped
+            // s&box citizen rig parents these asymmetrically (arm_elbow_helper_R hangs under
+            // arm_lower_R_twist0 while arm_elbow_helper_L hangs under arm_lower_L), a benign
+            // data quirk that must not fail the whole mirror. Skip the strict L/R
+            // hierarchy-consistency requirement for them: their pairing does not affect any
+            // written channel. (W3a fix, southpaw project.)
+            if (rig.HelpersAreConstraintDriven && rig.ClassOf(i) == BoneClass.ConstraintDriven)
+                continue;
+
             if (pair[pair[i]] != i)
                 throw new ArgumentException(
                     $"Cannot mirror: bone pairing is not symmetric ('{skeleton[i].Name}' → "

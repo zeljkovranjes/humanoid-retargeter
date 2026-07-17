@@ -139,6 +139,33 @@ public static class IkBoneBaker
         }
     }
 
+    /// <summary>
+    /// Pins the KeepRestLocal-classified IK helper bones (aim_matrix_*, hold_*,
+    /// *_IK_attach and unrecognized IkBaked names) to their REST locals in every frame.
+    /// Used on MIRRORED clips (southpaw G8 mirror fix): these bones are aim-space
+    /// reference CONSTANTS the model's aim/eye constraint setup was authored against
+    /// (measured at rest in every shipped citizen clip); conjugating them like body
+    /// geometry feeds the aim chain an alien reference frame and the head/eye region
+    /// collapses. The body-derived helpers (root_IK, IK targets, ikrule) are NOT
+    /// touched: their mirrored channels stay the exact conjugates of the primary's.
+    /// </summary>
+    public static void PinRestLocalReferenceBones(List<XForm[]> frames, TargetRig target)
+    {
+        ArgumentNullException.ThrowIfNull(frames);
+        ArgumentNullException.ThrowIfNull(target);
+
+        var skeleton = target.Skeleton;
+        var rules = BuildRules(target);
+        foreach (var locals in frames)
+        {
+            for (var i = 0; i < locals.Length && i < skeleton.Count; i++)
+            {
+                if (target.ClassOf(i) == BoneClass.IkBaked && rules[i].Kind == RuleKind.KeepRestLocal)
+                    locals[i] = skeleton[i].RestLocal;
+            }
+        }
+    }
+
     // ------------------------------------------------------------------ rules
 
     private enum RuleKind

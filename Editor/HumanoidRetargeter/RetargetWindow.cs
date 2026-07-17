@@ -23,9 +23,13 @@ namespace HumanoidRetargeter.Editor;
 /// mapping stays per FILE (one skeleton per file). Every file carries its own mapping -
 /// a single batch may mix Mixamo, ActorCore and BVH sources.
 /// </summary>
-[Dock( "Editor", "Humanoid Retargeter", "sync_alt" )]
+[Dock( "Editor", RetargetWindow.DockTitle, "sync_alt" )]
 public sealed class RetargetWindow : Widget
 {
+	/// <summary>Registered dock title — must match the <c>[Dock]</c> attribute above; used
+	/// to open the panel through the editor's <c>DockManager.SetDockState</c>.</summary>
+	public const string DockTitle = "Humanoid Retargeter";
+
 	static RetargetWindow _instance;
 
 	/// <summary>The open window instance, if any (dock windows are singletons here).</summary>
@@ -88,8 +92,15 @@ public sealed class RetargetWindow : Widget
 	/// <summary>Opens (or raises) the window and returns it.</summary>
 	public static RetargetWindow Open()
 	{
-		var window = Instance ?? EditorWindow.DockManager.Create<RetargetWindow>();
-		EditorWindow.DockManager.RaiseDock( window );
+		// The editor removed DockManager.Create<T>(); SetDockState opens the
+		// [Dock]-registered panel by its title (the ctor sets _instance), matching the
+		// shipped Asset Browser's open path, then RaiseDock brings it to the front.
+		if ( Instance is null )
+			EditorWindow.DockManager.SetDockState( DockTitle, true );
+
+		var window = Instance;
+		if ( window.IsValid() )
+			EditorWindow.DockManager.RaiseDock( window );
 		return window;
 	}
 
