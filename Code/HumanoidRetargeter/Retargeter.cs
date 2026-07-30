@@ -6,6 +6,7 @@ using System.Numerics;
 using System.Text;
 using HumanoidRetargeter.Cleanup;
 using HumanoidRetargeter.Formats;
+using HumanoidRetargeter.Formats.Ant;
 using HumanoidRetargeter.Formats.Bvh;
 using HumanoidRetargeter.Formats.Dmx;
 using HumanoidRetargeter.Formats.Fbx;
@@ -1480,6 +1481,13 @@ public static class Retargeter
             SampleFps = sampleFps ?? 30f,
             ClipNameBase = FileStem(fileName),
         };
+        // EA ANT packages carry no clip names and bind channels to joints by index; the
+        // companion joint table arrives the same way RenderWare's .dff does.
+        var antOptions = new AntImportOptions
+        {
+            SampleFps = sampleFps ?? 30f,
+            ClipNameBase = FileStem(fileName),
+        };
         var ext = ExtensionOf(fileName);
         return ext switch
         {
@@ -1493,14 +1501,17 @@ public static class Retargeter
             // comes from the companion model .dff (a missing skeleton throws the
             // importer's instructive error).
             "anm" or "an5" => RwAnmImporter.Import(data, skeletonData, rwOptions),
+            // EA ANT animation packages (EA Canada titles; verified on Fight Night Champion).
+            "cba" => AntImporter.Import(data, skeletonData, antOptions),
             _ => SniffFormat(data) switch
             {
                 "fbx" => FbxImporter.Import(data, fbxOptions),
                 "bvh" => BvhImporter.Import(data, bvhOptions),
                 "gltf" => GltfImporter.Import(data, gltfOptions),
                 "rwanim" => RwAnmImporter.Import(data, skeletonData, rwOptions),
+                "ant" => AntImporter.Import(data, skeletonData, antOptions),
                 _ => throw new FormatException(
-                    $"Unrecognized source format for '{fileName}' (expected .fbx, .bvh, .glb, .gltf, .vrm, .anm or .an5)."),
+                    $"Unrecognized source format for '{fileName}' (expected .fbx, .bvh, .glb, .gltf, .vrm, .anm, .an5 or .cba)."),
             },
         };
     }
@@ -1511,6 +1522,10 @@ public static class Retargeter
         const string fbxMagic = "Kaydara FBX Binary";
         if (StartsWithAscii(data, fbxMagic))
             return "fbx";
+
+        // EA ANT stream magic (.cba animation packages).
+        if (StartsWithAscii(data, AntStream.StreamTag))
+            return "ant";
 
         // GLB magic: 'glTF' (0x46546C67 little-endian).
         if (StartsWithAscii(data, "glTF"))
