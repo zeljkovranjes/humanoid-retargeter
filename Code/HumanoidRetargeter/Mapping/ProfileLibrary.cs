@@ -246,17 +246,89 @@ public static class ProfileLibrary
     /// </summary>
     public static Profile AdvancedSkeleton { get; } = BuildAdvancedSkeleton();
 
+    /// <summary>
+    /// EA Sports <i>Fight Night</i> boxer skeleton (Fight Night Champion / Round 4 game
+    /// rips — verified against the extracted <c>skeleton_boxer.json</c>, 293 bones). The
+    /// joint names are the MotionBuilder/HumanIK convention mixamo also descends from
+    /// (<c>Hips</c>, <c>LeftUpLeg→LeftLeg→LeftFoot→LeftToeBase</c>,
+    /// <c>LeftShoulder→LeftArm→LeftForeArm→LeftHand</c>), which is why mixamo and
+    /// perception_neuron both score in the 0.84 range on these rigs; three things make it
+    /// its own preset:
+    /// <list type="bullet">
+    /// <item>a FOUR-bone spine <c>Spine→Spine1→Spine2→Spine3</c> (mixamo has three) under a
+    /// two-bone neck <c>Neck→Neck1</c> — <c>Neck1</c> stays unmapped, the same policy as
+    /// ActorCore's NeckTwist02 and rigify's spine.005.</item>
+    /// <item>BOXING GLOVES instead of hands: the only real finger joints are
+    /// <c>LeftHandThumb1→LeftHandThumb2</c> (two segments, no distal) and the fused
+    /// <c>LeftInHandMiddle→LeftHandMiddle1→LeftHandMiddle2</c>. Index, ring and pinky exist
+    /// only as glove SHELL bones (<c>LeftHandIndexGlove</c>, <c>LeftInHandRingGlove</c>,
+    /// <c>LeftHandPinkyGlove</c>) — mesh helpers, not joints, so they carry no aliases.
+    /// Declaring only the roles the rig really has is what lets it reach full optional
+    /// coverage (same reason <see cref="Smpl"/> is split from <see cref="SmplX"/>) while
+    /// mixamo's 30 declared finger roles drag its score down on the same skeleton.</item>
+    /// <item><c>LeftInHandMiddle</c> IS the metacarpal and is mapped to the Meta role
+    /// rather than a phalanx — mapping a metacarpal as a phalanx shifts every curl one
+    /// joint outward (the SOMA finger bug; see <see cref="SomaBvh"/>). It is genuinely
+    /// animated here: the extracted punch packages key it on every clip as the fist.</item>
+    /// </list>
+    /// The rig also carries a large muscle/jiggle simulation layer (<c>Muscle_*</c>,
+    /// <c>*_Jiggle</c>, <c>Offset_*</c>, <c>*_Helper</c>, <c>*Twist*</c>, <c>Gut_*</c>,
+    /// <c>Stomach*</c>), a full face rig under <c>Face</c>, and the root chain
+    /// <c>Reference→AITrajectory→Hips</c> — none of which carry aliases.
+    /// </summary>
+    public static Profile FightNight { get; } = BuildFightNight();
+
     /// <summary>All built-in presets, in detection order (first wins score ties — see
     /// <see cref="SmplX"/> vs <see cref="Smpl"/>; <see cref="ValveBiped"/> is evaluated
     /// before <see cref="Biped"/> and <see cref="DazGenesis"/> before
-    /// <see cref="DazPoser"/> within their families).</summary>
+    /// <see cref="DazPoser"/> within their families). <see cref="FightNight"/> follows
+    /// <see cref="Mixamo"/>/<see cref="PerceptionNeuron"/> so those keep any tie on the
+    /// HumanIK-named rigs they own (it outscores them outright on a real boxer rig).</summary>
     public static IReadOnlyList<Profile> All { get; } =
         new[]
         {
-            Sbox, Mixamo, ActorCoreCc, UeMannequin, XsensMvn, PerceptionNeuron, RokokoBvh,
-            SmplX, Smpl, SomaBvh, ClassicBvh, ValveBiped, Biped, DazGenesis, DazPoser,
-            Rigify, Vrm, AutoRigPro, AdvancedSkeleton,
+            Sbox, Mixamo, ActorCoreCc, UeMannequin, XsensMvn, PerceptionNeuron, FightNight,
+            RokokoBvh, SmplX, Smpl, SomaBvh, ClassicBvh, ValveBiped, Biped, DazGenesis,
+            DazPoser, Rigify, Vrm, AutoRigPro, AdvancedSkeleton,
         };
+
+    // ---------------------------------------------------------------- ea fight night
+
+    private static Profile BuildFightNight()
+    {
+        var aliases = new Dictionary<BoneRole, string[]>
+        {
+            [BoneRole.Hips] = new[] { "Hips" },
+            [BoneRole.Spine0] = new[] { "Spine" },
+            [BoneRole.Spine1] = new[] { "Spine1" },
+            [BoneRole.Spine2] = new[] { "Spine2" },
+            [BoneRole.Spine3] = new[] { "Spine3" },
+            // Neck→Neck1→Head: Neck IS the neck bone; Neck1 stays unmapped.
+            [BoneRole.Neck] = new[] { "Neck" },
+            [BoneRole.Head] = new[] { "Head" },
+        };
+        foreach (var (roleSide, nameSide) in Sides())
+        {
+            aliases[Role("Clavicle", roleSide)] = new[] { $"{nameSide}Shoulder" };
+            aliases[Role("UpperArm", roleSide)] = new[] { $"{nameSide}Arm" };
+            aliases[Role("LowerArm", roleSide)] = new[] { $"{nameSide}ForeArm" };
+            aliases[Role("Hand", roleSide)] = new[] { $"{nameSide}Hand" };
+            aliases[Role("UpperLeg", roleSide)] = new[] { $"{nameSide}UpLeg" };
+            aliases[Role("LowerLeg", roleSide)] = new[] { $"{nameSide}Leg" };
+            aliases[Role("Foot", roleSide)] = new[] { $"{nameSide}Foot" };
+            aliases[Role("Toe", roleSide)] = new[] { $"{nameSide}ToeBase" };
+
+            // Gloved hand: a two-segment thumb and one fused middle finger carrying the
+            // metacarpal. No distal phalanx anywhere and no index/ring/pinky joints — the
+            // *Glove bones of those names are mesh shells and must never be mapped.
+            aliases[Role("ThumbProx", roleSide)] = new[] { $"{nameSide}HandThumb1" };
+            aliases[Role("ThumbMid", roleSide)] = new[] { $"{nameSide}HandThumb2" };
+            aliases[Role("MiddleMeta", roleSide)] = new[] { $"{nameSide}InHandMiddle" };
+            aliases[Role("MiddleProx", roleSide)] = new[] { $"{nameSide}HandMiddle1" };
+            aliases[Role("MiddleMid", roleSide)] = new[] { $"{nameSide}HandMiddle2" };
+        }
+        return new Profile("fight_night", new string[0], aliases);
+    }
 
     // ---------------------------------------------------------------- advanced skeleton
 
