@@ -1690,13 +1690,35 @@ public static class Retargeter
 
         var takeName = scene.Clips[take].Name;
         if (!string.IsNullOrWhiteSpace(takeName) && takeName != "motion"
-            && !takeName.Equals("mixamo.com", StringComparison.OrdinalIgnoreCase))
+            && !takeName.Equals("mixamo.com", StringComparison.OrdinalIgnoreCase)
+            && !IsExporterPlaceholderTake(takeName))
             return takeName;
 
         // BVH files (clip always named "motion"), Mixamo takes (always named
-        // "mixamo.com") and unnamed takes use the file stem.
+        // "mixamo.com"), Unreal exports (every stack named "Unreal Take") and
+        // unnamed takes use the file stem.
         var stem = FileStem(request.SourceFileName);
         return multipleTakes ? $"{stem}_{take + 1}" : stem;
+    }
+
+    /// <summary>
+    /// True for take names that identify the EXPORTER rather than the animation. Unreal's
+    /// FBX exporter stamps <c>Unreal Take</c> into every AnimStack it writes (numbered —
+    /// <c>Unreal Take 001</c> — when a sequence exports several), so a folder of UE clips
+    /// arrives with one identical take name on every file. Treated as authored, that name
+    /// beats the file stem in <see cref="RequestedClipName"/> and the whole batch collapses
+    /// onto one clip name, which <see cref="UniqueClipName"/> then has to pull apart into
+    /// <c>Unreal_Take</c>, <c>Unreal_Take_2</c>, <c>Unreal_Take_3</c>… — every file's real
+    /// name lost, and the resulting sequence names carry no meaning in the vmdl. Falling
+    /// through to the file stem restores the same per-file naming BVH and Mixamo sources
+    /// already get. Matched as a PREFIX, and against the underscored spelling too, so the
+    /// numbered variants and any already-sanitized re-import are covered.
+    /// </summary>
+    private static bool IsExporterPlaceholderTake(string takeName)
+    {
+        var trimmed = takeName.Trim();
+        return trimmed.StartsWith("unreal take", StringComparison.OrdinalIgnoreCase)
+            || trimmed.StartsWith("unreal_take", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>Collision auto-suffixing across the batch: <c>name</c>, <c>name_2</c>, …
