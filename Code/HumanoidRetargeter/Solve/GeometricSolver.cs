@@ -133,7 +133,7 @@ public sealed class GeometricSolver : IRetargetSolver
 
     /// <summary>Everything built once per solve; <see cref="SolveFrame"/> is then pure
     /// per-frame math over preallocated scratch buffers.</summary>
-    private sealed class Plan
+    internal sealed class Plan
     {
         private static readonly BoneRole[] SpineRoles =
         {
@@ -708,10 +708,26 @@ public sealed class GeometricSolver : IRetargetSolver
 
         public XForm[] SolveFrame(XForm[] srcLocals)
         {
+            ArgumentNullException.ThrowIfNull(srcLocals);
+            var outLocals = new XForm[_tgt.Count];
+            SolveFrameInto(srcLocals, outLocals);
+            return outLocals;
+        }
+
+        /// <summary>
+        /// Allocation-free frame solve used by the runtime streaming API. The plan owns and
+        /// reuses its FK/delta scratch buffers; the caller owns the destination buffer.
+        /// </summary>
+        internal void SolveFrameInto(ReadOnlySpan<XForm> srcLocals, Span<XForm> outLocals)
+        {
             if (srcLocals.Length != _src.Count)
                 throw new ArgumentException(
                     $"Frame has {srcLocals.Length} bone transforms but the source skeleton has {_src.Count}.",
                     nameof(srcLocals));
+            if (outLocals.Length < _tgt.Count)
+                throw new ArgumentException(
+                    $"Destination has {outLocals.Length} bone transforms but the target skeleton has {_tgt.Count}.",
+                    nameof(outLocals));
 
             // Source FK (frame locals live in the original rest hierarchy).
             for (var i = 0; i < _src.Count; i++)
@@ -778,7 +794,6 @@ public sealed class GeometricSolver : IRetargetSolver
             }
 
             // Compose output locals top-down over the target hierarchy.
-            var outLocals = new XForm[_tgt.Count];
             for (var i = 0; i < _tgt.Count; i++)
             {
                 var bone = _tgt[i];
@@ -802,10 +817,9 @@ public sealed class GeometricSolver : IRetargetSolver
             }
 
             ValidateFinite(outLocals);
-            return outLocals;
         }
 
-        private static void ValidateFinite(XForm[] locals)
+        private static void ValidateFinite(ReadOnlySpan<XForm> locals)
         {
             foreach (var x in locals)
             {
