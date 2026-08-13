@@ -321,21 +321,14 @@ public static class TargetPickers
 
 			// Engine (Z-up, inches) → vmdl source space (Y-up, cm): uniform inverse scale
 			// on every local position; the inverse basis rotation folds into the roots.
-			var inverseUp = System.Numerics.Quaternion.CreateFromAxisAngle(
-				System.Numerics.Vector3.UnitX, -MathF.PI * 0.5f );
 			var definitions = new List<HumanoidRetargeter.Skeleton.BoneDefinition>( engine.Count );
 			foreach ( var bone in engine.Bones )
 			{
-				var pos = bone.RestLocal.Pos / RetargetTargetSpec.SboxSourceScale;
-				var rot = bone.RestLocal.Rot;
-				if ( bone.ParentIndex < 0 )
-				{
-					pos = System.Numerics.Vector3.Transform( pos, inverseUp );
-					rot = System.Numerics.Quaternion.Normalize( inverseUp * rot );
-				}
+				var local = CompiledRigSourceSpace.FromEngineLocal(
+					bone.RestLocal, bone.ParentIndex < 0, target.Spec.UpAxis );
 				definitions.Add( new HumanoidRetargeter.Skeleton.BoneDefinition(
 					bone.Name, bone.ParentIndex < 0 ? null : engine[bone.ParentIndex].Name,
-					new XForm( pos, rot ) ) );
+					local ) );
 			}
 			var skeleton = SkeletonModel.Create( definitions );
 
