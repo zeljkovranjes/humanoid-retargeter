@@ -6,8 +6,12 @@ using System.Linq;
 using HumanoidRetargeter.Mapping;
 using HumanoidRetargeter.Maths;
 using HumanoidRetargeter.Target;
+using HumanoidRetargeter.Skeleton;
 
 namespace HumanoidRetargeter;
+
+/// <summary>Imported source after the public mapping and bind-rest preparation cascade.</summary>
+public sealed record ResolvedSource( SourceScene Scene, MappingResult Mapping, MappingReportInfo Report );
 
 /// <summary>
 /// Mapping report for one source file: which profile produced the mapping, how confident it

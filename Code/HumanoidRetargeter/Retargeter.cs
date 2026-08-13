@@ -71,6 +71,21 @@ using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global
 /// </remarks>
 public static class Retargeter
 {
+	/// <summary>
+	/// Applies the same mapping, diagnostics, and mid-pose bind-rest selection used by
+	/// <see cref="ConvertBatch"/>, while leaving the sampled clips available to an editor
+	/// integration that needs an in-memory target rather than DMX output.
+	/// </summary>
+	public static ResolvedSource ResolveSource( SourceScene scene, MappingResult? mappingOverride = null,
+		Func<string, MappingResult?>? userPresetLookup = null )
+	{
+		ArgumentNullException.ThrowIfNull( scene );
+		var (map, report) = ResolveMapping( scene.Skeleton, mappingOverride, userPresetLookup, scene.AuthoredMapping );
+		foreach ( var note in scene.Notes ) AddNote( report, note );
+		scene = MaybeAdoptBindRest( scene, map, report );
+		return new( scene, map, report );
+	}
+
     /// <summary>Converts one source file — all takes, or only
     /// <see cref="RetargetRequest.TakeIndex"/> when set. Equivalent to a one-request batch.</summary>
     public static RetargetResult Convert(RetargetRequest request, RetargetTargetSpec target)
