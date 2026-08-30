@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using HumanoidRetargeter.Formats;
+using HumanoidRetargeter.Formats.Ant;
 using HumanoidRetargeter.Formats.Renderware;
 using HumanoidRetargeter.Mapping;
 using HumanoidRetargeter.Skeleton;
@@ -49,7 +50,7 @@ public sealed class SourceFileEntry
 
 	/// <summary>
 	/// Absolute path of the companion SKELETON file for animation-only formats (RenderWare
-	/// .anm/.an5 need the character model's .dff — the animation itself has no skeleton).
+	/// .anm/.an5 need a model .dff; EA ANT .cba needs an ordered joint-table JSON).
 	/// Resolved automatically from the animation's folder (then its parent folder) by
 	/// matching the .dff's HAnim node count against the animation's node count, or chosen
 	/// explicitly by the user. Null for self-contained formats.
@@ -60,8 +61,8 @@ public sealed class SourceFileEntry
 	/// facade as <see cref="HumanoidRetargeter.RetargetRequest.SkeletonData"/>.</summary>
 	public byte[] SkeletonBytes { get; private set; }
 
-	/// <summary>True when this is a RenderWare animation that failed to load because no
-	/// matching skeleton .dff was found — the row then offers explicit skeleton selection
+	/// <summary>True when an animation-only source failed because no companion skeleton was
+	/// found — the row then offers explicit .dff or joint-table JSON selection
 	/// (reload via <see cref="Load"/> with the chosen path).</summary>
 	public bool NeedsSkeletonFile { get; private set; }
 
@@ -129,8 +130,8 @@ public sealed class SourceFileEntry
 	/// </summary>
 	/// <param name="filePath">Absolute path of the source animation file.</param>
 	/// <param name="assetsPath">Project assets path for the user-preset lookup (null = no lookup).</param>
-	/// <param name="skeletonPath">Explicit companion skeleton (.dff) path for RenderWare
-	/// animations; null = resolve automatically from the animation's folder.</param>
+	/// <param name="skeletonPath">Explicit companion .dff or ANT joint-table JSON; null =
+	/// resolve automatically from the animation's folder.</param>
 	public static SourceFileEntry Load( string filePath, string assetsPath, string skeletonPath = null )
 	{
 		var entry = new SourceFileEntry { FilePath = filePath };
@@ -148,9 +149,9 @@ public sealed class SourceFileEntry
 		{
 			entry.Status = EntryStatus.Failed;
 			entry.StatusDetail = e.Message;
-			// A RenderWare animation that failed WITHOUT a skeleton gets the explicit
+			// An animation-only format that failed WITHOUT a skeleton gets the explicit
 			// "Pick skeleton…" affordance on its row.
-			entry.NeedsSkeletonFile = IsRenderwareAnimation( filePath ) && entry.SkeletonBytes is null;
+			entry.NeedsSkeletonFile = NeedsCompanionSkeleton( filePath ) && entry.SkeletonBytes is null;
 			return entry;
 		}
 
@@ -175,8 +176,17 @@ public sealed class SourceFileEntry
 			|| ext.Equals( "an5", StringComparison.OrdinalIgnoreCase );
 	}
 
+	/// <summary>Whether the path is an EA ANT animation package (needs joint-table JSON).</summary>
+	public static bool IsAntAnimation( string filePath )
+		=> Path.GetExtension( filePath ).Equals( ".cba", StringComparison.OrdinalIgnoreCase );
+
+	static bool NeedsCompanionSkeleton( string filePath )
+		=> IsRenderwareAnimation( filePath ) || IsAntAnimation( filePath );
+
 	/// <summary>
-	/// RenderWare skeleton resolution: an explicit <paramref name="skeletonPath"/> wins;
+	/// Companion resolution: an explicit <paramref name="skeletonPath"/> wins. For ANT,
+	/// conventional joint-table JSON names in the animation folder and parent are tried.
+	/// For RenderWare,
 	/// otherwise .dff files in the animation's own folder, then its parent folder, are
 	/// probed and the one whose HAnim node count equals the animation's node count is
 	/// chosen (several matches → the .dff with the most frames wins — the most complete
@@ -185,7 +195,7 @@ public sealed class SourceFileEntry
 	/// </summary>
 	static void ResolveSkeletonFile( SourceFileEntry entry, string skeletonPath )
 	{
-		if ( !IsRenderwareAnimation( entry.FilePath ) )
+		if ( !NeedsCompanionSkeleton( entry.FilePath ) )
 			return;
 
 		try
@@ -194,6 +204,12 @@ public sealed class SourceFileEntry
 			{
 				entry.SkeletonPath = skeletonPath;
 				entry.SkeletonBytes = File.ReadAllBytes( skeletonPath );
+				return;
+			}
+
+			if ( IsAntAnimation( entry.FilePath ) )
+			{
+				ResolveAntJointTable( entry );
 				return;
 			}
 
@@ -239,6 +255,48 @@ public sealed class SourceFileEntry
 		catch ( Exception )
 		{
 			// Resolution is best-effort; a missing skeleton surfaces through the importer.
+		}
+	}
+
+	static void ResolveAntJointTable( SourceFileEntry entry )
+	{
+		var folder = Path.GetDirectoryName( Path.GetFullPath( entry.FilePath ) );
+		var parent = folder is null ? null : Path.GetDirectoryName( folder );
+		var stem = Path.GetFileNameWithoutExtension( entry.FilePath );
+		var clips = AntStream.ParseClips( entry.Bytes );
+		var maxJoint = -1;
+		foreach ( var clip in clips )
+			foreach ( var channel in clip.Channels )
+				maxJoint = Math.Max( maxJoint, channel.JointIndex );
+
+		foreach ( var dir in new[] { folder, parent } )
+		{
+			if ( dir is null || !Directory.Exists( dir ) )
+				continue;
+			var preferred = new[]
+			{
+				Path.Combine( dir, stem + ".skeleton.json" ),
+				Path.Combine( dir, "skeleton_boxer.json" ),
+				Path.Combine( dir, "skeleton.json" ),
+			};
+			foreach ( var candidate in preferred )
+			{
+				if ( !File.Exists( candidate ) )
+					continue;
+				try
+				{
+					var bytes = File.ReadAllBytes( candidate );
+					if ( AntSkeletonJson.Parse( bytes ).Count <= maxJoint )
+						continue;
+					entry.SkeletonPath = candidate;
+					entry.SkeletonBytes = bytes;
+					return;
+				}
+				catch ( Exception )
+				{
+					// Not a valid or compatible joint table; continue to the next conventional name.
+				}
+			}
 		}
 	}
 

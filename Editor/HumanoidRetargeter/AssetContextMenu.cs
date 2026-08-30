@@ -8,7 +8,7 @@ using Sandbox;
 namespace HumanoidRetargeter.Editor;
 
 /// <summary>
-/// Asset-browser integration: right-clicking .fbx/.bvh/.glb/.gltf/.vrm/.anm/.an5 files
+/// Asset-browser integration: right-clicking .fbx/.bvh/.glb/.gltf/.vrm/.anm/.an5/.cba files
 /// offers "Retarget to s&amp;box rig…", which opens the <see cref="RetargetWindow"/>
 /// pre-loaded with the selected files.
 /// </summary>
@@ -23,6 +23,7 @@ public static class RetargeterAssetContextMenu
 		"vrm",
 		"anm", // RenderWare single clip (skeleton from a companion .dff)
 		"an5", // RenderWare/FSB2 animation bank (multi-take)
+		"cba", // EA ANT animation package (companion joint-table JSON)
 	};
 
 	[Event( "asset.contextmenu", Priority = 60 )]

@@ -13,7 +13,7 @@ using Sandbox;
 namespace HumanoidRetargeter.Editor;
 
 /// <summary>
-/// The Humanoid Retargeter dock window (design §7): add .fbx/.bvh/.glb/.gltf/.vrm/.anm/.an5
+/// The Humanoid Retargeter dock window (design §7): add .fbx/.bvh/.glb/.gltf/.vrm/.anm/.an5/.cba
 /// files (file dialog or asset-browser context menu), see each file's detected profile as a colored chip
 /// (green = preset/user preset, amber = auto-mapped/needs review, red = failed), fix
 /// mappings manually, preview the retargeted clip on the skinned target model, and batch
@@ -121,7 +121,7 @@ public sealed class RetargetWindow : Widget
 		top.Spacing = 8;
 
 		var add = top.Add( new Button.Primary( "Add Files…" ) { Icon = "add" } );
-		add.ToolTip = "Add .fbx / .bvh / .glb / .gltf / .vrm / .anm / .an5 animation files to convert";
+		add.ToolTip = "Add .fbx / .bvh / .glb / .gltf / .vrm / .anm / .an5 / .cba animation files to convert";
 		add.Clicked = AddFilesViaDialog;
 
 		top.AddSpacingCell( 8 );
@@ -494,7 +494,7 @@ public sealed class RetargetWindow : Widget
 		var fd = new FileDialog( null ) { Title = "Add animation files…" };
 		fd.SetFindExistingFiles();
 		fd.SetModeOpen();
-		fd.SetNameFilter( "Animation Files (*.fbx *.bvh *.glb *.gltf *.vrm *.anm *.an5)" );
+		fd.SetNameFilter( "Animation Files (*.fbx *.bvh *.glb *.gltf *.vrm *.anm *.an5 *.cba)" );
 		if ( !fd.Execute() )
 			return;
 
@@ -605,15 +605,18 @@ public sealed class RetargetWindow : Widget
 	}
 
 	/// <summary>
-	/// Explicit skeleton selection for RenderWare animations (.anm/.an5 carry no skeleton;
-	/// automatic .dff resolution failed): re-loads the entry against the picked model .dff
-	/// — styled like the custom-target FBX picker.
+	/// Explicit skeleton selection for formats whose animation package carries no joint names:
+	/// RenderWare .anm/.an5 uses a model .dff, while EA ANT .cba uses an ordered joint-table
+	/// JSON. Re-loads the entry against the selected companion file.
 	/// </summary>
 	void PickSkeletonFor( SourceFileEntry entry )
 	{
+		var isAnt = SourceFileEntry.IsAntAnimation( entry.FilePath );
 		var path = EditorUtility.OpenFileDialog(
-			$"Select skeleton model (.dff) for {entry.FileName}",
-			"RenderWare Models (*.dff)",
+			isAnt
+				? $"Select ANT joint table (.json) for {entry.FileName}"
+				: $"Select skeleton model (.dff) for {entry.FileName}",
+			isAnt ? "Joint Tables (*.json)" : "RenderWare Models (*.dff)",
 			System.IO.Path.GetDirectoryName( entry.FilePath ) );
 		if ( string.IsNullOrEmpty( path ) )
 			return;
@@ -1410,7 +1413,7 @@ public sealed class RetargetWindow : Widget
 		{
 			var empty = _listLayout.Add( new Label( this )
 			{
-				Text = "No files yet. Use \"Add Files…\" or right-click .fbx/.bvh/.glb/.gltf/.vrm/.anm/.an5 files in the "
+				Text = "No files yet. Use \"Add Files…\" or right-click .fbx/.bvh/.glb/.gltf/.vrm/.anm/.an5/.cba files in the "
 					+ "Asset Browser and choose \"Retarget to s&box rig…\".",
 				WordWrap = true,
 			} );
@@ -1502,13 +1505,14 @@ public sealed class RetargetWindow : Widget
 
 			Layout.AddStretchCell();
 
-			// RenderWare animation without a resolvable skeleton: offer explicit .dff
-			// selection (resolution option b — see SourceFileEntry.ResolveSkeletonFile).
+			// Animation without a resolvable companion skeleton: offer an explicit .dff
+			// or ANT joint-table selection (see SourceFileEntry.ResolveSkeletonFile).
 			if ( entry.NeedsSkeletonFile )
 			{
 				var pickSkeleton = Layout.Add( new Button( "Pick skeleton…", "accessibility" ) );
-				pickSkeleton.ToolTip = "RenderWare animations carry no skeleton — select the "
-					+ "character's model .dff to load this file";
+				pickSkeleton.ToolTip = SourceFileEntry.IsAntAnimation( entry.FilePath )
+					? "EA ANT animations carry joint indices only — select the ordered joint-table JSON"
+					: "RenderWare animations carry no skeleton — select the character's model .dff";
 				pickSkeleton.Clicked = () => _window.PickSkeletonFor( entry );
 			}
 

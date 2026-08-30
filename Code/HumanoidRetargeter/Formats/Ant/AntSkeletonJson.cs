@@ -19,7 +19,8 @@ namespace HumanoidRetargeter.Formats.Ant;
 /// </para>
 /// <para>
 /// The accepted shape is the simple joint dump every ANT rig extractor emits — an ordered
-/// array where the array position IS the joint index the clips reference:
+/// array where the array position IS the joint index the clips reference. The extractor's
+/// metadata wrapper <c>{ "name": "skeleton_boxer", "joints": [...] }</c> is accepted too:
 /// </para>
 /// <code>
 /// [ { "name": "Reference",    "parent": -1 },
@@ -45,7 +46,7 @@ public static class AntSkeletonJson
             return false;
         for (var i = 0; i < data.Length && i < 64; i++)
         {
-            if (data[i] == (byte)'[')
+            if (data[i] is (byte)'[' or (byte)'{')
                 return true;
             if (data[i] is not ((byte)' ' or (byte)'\t' or (byte)'\r' or (byte)'\n' or 0xEF or 0xBB or 0xBF))
                 return false;
@@ -71,13 +72,19 @@ public static class AntSkeletonJson
 
         using (doc)
         {
-            if (doc.RootElement.ValueKind != JsonValueKind.Array)
+            var jointArray = doc.RootElement;
+            if (jointArray.ValueKind == JsonValueKind.Object
+                && jointArray.TryGetProperty("joints", out var wrappedJoints))
+                jointArray = wrappedJoints;
+
+            if (jointArray.ValueKind != JsonValueKind.Array)
                 throw new FormatException(
-                    "Companion joint table must be a JSON ARRAY of {\"name\", \"parent\"} objects "
-                    + "in joint-index order.");
+                    "Companion joint table must be a JSON ARRAY of {\"name\", \"parent\"} "
+                    + "objects in joint-index order, or an object containing that array as "
+                    + "its \"joints\" property.");
 
             var joints = new List<Joint>();
-            foreach (var element in doc.RootElement.EnumerateArray())
+            foreach (var element in jointArray.EnumerateArray())
             {
                 if (element.ValueKind != JsonValueKind.Object
                     || !element.TryGetProperty("name", out var name)

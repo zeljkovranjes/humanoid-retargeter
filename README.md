@@ -18,7 +18,7 @@ Drop in Mixamo, ActorCore/Character Creator, UE Mannequin, BVH mocap, or glTF an
 | **s&box** (editor) | A current s&box install with the editor (`sbox-dev`). The library is editor-side; nothing runs at game runtime. |
 | **A game project** | Conversions write into your project's `Assets/` folder. Any project works — including the shipped samples. The library refuses to modify engine-owned content (`addons/`, `core/`). |
 | **This library installed** | Copy or clone this repository into your project's `Libraries/` folder (e.g. `Libraries/local.humanoid_retargeter/`). Only `Code/`, `Editor/`, `Assets/` and the `.sbproj` are needed. |
-| Source animations | `.fbx` (binary or ASCII, FBX 7.x), `.bvh`, `.glb`, `.gltf`, `.vrm`, or RenderWare `.anm`/`.an5` files. FBX 6.x is rejected with a clear message — re-export from your DCC. |
+| Source animations | `.fbx` (binary or ASCII, FBX 7.x), `.bvh`, `.glb`, `.gltf`, `.vrm`, RenderWare `.anm`/`.an5`, or EA ANT `.cba` files. FBX 6.x is rejected with a clear message — re-export from your DCC. |
 
 No NuGet packages, no native DLLs, no Python, no external tools.
 
@@ -37,17 +37,23 @@ No NuGet packages, no native DLLs, no Python, no external tools.
   multi-take `.an5` banks, uncompressed and rotation-only keyframe layouts. The animation carries no skeleton — place the
   character's model `.dff` next to the animation (or in its parent folder) and it is
   matched automatically by node count, or pick it explicitly on the file row.
+- **EA ANT `.cba`** — directly stored sparse ANTSTM3b tracks, including Fight Night
+  Champion's IK/proxy animation packages. Because a `.cba` stores joint indices rather
+  than names, place an ordered joint-table JSON beside it as `<stem>.skeleton.json`,
+  `skeleton_boxer.json`, or `skeleton.json` (or pick it on the file row). The JSON may be
+  a bare joint array or an extractor object containing a `joints` array.
 - **Multi-take unpacking** — a file containing many animations expands into one list entry
   per take, each independently previewable, removable, and convertible.
 
 ### Rig understanding (automatic, per file)
-- **Built-in profiles** (18): s&box citizen/human rigs (`pelvis`/`arm_upper_L` naming —
+- **Built-in profiles** (19): s&box citizen/human rigs (`pelvis`/`arm_upper_L` naming —
   any model re-rigged on the citizen skeleton), Mixamo, ActorCore / Character Creator
   (`CC_Base_*`), UE Mannequin (UE4/UE5 naming), Xsens MVN, Perception Neuron / Axis Neuron,
   Rokoko-style BVH, SMPL-X, SMPL, NVIDIA SOMA BVH, classic/Character-Studio BVH,
   Source ValveBiped (`ValveBiped.Bip01_*`), 3ds Max Biped (`Bip01`/`Bip001`),
   DAZ Genesis 3/8, DAZ/Poser classic, Blender Rigify (metarig + `DEF-`),
-  VRoid/VRM (`J_Bip_*`), Auto-Rig Pro exports.
+  VRoid/VRM (`J_Bip_*`), Auto-Rig Pro exports, EA Fight Night boxer rigs
+  (`fight_night`, 293-joint skeleton with body/glove/IK helpers).
 - **Your saved presets** — confirm a mapping once and that skeleton is recognized
   instantly forever (keyed by skeleton signature).
 - **Auto-mapper** — token-based name matching for unlisted rigs (DAZ/Poser, 3ds Max
@@ -153,6 +159,8 @@ sequences, preview pose, and preset round-trip.
 - Humanoid bipeds only (no quadrupeds/tails); facial/morph animation is not transferred.
 - glTF with external `.bin` URIs isn't supported — use `.glb` (embedded) instead.
 - FBX 6.x (2010-era) files are rejected; re-export as FBX 7.x.
+- EA ANT import currently decodes only directly stored sparse IK/proxy tracks. The
+  compressed VBR/VBR2/DCT full-body controller payloads still require codec reconstruction.
 - The DL solver ignores fingers (checkpoint limitation) and is weakest on hands — the
   geometric path remains the quality reference wherever a mapping exists.
 
