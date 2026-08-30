@@ -12,6 +12,8 @@ public sealed class FightNightProfileTests
     [Fact]
     public void BoxerRigSelectsFightNightAndLeavesControlAndGloveShellBonesUnmapped()
     {
+        Assert.Equal(33, ProfileLibrary.FightNight.Aliases.Count);
+
         var definitions = new List<BoneDefinition>();
         foreach (var aliases in ProfileLibrary.FightNight.Aliases.Values)
             definitions.Add(new BoneDefinition(aliases[0], null, XForm.Identity));
