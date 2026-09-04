@@ -54,6 +54,7 @@ public sealed class PreviewWidget : SceneRenderingWidget
 	int[] _rigToModelBone;
 	Transform[] _modelBindByRig;
 	XForm[] _worldScratch;
+	XForm[] _interpolatedScratch;
 
 	HumanoidRetargeter.ClipResult _clip;
 	float _time;
@@ -284,6 +285,7 @@ public sealed class PreviewWidget : SceneRenderingWidget
 		}
 
 		_worldScratch = new XForm[rig.Skeleton.Count];
+		_interpolatedScratch = new XForm[rig.Skeleton.Count];
 
 		// Camera anchor bones: the MAPPED role bones only. Character FBX files routinely
 		// carry stray far-away nodes (Biped dummies, exporter helpers) - bounds taken over
@@ -378,9 +380,10 @@ public sealed class PreviewWidget : SceneRenderingWidget
 		if ( Playing )
 		{
 			_time += RealTime.Delta * Math.Max( _clip.Fps, 1f );
-			if ( _time >= frames.Count )
-				_time -= frames.Count; // preview always loops
-			var frame = Math.Clamp( (int)_time, 0, frames.Count - 1 );
+			var duration = Math.Max( frames.Count - 1, 1 );
+			while ( _time >= duration )
+				_time -= duration; // preview always loops
+			var frame = Math.Clamp( (int)MathF.Floor( _time ), 0, frames.Count - 1 );
 			if ( frame != CurrentFrame )
 			{
 				CurrentFrame = frame;
@@ -390,7 +393,28 @@ public sealed class PreviewWidget : SceneRenderingWidget
 
 		if ( _sceneModel.IsValid() )
 			_sceneModel.Update( RealTime.Delta );
-		ApplyCurrentFrame();
+		if ( Playing && frames.Count > 1 )
+			ApplyInterpolatedFrame( frames );
+		else
+			ApplyCurrentFrame();
+	}
+
+	/// <summary>Interpolates solved samples at the editor render rate. Output animation
+	/// samples stay untouched; this only removes visible frame stepping in the preview.</summary>
+	void ApplyInterpolatedFrame( IReadOnlyList<XForm[]> frames )
+	{
+		var lo = Math.Clamp( (int)MathF.Floor( _time ), 0, frames.Count - 1 );
+		var hi = Math.Min( lo + 1, frames.Count - 1 );
+		var blend = _time - lo;
+		var count = Math.Min( _interpolatedScratch.Length,
+			Math.Min( frames[lo].Length, frames[hi].Length ) );
+		for ( var i = 0; i < count; i++ )
+		{
+			_interpolatedScratch[i] = new XForm(
+				System.Numerics.Vector3.Lerp( frames[lo][i].Pos, frames[hi][i].Pos, blend ),
+				System.Numerics.Quaternion.Slerp( frames[lo][i].Rot, frames[hi][i].Rot, blend ) );
+		}
+		ApplyPose( _interpolatedScratch );
 	}
 
 	/// <summary>Applies the current frame's solved pose (no-op without a clip), then syncs
