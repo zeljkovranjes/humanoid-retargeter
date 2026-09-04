@@ -43,7 +43,7 @@ public sealed class RetargetWindow : Widget
 	// Options
 	RootMotionMode _rootMotion = RootMotionMode.Off;
 	bool _footPlant = true;
-	bool _armIk;
+	bool _armIk = true;
 	bool _naturalCarriage = true;
 	bool _footstepEvents;
 	bool _mirroredVariants;
@@ -56,6 +56,7 @@ public sealed class RetargetWindow : Widget
 	bool _augmentMode;
 	Asset _augmentAsset;
 	LineEdit _outputFolderEdit;
+	LineEdit _outputNameEdit;
 	LineEdit _hipScaleHEdit;
 	LineEdit _hipScaleVEdit;
 	LineEdit _sampleFpsEdit;
@@ -227,7 +228,8 @@ public sealed class RetargetWindow : Widget
 
 		var armIk = col2.Add( new Checkbox( "Arm effector IK" ) { Value = _armIk } );
 		armIk.ToolTip = "Pull wrists onto limb-length-normalized source hand positions. "
-			+ "Off by default - only useful for reach-critical clips.";
+			+ "On by default so differently proportioned arms preserve the source hand path; "
+			+ "disable to preserve exact limb directions instead.";
 		armIk.Clicked = () => _armIk = armIk.Value;
 
 		var outputRow = col2.AddRow();
@@ -235,6 +237,13 @@ public sealed class RetargetWindow : Widget
 		outputRow.Add( new Label( this ) { Text = "Output folder:" } );
 		_outputFolderEdit = outputRow.Add( new LineEdit( this ) { Text = "animations/retargeted", MinimumWidth = 140 }, 1 );
 		_outputFolderEdit.ToolTip = "Assets-relative folder the DMX files (and the standalone vmdl) are written to.";
+
+		var outputNameRow = col2.AddRow();
+		outputNameRow.Spacing = 8;
+		outputNameRow.Add( new Label( this ) { Text = "New vmdl name:" } );
+		_outputNameEdit = outputNameRow.Add( new LineEdit( this )
+			{ Text = "retargeted_animations", MinimumWidth = 140 }, 1 );
+		_outputNameEdit.ToolTip = "Filename for New animation vmdl output. The .vmdl extension is optional; existing-vmdl mode ignores this field.";
 
 		col2.AddStretchCell();
 
@@ -470,6 +479,7 @@ public sealed class RetargetWindow : Widget
 	{
 		_augmentMode = augment;
 		_pickAugmentButton.Visible = augment;
+		_outputNameEdit.Enabled = !augment;
 		if ( augment && _augmentAsset is null )
 			PickAugmentAsset();
 		RefreshStatus();
@@ -920,6 +930,7 @@ public sealed class RetargetWindow : Widget
 			TargetPickers.ResolvedTarget target,
 			HumanoidRetargeter.BatchOptions options,
 			string augmentVmdlPath,
+			string standaloneVmdlName = "retargeted_animations",
 			Action<HumanoidRetargeter.RetargetBatchResult> batchReady = null )
 	{
 		// Stale-entry preflight (MAIN thread - engine asset lookups): probe every existing
@@ -959,7 +970,7 @@ public sealed class RetargetWindow : Widget
 			return (batch, null);
 
 		var write = await EditorPipeline.WriteAndCompileAsync(
-			batch, options.DmxFolderRelative, augmentVmdlPath,
+			batch, options.DmxFolderRelative, augmentVmdlPath, standaloneVmdlName,
 			// Mesh-embedding vmdls import the whole target FBX at compile time - a real
 			// 27 MB character exceeded the plain 120 s poll while still compiling fine.
 			compileTimeoutSeconds: string.IsNullOrEmpty( target.Spec.MeshFilePath )
@@ -1086,7 +1097,7 @@ public sealed class RetargetWindow : Widget
 				var standalonePath = System.IO.Path.Combine(
 					assetsPath,
 					NormalizedOutputFolder().Replace( '/', System.IO.Path.DirectorySeparatorChar ),
-					"retargeted_animations.vmdl" );
+					NormalizedOutputName() + ".vmdl" );
 				if ( File.Exists( standalonePath ) )
 				{
 					try
@@ -1094,18 +1105,41 @@ public sealed class RetargetWindow : Widget
 						var text = File.ReadAllText( standalonePath );
 						HumanoidRetargeter.Target.Kv3.Parse( text ); // reject corrupt files up front
 
-						// Custom FBX target: heal accumulate targets that predate mesh
-						// embedding (base_model_name "" and no RenderMeshList - an empty
-						// model that can never play). Pipeline-owned file, safe to patch.
-						if ( !string.IsNullOrEmpty( _target.Spec.MeshFilePath ) )
+						var existing = HumanoidRetargeter.Target.VmdlAugmenter
+							.GetModelSource( text );
+						var targetMesh = _target.Spec.MeshFilePath ?? "";
+						var targetBase = _target.Spec.BaseModelPath ?? "";
+						var targetChanged = !string.IsNullOrEmpty( existing.RenderMesh )
+							? !string.Equals( existing.RenderMesh, targetMesh,
+								StringComparison.OrdinalIgnoreCase )
+							: !string.IsNullOrEmpty( existing.BaseModel )
+								&& !string.Equals( existing.BaseModel, targetBase,
+									StringComparison.OrdinalIgnoreCase );
+						if ( targetChanged )
 						{
-							text = HumanoidRetargeter.Target.VmdlAugmenter.EnsureMeshFile(
-								text, _target.Spec.MeshFilePath, _target.Spec.MeshImportScale,
-								_target.Spec.MaterialRemaps );
+							// Animations are authored against one skeleton. Keeping entries
+							// from a different embedded target produces plausible-looking but
+							// incorrect limbs in ModelDoc. This is our standalone artifact, so
+							// a target switch starts it fresh; explicit existing-vmdl mode is
+							// never routed through this branch.
+							Log.Info( $"[humanoid-retargeter] New-output target changed from "
+								+ $"'{existing.RenderMesh ?? existing.BaseModel}' to "
+								+ $"'{(targetMesh.Length > 0 ? targetMesh : targetBase)}' - regenerating "
+								+ $"{System.IO.Path.GetFileName( standalonePath )}." );
 						}
+						else
+						{
+							// Heal legacy custom-model outputs that predate mesh embedding.
+							if ( !string.IsNullOrEmpty( targetMesh ) )
+							{
+								text = HumanoidRetargeter.Target.VmdlAugmenter.EnsureMeshFile(
+									text, targetMesh, _target.Spec.MeshImportScale,
+									_target.Spec.MaterialRemaps );
+							}
 
-						augmentPath = standalonePath;
-						augmentText = text;
+							augmentPath = standalonePath;
+							augmentText = text;
+						}
 					}
 					catch ( Exception e )
 					{
@@ -1144,7 +1178,8 @@ public sealed class RetargetWindow : Widget
 			var options = BuildBatchOptions( outputFolder, augmentText );
 			var target = _target;
 
-			var (batch, write) = await ConvertAndWriteAsync( requests, target, options, augmentPath,
+			var (batch, write) = await ConvertAndWriteAsync(
+				requests, target, options, augmentPath, NormalizedOutputName(),
 				batchReady: b =>
 				{
 					_progress = 0.55f;
@@ -1274,6 +1309,16 @@ public sealed class RetargetWindow : Widget
 	{
 		var folder = (_outputFolderEdit?.Text ?? "").Trim().Replace( '\\', '/' ).Trim( '/' );
 		return folder.Length == 0 ? "animations/retargeted" : folder;
+	}
+
+	string NormalizedOutputName()
+	{
+		var name = (_outputNameEdit?.Text ?? "").Trim();
+		if ( name.EndsWith( ".vmdl", StringComparison.OrdinalIgnoreCase ) )
+			name = name[..^5];
+		name = new string( name.Select( c => char.IsLetterOrDigit( c ) || c is '_' or '-'
+			? c : '_' ).ToArray() ).Trim( '_' );
+		return name.Length == 0 ? "retargeted_animations" : name;
 	}
 
 	// ============================================================================ report

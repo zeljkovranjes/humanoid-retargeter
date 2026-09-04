@@ -65,6 +65,12 @@ public static class TargetPickers
 		/// becomes the RenderMeshFile <c>import_scale</c>).</summary>
 		public float ModelUnitScaleCm { get; set; } = 1.0f;
 
+		/// <summary>The skeleton imported directly from <see cref="ModelFilePath"/>.
+		/// Kept when <see cref="Spec"/> is rebuilt from the compiled preview: glTF mesh
+		/// conversion must continue using the source bind, not feed the compiler-converted
+		/// bind back through the model-DMX writer a second time.</summary>
+		internal SkeletonModel SourceModelSkeleton { get; set; }
+
 		// Compatibility aliases for editor gate consumers written before GLB/glTF targets.
 		public string FbxAbsolutePath { get => ModelFilePath; set => ModelFilePath = value; }
 		public float FbxUnitScaleCm { get => ModelUnitScaleCm; set => ModelUnitScaleCm = value; }
@@ -473,6 +479,7 @@ public static class TargetPickers
 			PreviewPositionScale = RetargetTargetSpec.SboxSourceScale,
 			ModelFilePath = filePath,
 			ModelUnitScaleCm = unitScaleCm,
+			SourceModelSkeleton = skeleton,
 		};
 	}
 

@@ -90,6 +90,26 @@ public sealed class AugmentOptions
 /// </summary>
 public static class VmdlAugmenter
 {
+    /// <summary>Returns the model sources owned by the vmdl root: its inherited base model
+    /// and first embedded RenderMeshFile (either may be empty).</summary>
+    public static (string BaseModel, string? RenderMesh) GetModelSource(string vmdlText)
+    {
+        ArgumentNullException.ThrowIfNull(vmdlText);
+        var doc = Kv3.Parse(vmdlText);
+        if (doc.Root is not KvObject root || root.GetOrNull("rootNode") is not KvObject rootNode)
+            throw new FormatException("vmdl has no rootNode object.");
+        if (rootNode.GetOrNull("children") is not KvArray children)
+            return (rootNode.GetString("base_model_name") ?? "", null);
+
+        var mesh = children.Items.OfType<KvObject>()
+            .Where(o => o.GetString("_class") == "RenderMeshList")
+            .SelectMany(o => (o.GetOrNull("children") as KvArray)?.Items
+                .OfType<KvObject>() ?? Enumerable.Empty<KvObject>())
+            .FirstOrDefault(o => o.GetString("_class") == "RenderMeshFile")
+            ?.GetString("filename");
+        return (rootNode.GetString("base_model_name") ?? "", mesh);
+    }
+
     /// <summary>
     /// Returns <paramref name="vmdlText"/> with one AnimFile per entry inserted into the
     /// RootNode's AnimationList (created and appended when absent). Entries whose name

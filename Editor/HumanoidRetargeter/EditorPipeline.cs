@@ -325,8 +325,14 @@ public static class EditorPipeline
 			{
 				meshDestination = Path.ChangeExtension( destination, ".dmx" );
 				meshRelative = Path.ChangeExtension( relative, ".dmx" ).Replace( '\\', '/' );
+				// Preview compilation rebuilds Spec.Rig from the engine's converted bind.
+				// Re-emitting the mesh with that rebuilt skeleton converts the bind twice:
+				// the preview remains correct, but the final vmdl skins animated hands/limbs
+				// against a different bind and stretches them. The mesh must always be written
+				// from the model's original, sanitized source skeleton.
 				var dmx = HumanoidRetargeter.Formats.Gltf.GltfModelDmxWriter.Write(
-					File.ReadAllBytes( destination ), target.Spec.Rig.Skeleton, safeStem,
+					File.ReadAllBytes( destination ),
+					target.SourceModelSkeleton ?? target.Spec.Rig.Skeleton, safeStem,
 					extension == ".gltf"
 						? uri => TargetPickers.ReadGltfDependency( destination, uri )
 						: null );
