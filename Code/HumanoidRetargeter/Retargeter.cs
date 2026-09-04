@@ -957,6 +957,22 @@ public static class Retargeter
             detachedMapped.Add((i, anchor));
         }
 
+        // A detached deform head may retain a small control-space bind pitch after the DCC
+        // constraint is lost. Infer its gaze only when one local axis already agrees closely
+        // with character-forward, then remove the small vertical component. Applying the
+        // correction in rest-local space preserves every solved animation delta.
+        var neutralHead = -1;
+        var neutralHeadCorrection = Quaternion.Identity;
+        foreach (var (bone, _) in detachedMapped)
+        {
+            if (rig.RoleOf(bone) == BoneRole.Head
+                && TryDetachedHeadNeutralCorrection(rig, bone, out neutralHeadCorrection))
+            {
+                neutralHead = bone;
+                break;
+            }
+        }
+
         if (tops.Count == 0 && detachedMapped.Count == 0)
             return;
 
@@ -988,9 +1004,12 @@ public static class Retargeter
             foreach (var (bone, anchor) in detachedMapped)
             {
                 var delta = XForm.Compose(world[anchor], anchorRestInverse[anchor]);
+                var rotation = bone == neutralHead
+                    ? MathQ.Normalize(world[bone].Rot * neutralHeadCorrection)
+                    : world[bone].Rot;
                 var desired = new XForm(
                     XForm.Compose(delta, rest[bone]).Pos,
-                    world[bone].Rot);
+                    rotation);
                 var parent = skeleton[bone].ParentIndex;
                 frame[bone] = parent < 0
                     ? desired
@@ -1005,6 +1024,56 @@ public static class Retargeter
             AddNote(report,
                 $"{detachedMapped.Count} mapped body branch(es) on separate control hierarchies "
                 + "follow the connected skeleton (exported DCC constraints are not available at runtime).");
+        if (neutralHead >= 0)
+            AddNote(report,
+                "Detached head bind pitch was leveled to the character facing plane while preserving animation.");
+    }
+
+    private static bool TryDetachedHeadNeutralCorrection(
+        TargetRig rig, int head, out Quaternion localCorrection)
+    {
+        localCorrection = Quaternion.Identity;
+        CharacterFrame frame;
+        try
+        {
+            frame = CharacterFrame.Compute(
+                rig.Skeleton, rig.ToMappingResult(), rig.Skeleton.RestWorld);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+
+        var restRotation = MathQ.Normalize(rig.Skeleton.RestWorld[head].Rot);
+        var gaze = Vector3.Zero;
+        var agreement = float.NegativeInfinity;
+        foreach (var localAxis in new[] { Vector3.UnitX, Vector3.UnitY, Vector3.UnitZ })
+        {
+            var axis = Vector3.Transform(localAxis, restRotation);
+            var dot = Vector3.Dot(axis, frame.Forward);
+            if (MathF.Abs(dot) <= agreement)
+                continue;
+            agreement = MathF.Abs(dot);
+            gaze = dot < 0f ? -axis : axis;
+        }
+
+        var vertical = Vector3.Dot(gaze, frame.Up);
+        const float minAgreement = 0.94f; // local axis must be within 20° of facing
+        const float minPitch = 0.5f * MathF.PI / 180f;
+        const float maxPitch = 12f * MathF.PI / 180f;
+        var pitch = MathF.Asin(Math.Clamp(vertical, -1f, 1f));
+        if (agreement < minAgreement || MathF.Abs(pitch) < minPitch || MathF.Abs(pitch) > maxPitch)
+            return false;
+
+        var levelGaze = gaze - frame.Up * vertical;
+        if (levelGaze.LengthSquared() < 1e-8f)
+            return false;
+        levelGaze = Vector3.Normalize(levelGaze);
+
+        var worldCorrection = MathQ.FromTo(gaze, levelGaze);
+        localCorrection = MathQ.Normalize(
+            Quaternion.Conjugate(restRotation) * worldCorrection * restRotation);
+        return true;
     }
 
     /// <summary>
@@ -1675,6 +1744,7 @@ public static class Retargeter
 
         if (ProfileDetector.Detect(skeleton) is { } detected)
         {
+            AutoMapper.CompleteSingleJointThumbs(skeleton, detected.Result);
             AutoMapper.PruneNonArticulatedFingerStubs(skeleton, detected.Result);
             VetoImpossibleHead(skeleton, detected.Result);
             return (detected.Result, BuildReport(detected.Result, needsUserDecision: false, skeleton));

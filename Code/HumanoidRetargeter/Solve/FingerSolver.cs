@@ -19,15 +19,18 @@ using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global
 /// <i>geometrically identical</i> — same mapped role set, same canonical frames, same
 /// normalized rest rotations. This is the same-rig round-trip case and is lossless (exact
 /// identity, twist included).</item>
-/// <item><b>Direction matching</b> when the phalanx counts match ordinally but the rigs
-/// differ (the common cross-rig case, e.g. Mixamo Prox/Mid/Dist onto the s&amp;box finger
+/// <item><b>Direction/swing matching</b> when the phalanx counts match ordinally but the
+/// rigs differ (the common cross-rig case, e.g. Mixamo Prox/Mid/Dist onto the s&amp;box finger
 /// with its extra metacarpal — which keeps its rest local; a source metacarpal's rotation is
 /// implicit in the proximal's absolute direction). Each target phalanx is swung — shortest
 /// arc, rotation axis ⊥ the finger axis, hence <b>zero twist by construction</b> — so that its
 /// segment direction matches the source phalanx's direction in character-frame coordinates
 /// exactly. Curl and splay are both captured by the direction; the source's axial twist is
 /// dropped (hinge-joint noise; copying it absolutely would read as roll through the
-/// inter-phalanx canonical mismatch between rigs, measured up to ~12° on thumbs).</item>
+/// inter-phalanx canonical mismatch between rigs, measured up to ~12° on thumbs). A source
+/// with one rigid segment instead transfers its hand-relative swing to the target's first
+/// joint; its remaining phalanges follow rigidly, avoiding an ambiguous 180° absolute
+/// reorientation or duplicated curl.</item>
 /// <item><b>Proportional redistribution</b> when phalanx counts differ (e.g. a two-phalanx
 /// source finger): per-phalanx local curls — swing-twist about the canonical hinge Y of
 /// <c>λ_b = C_b⁻¹·(ΔR_prev⁻¹·ΔR_b)·C_b</c> — are summed over the source chain (metacarpal
@@ -48,6 +51,7 @@ internal sealed class FingerSolver
     private enum ChainMode
     {
         DirectionMatch,
+        SingleSegment,
         Proportional,
     }
 
@@ -56,6 +60,7 @@ internal sealed class FingerSolver
         public required int Slot { get; init; }
         public required Quaternion C { get; init; }
         public required Quaternion CInv { get; init; }
+        public required Quaternion RestRot { get; init; }
         public required bool TakesSplay { get; init; }
     }
 
@@ -65,6 +70,7 @@ internal sealed class FingerSolver
         public required Quaternion C { get; init; }
         public required Quaternion CInv { get; init; }
         public required Quaternion RestRot { get; init; }
+        public required Quaternion AuthoredRestRot { get; init; }
         public required float Weight { get; init; }
         public required bool Splay { get; init; }
     }
@@ -73,8 +79,10 @@ internal sealed class FingerSolver
     {
         public required ChainMode Mode { get; init; }
         public required int SrcHandSlot { get; init; }
+        public required Quaternion SrcHandRestRot { get; init; }
         public required int TgtHandBone { get; init; }
         public required Quaternion TgtHandNormRestRotInv { get; init; }
+        public required Quaternion TgtHandAuthoredRestRotInv { get; init; }
         public required SourcePhalanx[] Sources { get; init; }
         public required Recipient[] Recipients { get; init; }
     }
@@ -133,6 +141,7 @@ internal sealed class FingerSolver
         Func<BoneRole, int?> tgtBoneForRole,
         CanonicalFrames tgtCanon,
         IReadOnlyList<XForm> tgtNormRest,
+        IReadOnlyList<XForm> tgtAuthoredRest,
         Quaternion chrSrcInv,
         Quaternion chrTgt,
         Func<int, int> registerSlot,
@@ -166,14 +175,25 @@ internal sealed class FingerSolver
             var srcPhalanges = srcRoles.Where(r => r != metaRole).ToArray();
             var tgtPhalanges = tgtRoles.Where(r => r != metaRole).ToArray();
             var recipientRoles = tgtPhalanges.Length > 0 ? tgtPhalanges : tgtRoles;
-            var mode = srcPhalanges.Length == recipientRoles.Length && srcPhalanges.Length > 0
-                ? ChainMode.DirectionMatch
-                : ChainMode.Proportional;
+            if (srcPhalanges.Length == 1)
+            {
+                // A one-joint finger describes one rigid ray from the hand. Drive the
+                // target chain's first joint (its metacarpal when present), so the whole
+                // digit follows that ray without separating/corkscrewing later phalanges.
+                recipientRoles = tgtRoles.Take(1).ToArray();
+            }
+            var mode = srcPhalanges.Length == 1
+                ? ChainMode.SingleSegment
+                : srcPhalanges.Length == recipientRoles.Length && srcPhalanges.Length > 0
+                    ? ChainMode.DirectionMatch
+                    : ChainMode.Proportional;
 
             // Direction matching consumes only the non-meta phalanges (the metacarpal's
             // motion is implicit in the proximal's absolute direction); redistribution
             // decomposes every mapped source segment including the metacarpal.
-            var sourceRolesUsed = mode == ChainMode.DirectionMatch ? srcPhalanges : srcRoles;
+            var sourceRolesUsed = mode is ChainMode.DirectionMatch or ChainMode.SingleSegment
+                ? srcPhalanges
+                : srcRoles;
             var sources = sourceRolesUsed.Select(r =>
             {
                 var c = srcCanon.WorldFrameOf(r);
@@ -182,6 +202,7 @@ internal sealed class FingerSolver
                     Slot = registerSlot(sourceMap.RoleToBone[r]),
                     C = c,
                     CInv = Quaternion.Conjugate(c),
+                    RestRot = srcNormRest[sourceMap.RoleToBone[r]].Rot,
                     TakesSplay = r == metaRole || r == proxRole,
                 };
             }).ToArray();
@@ -197,6 +218,7 @@ internal sealed class FingerSolver
                     C = c,
                     CInv = Quaternion.Conjugate(c),
                     RestRot = tgtNormRest[bone].Rot,
+                    AuthoredRestRot = tgtAuthoredRest[bone].Rot,
                     Weight = weights[i],
                     Splay = i == 0,
                 };
@@ -209,9 +231,15 @@ internal sealed class FingerSolver
                 SrcHandSlot = sourceMap.RoleToBone.TryGetValue(handRole, out var srcHand)
                     ? registerSlot(srcHand)
                     : -1,
+                SrcHandRestRot = sourceMap.RoleToBone.TryGetValue(handRole, out srcHand)
+                    ? srcNormRest[srcHand].Rot
+                    : Quaternion.Identity,
                 TgtHandBone = tgtHand ?? -1,
                 TgtHandNormRestRotInv = tgtHand is int h
                     ? Quaternion.Conjugate(tgtNormRest[h].Rot)
+                    : Quaternion.Identity,
+                TgtHandAuthoredRestRotInv = tgtHand is int authoredHand
+                    ? Quaternion.Conjugate(tgtAuthoredRest[authoredHand].Rot)
                     : Quaternion.Identity,
                 Sources = sources,
                 Recipients = recipients,
@@ -285,9 +313,41 @@ internal sealed class FingerSolver
 
             if (chain.Mode == ChainMode.DirectionMatch)
                 ApplyDirectionMatch(chain, srcDeltas, acc, solved, rot);
+            else if (chain.Mode == ChainMode.SingleSegment)
+                ApplySingleSegment(chain, srcDeltas, solved, rot);
             else
                 ApplyProportional(chain, srcDeltas, acc, solved, rot);
         }
+    }
+
+    private static void ApplySingleSegment(
+        Chain chain, Quaternion[] srcDeltas, bool[] solved, Quaternion[] rot)
+    {
+        // A finger world rotation is meaningful only relative to its solved hand. If either
+        // rig lacks that frame, leave the target digit at its authored local rest instead of
+        // applying a world-space rotation as a local one.
+        if (chain.SrcHandSlot < 0 || chain.TgtHandBone < 0 || !solved[chain.TgtHandBone])
+            return;
+
+        var sp = chain.Sources[0];
+        var rc = chain.Recipients[0];
+        var parentDelta = srcDeltas[chain.SrcHandSlot];
+        var parentWorld = MathQ.Normalize(parentDelta * chain.SrcHandRestRot);
+        var childWorld = MathQ.Normalize(srcDeltas[sp.Slot] * sp.RestRot);
+        var currentLocal = MathQ.Normalize(Quaternion.Conjugate(parentWorld) * childWorld);
+        var restLocal = MathQ.Normalize(
+            Quaternion.Conjugate(chain.SrcHandRestRot) * sp.RestRot);
+        var localDelta = MathQ.Normalize(currentLocal * Quaternion.Conjugate(restLocal));
+        var worldDelta = MathQ.Normalize(
+            chain.SrcHandRestRot * localDelta * Quaternion.Conjugate(chain.SrcHandRestRot));
+        var canonical = MathQ.Normalize(sp.CInv * worldDelta * sp.C);
+        MathQ.SwingTwist(canonical, Vector3.UnitX, out var swing, out _);
+
+        var acc = MathQ.Normalize(
+            rot[chain.TgtHandBone] * chain.TgtHandAuthoredRestRotInv);
+        acc = MathQ.Normalize(acc * (rc.C * swing * rc.CInv));
+        rot[rc.TgtBone] = MathQ.Normalize(acc * rc.AuthoredRestRot);
+        solved[rc.TgtBone] = true;
     }
 
     private void ApplyDirectionMatch(

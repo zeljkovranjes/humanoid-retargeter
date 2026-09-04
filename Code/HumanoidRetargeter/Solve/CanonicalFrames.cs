@@ -31,7 +31,8 @@ using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global
 /// that segment is absent or degenerate; Hand points at the midpoint of its mapped finger
 /// proximals (else along the forearm); Foot without a toe and Toe extend along character
 /// forward; finger distals extend along their previous segment. Other bones with nothing
-/// mapped below inherit the previous chain segment's direction.</para>
+/// mapped below inherit the previous chain segment's direction. A single mapped finger
+/// joint uses its direct child/end-site as its real segment direction when available.</para>
 /// <para><b>Secondary axis S</b> by bone class: spine/neck/head/hips and legs use character
 /// forward (knee hinge lateral); clavicle/arms/hands use <c>cross(P, characterUp)</c>
 /// (elbow hinge ⊥ limb in the character's horizontal plane at T-pose), falling back to
@@ -113,7 +114,7 @@ public sealed class CanonicalFrames
         var virtualPrimary = new HashSet<BoneRole>();
 
         foreach (var (chain, kind, left) in Chains())
-            BuildChainFrames(chain, kind, left, map, worldRest, cf, frames, virtualPrimary);
+            BuildChainFrames(skeleton, chain, kind, left, map, worldRest, cf, frames, virtualPrimary);
 
         return new CanonicalFrames(frames, virtualPrimary, cf.Forward, cf.Up, cf.HipHeight);
     }
@@ -162,7 +163,7 @@ public sealed class CanonicalFrames
     private static BoneRole Role(string baseName, string side) => Enum.Parse<BoneRole>(baseName + side);
 
     private static void BuildChainFrames(
-        BoneRole[] chain, ChainKind kind, bool left, MappingResult map,
+        SkeletonModel skeleton, BoneRole[] chain, ChainKind kind, bool left, MappingResult map,
         IReadOnlyList<XForm> worldRest, CharacterFrame cf, Dictionary<BoneRole, Quaternion> frames,
         HashSet<BoneRole> virtualPrimary)
     {
@@ -184,7 +185,7 @@ public sealed class CanonicalFrames
 
             var (primary, isVirtual) = i + 1 < mapped.Count
                 ? ((Vector3?)(mapped[i + 1].Pos - pos), false)
-                : TipPrimary(kind, role, pos, prevDir, left, map, worldRest, cf);
+                : TipPrimary(skeleton, kind, role, pos, prevDir, left, map, worldRest, cf);
             if (primary is null || primary.Value.LengthSquared() < 1e-8f)
                 continue;
 
@@ -199,7 +200,7 @@ public sealed class CanonicalFrames
     /// when the direction is a character-axis convention rather than this rig's real joint
     /// geometry (see <see cref="HasVirtualPrimary"/>).</summary>
     private static (Vector3? Dir, bool Virtual) TipPrimary(
-        ChainKind kind, BoneRole role, Vector3 pos, Vector3? prevDir, bool left,
+        SkeletonModel skeleton, ChainKind kind, BoneRole role, Vector3 pos, Vector3? prevDir, bool left,
         MappingResult map, IReadOnlyList<XForm> worldRest, CharacterFrame cf)
     {
         switch (kind)
@@ -221,7 +222,11 @@ public sealed class CanonicalFrames
                 {
                     var knuckles = HandGeometry.FingerProximalMidpoint(map, worldRest, left);
                     if (knuckles is not null)
-                        return (knuckles.Value - pos, false);
+                    {
+                        var direction = knuckles.Value - pos;
+                        if (direction.LengthSquared() >= 1e-8f)
+                            return (direction, false);
+                    }
                 }
                 return (prevDir, false); // along the forearm / previous segment; null → no frame
 
@@ -235,6 +240,25 @@ public sealed class CanonicalFrames
             case ChainKind.Finger:
                 if (prevDir is not null)
                     return (prevDir, false); // distal tip extrapolates its previous segment
+                // One-joint BVH fingers place the joint at the hand and keep their actual
+                // direction in an unmapped End Site. Prefer that real segment geometry;
+                // otherwise the coincident joint has no resolvable canonical frame and its
+                // animation is silently discarded.
+                if (map.RoleToBone.TryGetValue(role, out var fingerIndex))
+                {
+                    Vector3? longestChild = null;
+                    for (var child = 0; child < skeleton.Count; child++)
+                    {
+                        if (skeleton[child].ParentIndex != fingerIndex)
+                            continue;
+                        var direction = worldRest[child].Pos - pos;
+                        if (direction.LengthSquared() > (longestChild?.LengthSquared() ?? 1e-8f))
+                            longestChild = direction;
+                    }
+                    if (longestChild is not null)
+                        return (longestChild, false);
+                }
+
                 // Single mapped finger bone: point away from the hand when possible.
                 var handRole = left ? BoneRole.HandL : BoneRole.HandR;
                 if (map.RoleToBone.TryGetValue(handRole, out var handIndex))

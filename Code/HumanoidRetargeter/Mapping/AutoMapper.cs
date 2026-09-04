@@ -371,6 +371,44 @@ public static class AutoMapper
         }
     }
 
+    /// <summary>Adds the common one-joint <c>LThumb</c>/<c>RThumb</c> channels to an
+    /// otherwise authoritative body profile. The joint must have real child/end-site
+    /// geometry, so leaf placeholders remain excluded.</summary>
+    internal static void CompleteSingleJointThumbs(
+        SkeletonModel skeleton, MappingResult result)
+    {
+        var byName = MapByNames(skeleton);
+        var used = result.RoleToBone.Values.ToHashSet();
+        var added = 0;
+        foreach (var role in new[] { BoneRole.ThumbProxL, BoneRole.ThumbProxR })
+        {
+            if (result.RoleToBone.ContainsKey(role)
+                || !byName.RoleToBone.TryGetValue(role, out var bone)
+                || used.Contains(bone))
+                continue;
+
+            var hasSegment = false;
+            for (var child = 0; child < skeleton.Count; child++)
+            {
+                if (skeleton[child].ParentIndex == bone
+                    && (skeleton.RestWorld[child].Pos - skeleton.RestWorld[bone].Pos)
+                        .LengthSquared() > 1e-8f)
+                {
+                    hasSegment = true;
+                    break;
+                }
+            }
+            if (!hasSegment)
+                continue;
+
+            result.RoleToBone[role] = bone;
+            used.Add(bone);
+            added++;
+        }
+        if (added > 0)
+            result.Notes.Add($"Mapped {added} articulated single-joint thumb channel(s) by name and end-site geometry.");
+    }
+
     private static bool IsFingerRole(BoneRole role, string side)
     {
         var name = role.ToString();
@@ -424,7 +462,7 @@ public static class AutoMapper
         else if (core.Contains("ring")) finger = "Ring";
         else if (core == "mid" || core == "handmid" || core.Contains("fingmid")) finger = "Middle";
         else return false;
-        return info.Digit >= 0 || core.Contains("meta") || core.Contains("palm")
+        return info.Digit >= 0 || core == "thumb" || core.Contains("meta") || core.Contains("palm")
             || HasAlphabeticFingerSegment(core, 'a')
             || HasAlphabeticFingerSegment(core, 'b')
             || HasAlphabeticFingerSegment(core, 'c');
@@ -437,6 +475,7 @@ public static class AutoMapper
         _ when HasAlphabeticFingerSegment(info.Core, 'a') => "Prox",
         _ when HasAlphabeticFingerSegment(info.Core, 'b') => "Mid",
         _ when HasAlphabeticFingerSegment(info.Core, 'c') => "Dist",
+        _ when info.Core == "thumb" && info.Digit < 0 => "Prox",
         // Auto-Rig Pro chains: index1_base → index1 → index2 → index3. The '_base' bone
         // is the metacarpal inside the palm; its digit belongs to the FINGER, not the
         // phalanx (digit-only reading collided it with the true first knuckle, whose
@@ -582,8 +621,9 @@ public static class AutoMapper
         var tokens = new List<string>();
         var current = new StringBuilder();
         char previous = '\0';
-        foreach (var c in name)
+        for (var i = 0; i < name.Length; i++)
         {
+            var c = name[i];
             if (!char.IsLetterOrDigit(c))
             {
                 Flush();
@@ -593,7 +633,12 @@ public static class AutoMapper
             if (current.Length > 0)
             {
                 var boundary = char.IsDigit(c) != char.IsDigit(previous)
-                    || (char.IsUpper(c) && char.IsLower(previous));
+                    || (char.IsUpper(c) && char.IsLower(previous))
+                    // Acronym/single-side prefix before a Pascal word: LThumb → L, Thumb;
+                    // FBXNode → FBX, Node. Without this, one-joint BVH thumbs lose both
+                    // their side and their otherwise unambiguous finger name.
+                    || (char.IsUpper(c) && char.IsUpper(previous)
+                        && i + 1 < name.Length && char.IsLower(name[i + 1]));
                 if (boundary)
                     Flush();
             }

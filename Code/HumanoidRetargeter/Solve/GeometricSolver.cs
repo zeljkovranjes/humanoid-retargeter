@@ -305,6 +305,7 @@ public sealed class GeometricSolver : IRetargetSolver
             {
                 _fingers = FingerSolver.Build(
                     srcMap, _srcCanon, _srcNormRest, rig.BoneForRole, _tgtCanon, _tgtNormRest,
+                    _tgt.RestWorld,
                     _chrSrcInv, _chrTgt,
                     RegisterSlot, role => TryAddDirect(role, srcMap, rig));
             }
