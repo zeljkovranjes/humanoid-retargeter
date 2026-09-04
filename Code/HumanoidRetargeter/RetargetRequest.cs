@@ -61,6 +61,12 @@ public sealed class RetargetRequest
     public byte[]? SkeletonData { get; init; }
 
     /// <summary>
+    /// Optional external-buffer reader for plain <c>.gltf</c> input. IO-owning callers
+    /// resolve the URI relative to the document; GLB and data-URI glTF leave this null.
+    /// </summary>
+    public Func<string, byte[]>? ExternalBufferResolver { get; init; }
+
+    /// <summary>
     /// Caller-supplied identity of this request, echoed verbatim on every produced
     /// <see cref="ClipResult.SourceId"/> so callers can join results back to their own
     /// entries unambiguously (e.g. the editor window passes the FULL file path here, since
@@ -239,8 +245,8 @@ public sealed class RetargetTargetSpec
     public string BaseModelPath { get; init; } = "";
 
     /// <summary>
-    /// Assets-relative mesh source file (e.g. an <c>.fbx</c>) embedded in generated
-    /// standalone vmdls as a <c>RenderMeshList/RenderMeshFile</c> node. Custom FBX targets
+    /// Assets-relative mesh source file (FBX, GLB, or glTF) embedded in generated
+    /// standalone vmdls as a <c>RenderMeshList/RenderMeshFile</c> node. Source-file targets
     /// have no compiled base model to point <see cref="BaseModelPath"/> at — without a mesh
     /// source their standalone vmdl compiles into an EMPTY model (0 bones, 0 sequences) and
     /// playing it does nothing. Callers own copying the file into the project (this type
@@ -253,7 +259,7 @@ public sealed class RetargetTargetSpec
     /// Import scale of <see cref="MeshFilePath"/> (raw mesh-file units → the target
     /// skeleton's units). resourcecompiler reads mesh files' raw values ignoring their unit
     /// metadata, while the importer normalizes the target skeleton to centimeters — a
-    /// meters-authored FBX therefore needs 100 here (the importer's recorded
+    /// meters-authored model therefore needs 100 here (the importer's recorded
     /// source-unit→cm factor) for the mesh to match the animation skeleton.
     /// </summary>
     public float MeshImportScale { get; set; } = 1.0f;

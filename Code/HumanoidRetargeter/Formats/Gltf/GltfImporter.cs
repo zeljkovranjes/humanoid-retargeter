@@ -16,13 +16,19 @@ public sealed class GltfImportOptions
 {
     /// <summary>Fixed resampling rate for all clips, frames per second.</summary>
     public float SampleFps { get; init; } = 30f;
+
+    /// <summary>
+    /// Optional reader for external buffer URIs in plain <c>.gltf</c> files. The core
+    /// importer remains file-system agnostic; IO-owning callers can resolve paths relative
+    /// to the picked document. Null preserves the self-contained GLB/data-URI-only policy.
+    /// </summary>
+    public Func<string, byte[]>? ExternalBufferResolver { get; init; }
 }
 
 /// <summary>
 /// glTF 2.0 (.glb / .gltf) → <see cref="SourceScene"/> importer. Pure managed, no
-/// packages, no file IO: GLB containers and base64 <c>data:</c>-URI buffers are supported,
-/// external buffer files are not (a clear <see cref="FormatException"/> tells users to
-/// export .glb instead).
+/// packages, no file IO: GLB containers and base64 <c>data:</c>-URI buffers are supported;
+/// an IO-owning caller can provide a resolver for external buffer files.
 /// </summary>
 /// <remarks>
 /// <para><b>Skeleton selection</b>: the kept node set is the union of all skins' joints and
@@ -58,8 +64,8 @@ public static class GltfImporter
     private const double MaxClipDurationSeconds = 3600;
 
     /// <summary>Parses glTF/GLB bytes and builds the source scene.</summary>
-    /// <exception cref="FormatException">Malformed/truncated file, external buffer URIs, or
-    /// no skeleton-like nodes (no skin joints and no animated nodes).</exception>
+    /// <exception cref="FormatException">Malformed/truncated file, unresolved external
+    /// buffer URIs, or no skeleton-like nodes (no skin joints and no animated nodes).</exception>
     public static SourceScene Import(byte[] data, GltfImportOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(data);
@@ -67,7 +73,7 @@ public static class GltfImporter
         if (!(options.SampleFps > 0f) || !float.IsFinite(options.SampleFps))
             throw new ArgumentOutOfRangeException(nameof(options), "SampleFps must be positive.");
 
-        var document = GltfDocument.Parse(data);
+        var document = GltfDocument.Parse(data, options.ExternalBufferResolver);
 
         var bones = SelectSkeletonNodes(document);
         if (bones.Count == 0)

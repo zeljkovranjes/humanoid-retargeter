@@ -6,6 +6,8 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Text;
+using System.Text.Json;
 using System.Threading.Tasks;
 using Editor;
 using Sandbox;
@@ -213,24 +215,29 @@ public static class EditorPipeline
 	}
 
 	/// <summary>
-	/// Custom-FBX-target preparation, called before <see cref="Retargeter.ConvertBatch"/>
-	/// when the picked target is a raw FBX (<see cref="TargetPickers.ResolvedTarget.FbxAbsolutePath"/>):
-	/// copies the FBX into <c>Assets/&lt;outputFolderRelative&gt;/</c> (skipped when the
+	/// Compatibility entry point for source-model target preparation. Copies the model into
+	/// <c>Assets/&lt;outputFolderRelative&gt;/</c> (skipped when the
 	/// source and destination are the same file) and points
 	/// <see cref="RetargetTargetSpec.MeshFilePath"/>/<see cref="RetargetTargetSpec.MeshImportScale"/>
 	/// at it, so the generated standalone vmdl embeds the mesh as a RenderMeshFile node.
 	/// Without this the vmdl has no base model and no mesh — it compiles into an empty
 	/// model (0 bones, 0 sequences) and playing it does nothing. Returns false with
-	/// <paramref name="error"/> set when the copy fails; no-op for non-FBX targets.
+	/// <paramref name="error"/> set when the copy fails; no-op for compiled-model targets.
 	/// <paramref name="report"/> (optional) collects user-facing notes about what the
 	/// preparation did (e.g. a mid-pose export repaired at embed time).
 	/// </summary>
 	public static bool PrepareFbxTargetMesh(
 		TargetPickers.ResolvedTarget target, string outputFolderRelative, out string error,
 		List<string> report = null )
+		=> PrepareModelTargetMesh( target, outputFolderRelative, out error, report );
+
+	/// <summary>Prepares an FBX, GLB, or glTF custom target mesh for ModelDoc.</summary>
+	public static bool PrepareModelTargetMesh(
+		TargetPickers.ResolvedTarget target, string outputFolderRelative, out string error,
+		List<string> report = null )
 	{
 		error = null;
-		if ( target?.FbxAbsolutePath is null )
+		if ( target?.ModelFilePath is null )
 			return true;
 
 		var assetsPath = Project.Current?.GetAssetsPath();
@@ -245,16 +252,17 @@ public static class EditorPipeline
 			// Sanitized destination name: spaces and exotic characters in source-file names
 			// travel into the vmdl's RenderMeshFile node and the compiled asset path -
 			// underscores keep both on the safe side of ModelDoc's node naming.
-			var stem = Path.GetFileNameWithoutExtension( target.FbxAbsolutePath );
+			var stem = Path.GetFileNameWithoutExtension( target.ModelFilePath );
 			var safeStem = new string( stem.Select( c => char.IsLetterOrDigit( c ) ? c : '_' ).ToArray() );
-			var fileName = safeStem + Path.GetExtension( target.FbxAbsolutePath ).ToLowerInvariant();
+			var extension = Path.GetExtension( target.ModelFilePath ).ToLowerInvariant();
+			var fileName = safeStem + extension;
 			var relative = string.IsNullOrEmpty( outputFolderRelative )
 				? fileName
 				: outputFolderRelative.TrimEnd( '/' ) + "/" + fileName;
 			var destination = Path.GetFullPath( Path.Combine(
 				assetsPath, relative.Replace( '/', Path.DirectorySeparatorChar ) ) );
 
-			if ( !string.Equals( Path.GetFullPath( target.FbxAbsolutePath ), destination,
+			if ( !string.Equals( Path.GetFullPath( target.ModelFilePath ), destination,
 				StringComparison.OrdinalIgnoreCase ) )
 			{
 				Directory.CreateDirectory( Path.GetDirectoryName( destination ) );
@@ -266,48 +274,76 @@ public static class EditorPipeline
 				// solver's anatomy (leg chains down, mirrored hands) is silently wrong and
 				// the retarget mangles exactly the posed limbs. The BindPose section holds
 				// the truth; rewrite the node transforms to it.
-				var fbxBytes = File.ReadAllBytes( target.FbxAbsolutePath );
-				var repaired = HumanoidRetargeter.Formats.Fbx.FbxBindPoseFixer.TryFix(
-					fbxBytes, out var bindReport );
-				File.WriteAllBytes( destination, repaired ?? fbxBytes );
-				Log.Info( $"[humanoid-retargeter] target FBX bind check: {bindReport}"
-					+ (repaired is not null ? " - repaired copy embedded" : "") );
-				if ( repaired is not null )
-					report?.Add( $"Target FBX was exported mid-pose ({bindReport}) - "
-						+ "the embedded copy was repaired from the file's own bind data." );
+				var modelBytes = File.ReadAllBytes( target.ModelFilePath );
+				if ( extension == ".fbx" )
+				{
+					var repaired = HumanoidRetargeter.Formats.Fbx.FbxBindPoseFixer.TryFix(
+						modelBytes, out var bindReport );
+					File.WriteAllBytes( destination, repaired ?? modelBytes );
+					Log.Info( $"[humanoid-retargeter] target FBX bind check: {bindReport}"
+						+ (repaired is not null ? " - repaired copy embedded" : "") );
+					if ( repaired is not null )
+						report?.Add( $"Target FBX was exported mid-pose ({bindReport}) - "
+							+ "the embedded copy was repaired from the file's own bind data." );
+				}
+				else
+				{
+					File.WriteAllBytes( destination, modelBytes );
+				}
 			}
 
-			// Sidecar textures FIRST: FBX exports commonly ship a "textures" folder next to
+			// Sidecar textures FIRST: model exports commonly ship a "textures" folder next to
 			// the file (or next to its parent "source" folder) plus loose images - copy them
 			// along so the compiled model has a chance to resolve its skins (user report:
 			// "it has a source with the .fbx and a folder named textures"). Best-effort:
-			// references the FBX makes to files that do not exist anywhere (e.g. .tga names
+			// references the model makes to files that do not exist anywhere (e.g. .tga names
 			// shipped as .png conversions) cannot be resolved by any importer.
-			CopySidecarTextures( Path.GetDirectoryName( target.FbxAbsolutePath ),
+			CopySidecarTextures( Path.GetDirectoryName( target.ModelFilePath ),
 				Path.GetDirectoryName( destination ) );
+			if ( extension == ".gltf" )
+				CopyGltfDependencies( target.ModelFilePath, destination );
 
-			// Auto-generate a vmat per FBX material that has none: the compiler otherwise
+			// Auto-generate a vmat per source material that has none: the compiler otherwise
 			// reports 'Missing vmat "<name>.vmat"' per mesh and the model renders with
-			// placeholder materials. Textures are matched from the copied sidecars by
-			// name-token overlap (_d/_diffuse -> color, _n/_normal -> normal map). Must
+			// placeholder materials. Authored material links are preferred, with the existing
+			// name-token matching retained for incomplete exports. This must
 			// happen BEFORE the FBX is registered - registration can kick off the mesh
 			// compile immediately, baking placeholder materials in. The returned remaps
-			// go into every vmdl generated for this target: FBX materials are BARE names
+			// go into every vmdl generated for this target: source materials can be BARE names
 			// the compiler cannot resolve as resource paths ("Trying to load an illegal
 			// resource name X.vmat"), so the vmdl must remap them to the real files - the
 			// same MaterialGroupList mechanism the shipped citizen vmdl uses.
 			target.Spec.MaterialRemaps = GenerateMissingVmats( destination );
 
+			// ModelDoc cannot consume glTF directly as a RenderMeshFile (its supported
+			// skinned sources are FBX and model-DMX). Bridge glTF to model-DMX in-process;
+			// the original file remains beside it for provenance and embedded-take import.
+			var meshDestination = destination;
+			var meshRelative = relative;
+			var meshImportScale = target.ModelUnitScaleCm;
+			if ( extension is ".glb" or ".gltf" )
+			{
+				meshDestination = Path.ChangeExtension( destination, ".dmx" );
+				meshRelative = Path.ChangeExtension( relative, ".dmx" ).Replace( '\\', '/' );
+				var dmx = HumanoidRetargeter.Formats.Gltf.GltfModelDmxWriter.Write(
+					File.ReadAllBytes( destination ), target.Spec.Rig.Skeleton, safeStem,
+					extension == ".gltf"
+						? uri => TargetPickers.ReadGltfDependency( destination, uri )
+						: null );
+				File.WriteAllText( meshDestination, dmx );
+				meshImportScale = 1f; // model-DMX was emitted in the rig's centimeter space
+			}
+
 			// The compiler resolves the RenderMeshFile input through the asset system - a
 			// freshly copied file it has never seen fails the whole vmdl compile with
 			// "Node 'X' resolve failure" (observed in the custom-target gate). Register it
 			// like WriteAndCompileAsync registers the DMX outputs.
-			Try( () => AssetSystem.RegisterFile( destination ) );
+			Try( () => AssetSystem.RegisterFile( meshDestination ) );
 
-			target.Spec.MeshFilePath = relative;
-			target.Spec.MeshImportScale = target.FbxUnitScaleCm;
+			target.Spec.MeshFilePath = meshRelative;
+			target.Spec.MeshImportScale = meshImportScale;
 
-			// The FBX's OWN embedded animations must survive the conversion (user report:
+			// The target model's own embedded animations must survive the conversion (user report:
 			// "if I import an fbx with an animation and retarget another one onto it, it
 			// should have two animations"). Each take is converted alongside the batch as
 			// an exact IDENTITY retarget (see BuildEmbeddedTakeRequests) - AnimFile nodes
@@ -316,7 +352,14 @@ public static class EditorPipeline
 			// animation that came with the fbx is messed up").
 			try
 			{
-				var takes = ExtractFbxTakeNames( File.ReadAllBytes( destination ) );
+				var takes = extension == ".fbx"
+					? ExtractFbxTakeNames( File.ReadAllBytes( destination ) )
+					: Retargeter.ImportSource(
+						File.ReadAllBytes( destination ), fileName,
+						externalBufferResolver: extension == ".gltf"
+							? uri => TargetPickers.ReadGltfDependency( destination, uri )
+							: null )
+						.Clips.Select( clip => clip.Name ).ToList();
 				if ( takes.Count > 0 )
 				{
 					target.EmbeddedTakeNames = takes
@@ -326,7 +369,7 @@ public static class EditorPipeline
 								take.Select( c => char.IsLetterOrDigit( c ) ? c : '_' ).ToArray() ) )
 						.ToArray();
 					Log.Info( $"[humanoid-retargeter] preserving {takes.Count} embedded animation(s) "
-						+ $"from the target FBX: {string.Join( ", ", target.EmbeddedTakeNames )}" );
+						+ $"from the target model: {string.Join( ", ", target.EmbeddedTakeNames )}" );
 				}
 			}
 			catch ( Exception e )
@@ -338,25 +381,334 @@ public static class EditorPipeline
 		}
 		catch ( Exception e )
 		{
-			error = $"Could not copy the target FBX into the project: {e.Message}";
+			error = $"Could not copy the target model into the project: {e.Message}";
 			return false;
 		}
 	}
 
 	// ====================================================== auto-vmat generation
 
+	sealed class SourceMaterialInfo
+	{
+		public string Name { get; init; }
+		public string ColorTexture { get; set; }
+		public string NormalTexture { get; set; }
+		public string RoughnessTexture { get; set; }
+		public string MetalnessTexture { get; set; }
+		public string OcclusionTexture { get; set; }
+		public bool AlphaTest { get; set; }
+	}
+
+	/// <summary>Reads the material→texture links authored in an FBX. Matching through
+	/// object IDs makes texture filenames irrelevant (TrumpLPmat → tumpLPcolors.png).</summary>
+	static List<SourceMaterialInfo> ExtractFbxMaterials( byte[] data )
+	{
+		var root = HumanoidRetargeter.Formats.Fbx.FbxTokenizer.Parse( data );
+		var objects = root.Child( "Objects" );
+		var connections = root.Child( "Connections" );
+		var materials = new Dictionary<long, SourceMaterialInfo>();
+		var textures = new Dictionary<long, string>();
+		var videos = new Dictionary<long, string>();
+
+		if ( objects is not null )
+		{
+			foreach ( var node in objects.Children )
+			{
+				if ( node.Properties.Count < 2 || node.Properties[0] is not (long or int)
+					|| node.Properties[1] is not string rawName )
+					continue;
+				var id = node.Prop<long>( 0 );
+				if ( node.Name == "Material" )
+				{
+					materials[id] = new SourceMaterialInfo
+					{
+						Name = HumanoidRetargeter.Formats.Fbx.FbxNode.SplitName( rawName ).Name,
+					};
+				}
+				else if ( node.Name is "Texture" or "Video" )
+				{
+					var file = node.Children.FirstOrDefault( child =>
+						child.Name.Equals( "RelativeFilename", StringComparison.OrdinalIgnoreCase ) )
+						?? node.Children.FirstOrDefault( child =>
+							child.Name.Equals( "FileName", StringComparison.OrdinalIgnoreCase )
+							|| child.Name.Equals( "Filename", StringComparison.OrdinalIgnoreCase ) );
+					if ( file?.Properties.FirstOrDefault() is string path )
+					{
+						if ( node.Name == "Texture" ) textures[id] = path;
+						else videos[id] = path;
+					}
+				}
+			}
+		}
+
+		if ( connections is null )
+			return materials.Values.ToList();
+
+		// Video objects commonly carry the only usable filename and parent a Texture.
+		foreach ( var connection in connections.ChildrenNamed( "C" ) )
+		{
+			if ( connection.Properties.Count < 3 || connection.Properties[0] is not string kind
+				|| kind != "OO" || connection.Properties[1] is not (long or int)
+				|| connection.Properties[2] is not (long or int) )
+				continue;
+			var source = connection.Prop<long>( 1 );
+			var target = connection.Prop<long>( 2 );
+			if ( videos.TryGetValue( source, out var file ) && !textures.ContainsKey( target ) )
+				textures[target] = file;
+		}
+
+		foreach ( var connection in connections.ChildrenNamed( "C" ) )
+		{
+			if ( connection.Properties.Count < 3 || connection.Properties[0] is not string kind
+				|| connection.Properties[1] is not (long or int)
+				|| connection.Properties[2] is not (long or int) )
+				continue;
+			var source = connection.Prop<long>( 1 );
+			var target = connection.Prop<long>( 2 );
+			if ( !textures.TryGetValue( source, out var file )
+				|| !materials.TryGetValue( target, out var material ) )
+				continue;
+			var channel = kind == "OP" && connection.Properties.Count >= 4
+				&& connection.Properties[3] is string property ? property : "DiffuseColor";
+			if ( channel.Contains( "normal", StringComparison.OrdinalIgnoreCase )
+				|| channel.Contains( "bump", StringComparison.OrdinalIgnoreCase ) )
+				material.NormalTexture ??= file;
+			else if ( channel.Contains( "rough", StringComparison.OrdinalIgnoreCase )
+				|| channel.Contains( "gloss", StringComparison.OrdinalIgnoreCase ) )
+				material.RoughnessTexture ??= file;
+			else if ( channel.Contains( "metal", StringComparison.OrdinalIgnoreCase ) )
+				material.MetalnessTexture ??= file;
+			else if ( channel.Contains( "occlusion", StringComparison.OrdinalIgnoreCase )
+				|| channel.Contains( "ambient", StringComparison.OrdinalIgnoreCase ) )
+				material.OcclusionTexture ??= file;
+			else if ( channel.Contains( "diffuse", StringComparison.OrdinalIgnoreCase )
+				|| channel.Contains( "color", StringComparison.OrdinalIgnoreCase ) )
+				material.ColorTexture ??= file;
+		}
+		return materials.Values.ToList();
+	}
+
+	/// <summary>Reads glTF material links and extracts embedded images beside the copied
+	/// model so generated vmats can reference ordinary project texture assets.</summary>
+	static List<SourceMaterialInfo> ExtractGltfMaterials( byte[] data, string directory )
+	{
+		using var document = ParseGltfJson( data, out var binaryChunk );
+		var root = document.RootElement;
+		if ( !root.TryGetProperty( "materials", out var materialArray )
+			|| materialArray.ValueKind != JsonValueKind.Array )
+			return new List<SourceMaterialInfo>();
+
+		var images = new List<string>();
+		if ( root.TryGetProperty( "images", out var imageArray )
+			&& imageArray.ValueKind == JsonValueKind.Array )
+		{
+			var imageIndex = 0;
+			foreach ( var image in imageArray.EnumerateArray() )
+			{
+				string reference = null;
+				if ( image.TryGetProperty( "uri", out var uriProperty ) )
+				{
+					var uri = uriProperty.GetString();
+					if ( uri?.StartsWith( "data:", StringComparison.OrdinalIgnoreCase ) == true )
+						reference = WriteEmbeddedGltfImage( directory, image, imageIndex,
+							DecodeDataUri( uri ) );
+					else
+						reference = uri;
+				}
+				else if ( image.TryGetProperty( "bufferView", out var viewProperty ) )
+				{
+					var bytes = ReadGltfBufferView(
+						root, viewProperty.GetInt32(), binaryChunk, directory );
+					reference = WriteEmbeddedGltfImage( directory, image, imageIndex, bytes );
+				}
+				images.Add( reference );
+				imageIndex++;
+			}
+		}
+
+		var textureSources = new List<int>();
+		if ( root.TryGetProperty( "textures", out var textureArray )
+			&& textureArray.ValueKind == JsonValueKind.Array )
+		{
+			foreach ( var texture in textureArray.EnumerateArray() )
+				textureSources.Add( texture.TryGetProperty( "source", out var source )
+					? source.GetInt32() : -1 );
+		}
+
+		string TextureOf( JsonElement owner, string property )
+		{
+			if ( !owner.TryGetProperty( property, out var textureInfo )
+				|| !textureInfo.TryGetProperty( "index", out var indexProperty ) )
+				return null;
+			var textureIndex = indexProperty.GetInt32();
+			if ( textureIndex < 0 || textureIndex >= textureSources.Count )
+				return null;
+			var imageIndex = textureSources[textureIndex];
+			return imageIndex >= 0 && imageIndex < images.Count ? images[imageIndex] : null;
+		}
+
+		var result = new List<SourceMaterialInfo>();
+		var index = 0;
+		foreach ( var material in materialArray.EnumerateArray() )
+		{
+			var info = new SourceMaterialInfo
+			{
+				Name = material.TryGetProperty( "name", out var name )
+					? name.GetString() ?? $"material_{index}" : $"material_{index}",
+				NormalTexture = TextureOf( material, "normalTexture" ),
+				OcclusionTexture = TextureOf( material, "occlusionTexture" ),
+				AlphaTest = material.TryGetProperty( "alphaMode", out var alpha )
+					&& !string.Equals( alpha.GetString(), "OPAQUE", StringComparison.OrdinalIgnoreCase ),
+			};
+			if ( material.TryGetProperty( "pbrMetallicRoughness", out var pbr ) )
+				info.ColorTexture = TextureOf( pbr, "baseColorTexture" );
+			result.Add( info );
+			index++;
+		}
+		return result;
+	}
+
+	static JsonDocument ParseGltfJson( byte[] data, out byte[] binaryChunk )
+	{
+		binaryChunk = null;
+		byte[] json = data;
+		if ( data.Length >= 12 && ReadU32( data, 0 ) == 0x46546C67 ) // glTF
+		{
+			var declaredLength = ReadU32( data, 8 );
+			if ( declaredLength > data.Length )
+				throw new FormatException( "GLB header length exceeds the file size." );
+			json = null;
+			var offset = 12;
+			while ( offset + 8 <= declaredLength )
+			{
+				var length = checked((int)ReadU32( data, offset ));
+				var type = ReadU32( data, offset + 4 );
+				offset += 8;
+				if ( length < 0 || offset + (long)length > declaredLength )
+					throw new FormatException( "GLB contains a truncated chunk." );
+				if ( type == 0x4E4F534A && json is null ) // JSON
+					json = data.AsSpan( offset, length ).ToArray();
+				else if ( type == 0x004E4942 && binaryChunk is null ) // BIN
+					binaryChunk = data.AsSpan( offset, length ).ToArray();
+				offset += length;
+			}
+			if ( json is null )
+				throw new FormatException( "GLB contains no JSON chunk." );
+		}
+
+		return JsonDocument.Parse( Encoding.UTF8.GetString( json ).TrimEnd( '\0', ' ' ) );
+	}
+
+	static uint ReadU32( byte[] data, int offset )
+		=> (uint)(data[offset] | data[offset + 1] << 8
+			| data[offset + 2] << 16 | data[offset + 3] << 24);
+
+	static byte[] DecodeDataUri( string uri )
+	{
+		var comma = uri.IndexOf( ',' );
+		if ( comma < 0 || !uri[..comma].EndsWith( ";base64", StringComparison.OrdinalIgnoreCase ) )
+			throw new FormatException( "glTF image data URI is not base64 encoded." );
+		return Convert.FromBase64String( uri[(comma + 1)..] );
+	}
+
+	static byte[] ReadGltfBufferView(
+		JsonElement root, int viewIndex, byte[] binaryChunk, string gltfDirectory )
+	{
+		var views = root.GetProperty( "bufferViews" );
+		if ( viewIndex < 0 || viewIndex >= views.GetArrayLength() )
+			throw new FormatException( $"glTF image references invalid bufferView {viewIndex}." );
+		var view = views[viewIndex];
+		var bufferIndex = view.GetProperty( "buffer" ).GetInt32();
+		var buffers = root.GetProperty( "buffers" );
+		if ( bufferIndex < 0 || bufferIndex >= buffers.GetArrayLength() )
+			throw new FormatException( $"glTF bufferView references invalid buffer {bufferIndex}." );
+		var buffer = buffers[bufferIndex];
+		byte[] bytes;
+		if ( !buffer.TryGetProperty( "uri", out var uriProperty ) )
+			bytes = binaryChunk ?? throw new FormatException( "glTF image buffer has no data." );
+		else
+		{
+			var uri = uriProperty.GetString() ?? "";
+			bytes = uri.StartsWith( "data:", StringComparison.OrdinalIgnoreCase )
+				? DecodeDataUri( uri )
+				: TargetPickers.ReadGltfDependency( Path.Combine( gltfDirectory, "model.gltf" ), uri );
+		}
+		var offset = view.TryGetProperty( "byteOffset", out var offsetProperty )
+			? offsetProperty.GetInt32() : 0;
+		var length = view.GetProperty( "byteLength" ).GetInt32();
+		if ( offset < 0 || length < 0 || offset + (long)length > bytes.Length )
+			throw new FormatException( "glTF image bufferView exceeds its buffer." );
+		return bytes.AsSpan( offset, length ).ToArray();
+	}
+
+	static string WriteEmbeddedGltfImage(
+		string directory, JsonElement image, int index, byte[] bytes )
+	{
+		var mime = image.TryGetProperty( "mimeType", out var mimeProperty )
+			? mimeProperty.GetString() : null;
+		var extension = mime?.ToLowerInvariant() switch
+		{
+			"image/jpeg" => ".jpg",
+			"image/webp" => ".webp",
+			"image/tga" => ".tga",
+			_ => ".png",
+		};
+		var name = image.TryGetProperty( "name", out var nameProperty )
+			? nameProperty.GetString() : null;
+		var safeName = new string( (name ?? $"image_{index}")
+			.Select( c => char.IsLetterOrDigit( c ) || c == '_' ? c : '_' ).ToArray() );
+		var relative = $"textures/{safeName}_{index}{extension}";
+		var path = Path.Combine( directory, relative.Replace( '/', Path.DirectorySeparatorChar ) );
+		Directory.CreateDirectory( Path.GetDirectoryName( path ) );
+		File.WriteAllBytes( path, bytes );
+		Try( () => AssetSystem.RegisterFile( path ) );
+		return relative;
+	}
+
+	static void CopyGltfDependencies( string sourceGltf, string destinationGltf )
+	{
+		using var document = ParseGltfJson( File.ReadAllBytes( sourceGltf ), out _ );
+		var root = document.RootElement;
+		foreach ( var arrayName in new[] { "buffers", "images" } )
+		{
+			if ( !root.TryGetProperty( arrayName, out var entries )
+				|| entries.ValueKind != JsonValueKind.Array )
+				continue;
+			foreach ( var entry in entries.EnumerateArray() )
+			{
+				if ( !entry.TryGetProperty( "uri", out var uriProperty ) )
+					continue;
+				var uri = uriProperty.GetString();
+				if ( string.IsNullOrEmpty( uri )
+					|| uri.StartsWith( "data:", StringComparison.OrdinalIgnoreCase ) )
+					continue;
+				var relative = Uri.UnescapeDataString( uri.Split( '?', '#' )[0] )
+					.Replace( '/', Path.DirectorySeparatorChar );
+				var bytes = TargetPickers.ReadGltfDependency( sourceGltf, uri );
+				var destinationDirectory = Path.GetFullPath( Path.GetDirectoryName( destinationGltf ) );
+				var destination = Path.GetFullPath( Path.Combine( destinationDirectory, relative ) );
+				if ( !destination.StartsWith( destinationDirectory.TrimEnd( Path.DirectorySeparatorChar )
+					+ Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase ) )
+					throw new FormatException( $"glTF dependency escapes the output folder: '{uri}'." );
+				Directory.CreateDirectory( Path.GetDirectoryName( destination ) );
+				File.WriteAllBytes( destination, bytes );
+				Try( () => AssetSystem.RegisterFile( destination ) );
+			}
+		}
+	}
+
 	/// <summary>
-	/// Writes a stub <c>.vmat</c> next to the copied target FBX for every FBX material
+	/// Writes a <c>.vmat</c> next to the copied target model for every source material
 	/// that has none: the compiler otherwise logs 'Missing vmat "&lt;name&gt;.vmat"' per
-	/// mesh and the model renders with placeholder materials. Texture assignment is
-	/// best-effort by name-token overlap against the copied sidecar images
+	/// mesh and the model renders with placeholder materials. Texture assignment follows
+	/// authored material links first, then falls back to name-token overlap against sidecars
 	/// (<c>mi_danteDark_lowerBody</c> → <c>t_danteDark_lowerBody_d.png</c> color +
 	/// <c>…_n.png</c> normal). Existing vmats are never touched; failures never fail the
 	/// conversion. Returns the material remap table for the generated vmdls (bare
 	/// material reference → assets-relative vmat path), or null when there is nothing
 	/// to remap.
 	/// </summary>
-	static IReadOnlyDictionary<string, string> GenerateMissingVmats( string fbxAbsolutePath )
+	static IReadOnlyDictionary<string, string> GenerateMissingVmats( string modelAbsolutePath )
 	{
 		try
 		{
@@ -364,27 +716,33 @@ public static class EditorPipeline
 			if ( assetsPath is null )
 				return null;
 
-			var fbxBytes = File.ReadAllBytes( fbxAbsolutePath );
-			var materials = ExtractFbxMaterialNames( fbxBytes );
+			var modelBytes = File.ReadAllBytes( modelAbsolutePath );
+			var directory = Path.GetDirectoryName( modelAbsolutePath );
+			var extension = Path.GetExtension( modelAbsolutePath ).ToLowerInvariant();
+			var materialInfo = extension == ".fbx"
+				? ExtractFbxMaterials( modelBytes )
+				: ExtractGltfMaterials( modelBytes, directory );
+			var materials = materialInfo.Select( m => m.Name ).ToList();
 			if ( materials.Count == 0 )
 			{
 				// An FBX with NO material objects at all (bare Blender export): the engine
 				// derives the material slot from the GEOMETRY name and then wants
 				// '<geometry>.vmat' (observed: mesh 'Cube' -> Missing vmat "cube.vmat",
 				// an unsatisfiable illegal-resource lookup). Stub those instead.
-				materials = ExtractFbxObjectNames( fbxBytes, "Geometry" )
+				materials = extension == ".fbx"
+					? ExtractFbxObjectNames( modelBytes, "Geometry" )
 					.Select( n => n.ToLowerInvariant() )
 					.Distinct()
-					.ToList();
+					.ToList()
+					: new List<string>();
 				if ( materials.Count == 0 )
 					return null;
 				Log.Info( $"[humanoid-retargeter] FBX carries no materials - stubbing vmats "
 					+ $"for its geometry slots: {string.Join( ", ", materials )}" );
 			}
 
-			var directory = Path.GetDirectoryName( fbxAbsolutePath );
 			var textures = new List<string>();
-			foreach ( var pattern in new[] { "*.png", "*.jpg", "*.jpeg", "*.tga" } )
+			foreach ( var pattern in new[] { "*.png", "*.jpg", "*.jpeg", "*.tga", "*.dds", "*.webp" } )
 			{
 				textures.AddRange( Directory.GetFiles( directory, pattern ) );
 				var texturesDir = Path.Combine( directory, "textures" );
@@ -410,7 +768,11 @@ public static class EditorPipeline
 			var remaps = new Dictionary<string, string>( StringComparer.OrdinalIgnoreCase );
 			foreach ( var material in materials )
 			{
-				var vmatPath = Path.Combine( directory, material + ".vmat" );
+				var safeMaterial = new string( material
+					.Select( c => char.IsLetterOrDigit( c ) || c == '_' ? c : '_' ).ToArray() );
+				if ( string.IsNullOrEmpty( safeMaterial ) )
+					safeMaterial = "material";
+				var vmatPath = Path.Combine( directory, safeMaterial + ".vmat" );
 				// Remap the BARE reference the mesh carries to the real file, generated or
 				// pre-existing (resource paths are lowercase by engine convention).
 				remaps[material.ToLowerInvariant() + ".vmat"] =
@@ -437,7 +799,10 @@ public static class EditorPipeline
 				// Suffix conventions collected from real exports (Sketchfab rips, Unity
 				// packs, Blender/Substance/Marmoset outputs) - the user's assets keep
 				// arriving with new ones, so every known spelling is listed.
-				var color = BestTextureMatch( material, textures, new[]
+				var authored = materialInfo.FirstOrDefault( m =>
+					string.Equals( m.Name, material, StringComparison.OrdinalIgnoreCase ) );
+				var color = FindAuthoredTexture( authored?.ColorTexture, textures )
+					?? BestTextureMatch( material, textures, new[]
 					{
 						"_d", "_dm", "_dif", "_diff", "_diffuse", "diffuse",
 						"_alb", "_albedo", "albedo", "_basecolor", "_base_color", "basecolor",
@@ -459,26 +824,31 @@ public static class EditorPipeline
 					?? BestTextureMatch( material, textures
 						.Where( t => !Path.GetFileNameWithoutExtension( t )
 							.ToLowerInvariant().EndsWith( "_n" ) )
-						.ToList(), new[] { "" } );
-				var normal = BestTextureMatch( material, textures, new[]
+						.ToList(), new[] { "" } )
+					?? SingleColorTexture( textures );
+				var normal = FindAuthoredTexture( authored?.NormalTexture, textures )
+					?? BestTextureMatch( material, textures, new[]
 					{ "_n", "_nrm", "_nm", "_nor", "_norm", "_normal", "normal", "_normalmap", "_bump" } );
-				var rough = BestTextureMatch( material, textures, new[]
+				var rough = FindAuthoredTexture( authored?.RoughnessTexture, textures )
+					?? BestTextureMatch( material, textures, new[]
 					{ "_r", "_rough", "_roughness", "roughness", "_g", "_gloss", "_glossiness" } );
-				var metal = BestTextureMatch( material, textures, new[]
+				var metal = FindAuthoredTexture( authored?.MetalnessTexture, textures )
+					?? BestTextureMatch( material, textures, new[]
 					{ "_m", "_metal", "_metallic", "_metalness", "metallic" } );
-				var occlusion = BestTextureMatch( material, textures, new[]
+				var occlusion = FindAuthoredTexture( authored?.OcclusionTexture, textures )
+					?? BestTextureMatch( material, textures, new[]
 					{ "_ao", "_occlusion", "_ambientocclusion" } );
 
 				// Card/strand geometry (lashes, hair, brows, anything the modeler named
 				// "masked") is authored for alpha testing - rendered opaque it shows as
 				// solid white sheets (user report: "the makeup around the eye is white").
 				var lower = material.ToLowerInvariant();
-				var alphaTest = lower.Contains( "mask" ) || lower.Contains( "lash" )
+				var alphaTest = authored?.AlphaTest == true || lower.Contains( "mask" ) || lower.Contains( "lash" )
 					|| lower.Contains( "hair" ) || lower.Contains( "brow" )
 					|| lower.Contains( "fur" ) || lower.Contains( "feather" );
 
 				var builder = new System.Text.StringBuilder();
-				builder.AppendLine( "// Auto-generated by humanoid-retargeter from the target FBX's material list." );
+				builder.AppendLine( "// Auto-generated by humanoid-retargeter from the target model's material list." );
 				builder.AppendLine( "// Regenerated on conversion while this header stays - DELETE THE LINE ABOVE to make manual edits permanent." );
 				builder.AppendLine( "Layer0" );
 				builder.AppendLine( "{" );
@@ -506,6 +876,44 @@ public static class EditorPipeline
 			}
 
 			return remaps.Count > 0 ? remaps : null;
+
+			string FindAuthoredTexture( string reference, List<string> candidates )
+			{
+				if ( string.IsNullOrEmpty( reference ) )
+					return null;
+				var decoded = Uri.UnescapeDataString( reference ).Replace( '/', Path.DirectorySeparatorChar );
+				if ( !Path.IsPathRooted( decoded ) )
+				{
+					var direct = Path.GetFullPath( Path.Combine( directory, decoded ) );
+					var root = Path.GetFullPath( directory ).TrimEnd( Path.DirectorySeparatorChar )
+						+ Path.DirectorySeparatorChar;
+					if ( direct.StartsWith( root, StringComparison.OrdinalIgnoreCase ) && File.Exists( direct ) )
+						return Path.GetRelativePath( assetsPath, direct ).Replace( '\\', '/' );
+				}
+				var name = Path.GetFileName( decoded );
+				var stem = Path.GetFileNameWithoutExtension( name );
+				var match = candidates.FirstOrDefault( candidate =>
+					string.Equals( Path.GetFileName( candidate ), name, StringComparison.OrdinalIgnoreCase ) )
+					?? candidates.FirstOrDefault( candidate => string.Equals(
+						Path.GetFileNameWithoutExtension( candidate ), stem,
+						StringComparison.OrdinalIgnoreCase ) );
+				return match is null ? null
+					: Path.GetRelativePath( assetsPath, match ).Replace( '\\', '/' );
+			}
+
+			string SingleColorTexture( List<string> candidates )
+			{
+				var plausible = candidates.Where( candidate =>
+				{
+					var tokens = NameTokens( Path.GetFileNameWithoutExtension( candidate ) );
+					return !tokens.Any( token => token is "n" or "nrm" or "normal" or "bump"
+						or "rough" or "roughness" or "gloss" or "metal" or "metallic"
+						or "metalness" or "ao" or "occlusion" );
+				} ).ToList();
+				return plausible.Count == 1
+					? Path.GetRelativePath( assetsPath, plausible[0] ).Replace( '\\', '/' )
+					: null;
+			}
 
 			string BestTextureMatch( string material, List<string> candidates, string[] suffixes )
 			{
@@ -703,23 +1111,25 @@ public static class EditorPipeline
 	}
 
 	/// <summary>
-	/// Requests converting the target FBX's OWN embedded takes onto the target rig — an
+	/// Requests converting the target model's own embedded takes onto the target rig — an
 	/// exact identity retarget (source and target are the same skeleton), emitted as
 	/// unit-correct DMX so the preserved animations play at the right scale. The mapping
 	/// is taken from the target rig itself (index-aligned with the import), so this works
-	/// even when the rig was only accepted best-effort. Returns an empty list for non-FBX
-	/// targets or take-less files.
+	/// even when the rig was only accepted best-effort. Returns an empty list for compiled
+	/// targets or take-less source files.
 	/// </summary>
 	public static List<RetargetRequest> BuildEmbeddedTakeRequests( TargetPickers.ResolvedTarget target )
 	{
 		var requests = new List<RetargetRequest>();
-		if ( target?.FbxAbsolutePath is null || target.EmbeddedTakeNames is not { Count: > 0 } names )
+		if ( target?.ModelFilePath is null || target.EmbeddedTakeNames is not { Count: > 0 } names )
 			return requests;
 
 		try
 		{
-			var bytes = File.ReadAllBytes( target.FbxAbsolutePath );
-			var fileName = Path.GetFileName( target.FbxAbsolutePath );
+			var bytes = File.ReadAllBytes( target.ModelFilePath );
+			var fileName = Path.GetFileName( target.ModelFilePath );
+			var isGltf = Path.GetExtension( target.ModelFilePath )
+				.Equals( ".gltf", StringComparison.OrdinalIgnoreCase );
 
 			// Role-based mapping via the normal cascade: the target rig may be rebuilt
 			// from the COMPILED model (different bone order/count than the raw import),
@@ -731,7 +1141,10 @@ public static class EditorPipeline
 				{
 					SourceData = bytes,
 					SourceFileName = fileName,
-					SourceId = target.FbxAbsolutePath + "#embedded" + take,
+					SourceId = target.ModelFilePath + "#embedded" + take,
+					ExternalBufferResolver = isGltf
+						? uri => TargetPickers.ReadGltfDependency( target.ModelFilePath, uri )
+						: null,
 					TakeIndex = names.Count > 1 ? take : null,
 					ClipNameOverride = names[take],
 					RootMotion = Cleanup.RootMotionMode.Off,
@@ -752,10 +1165,11 @@ public static class EditorPipeline
 		return requests;
 	}
 
-	static readonly string[] TextureExtensions = { ".png", ".jpg", ".jpeg", ".tga", ".dds", ".vmat", ".vtex" };
+	static readonly string[] TextureExtensions =
+		{ ".png", ".jpg", ".jpeg", ".tga", ".dds", ".webp", ".vmat", ".vtex" };
 
-	/// <summary>Copies texture sidecars of a picked target FBX into the output folder:
-	/// loose image files next to the FBX, and a "textures" folder next to it or next to its
+	/// <summary>Copies texture sidecars of a picked target model into the output folder:
+	/// loose image files next to it, and a "textures" folder next to it or next to its
 	/// parent (the source/-plus-textures/ layout). Per-file best effort - a failed texture
 	/// must never fail the conversion.</summary>
 	static void CopySidecarTextures( string sourceDir, string destDir )
@@ -815,25 +1229,30 @@ public static class EditorPipeline
 	}
 
 	/// <summary>
-	/// Gives a custom-FBX target a REAL skinned preview (user request: "I want to see the
-	/// preview of the FBX model"): copies the FBX into the output folder
+	/// Compatibility entry point for compiling a skinned source-model preview. Copies the
+	/// model into the output folder
 	/// (<see cref="PrepareFbxTargetMesh"/>), writes a mesh-only vmdl next to it
 	/// (<c>&lt;stem&gt;_preview.vmdl</c> — RenderMeshFile + ScaleAndMirror, no animations),
 	/// compiles it, and on success points the target's
 	/// <see cref="TargetPickers.ResolvedTarget.PreviewModelPath"/> at it so the preview
 	/// dialog shows the actual skinned model instead of the wireframe skeleton. False when
 	/// anything failed (the caller keeps the skeleton-view fallback); no-op true for
-	/// non-FBX targets.
+	/// compiled-model targets.
 	/// </summary>
 	public static async Task<bool> CompileFbxTargetPreviewAsync(
 		TargetPickers.ResolvedTarget target, string outputFolderRelative )
+		=> await CompileModelTargetPreviewAsync( target, outputFolderRelative );
+
+	/// <summary>Compiles the mesh-only preview for an FBX, GLB, or glTF target.</summary>
+	public static async Task<bool> CompileModelTargetPreviewAsync(
+		TargetPickers.ResolvedTarget target, string outputFolderRelative )
 	{
-		if ( target?.FbxAbsolutePath is null )
+		if ( target?.ModelFilePath is null )
 			return true;
 
-		if ( !PrepareFbxTargetMesh( target, outputFolderRelative, out var error ) )
+		if ( !PrepareModelTargetMesh( target, outputFolderRelative, out var error ) )
 		{
-			Log.Warning( $"[humanoid-retargeter] target FBX preview: {error}" );
+			Log.Warning( $"[humanoid-retargeter] target model preview: {error}" );
 			return false;
 		}
 
@@ -844,13 +1263,39 @@ public static class EditorPipeline
 		try
 		{
 			var meshRelative = target.Spec.MeshFilePath;
+			var meshAbsolute = Path.GetFullPath( Path.Combine(
+				assetsPath, meshRelative.Replace( '/', Path.DirectorySeparatorChar ) ) );
+			var meshHash = Convert.ToHexString(
+				System.Security.Cryptography.SHA256.HashData( File.ReadAllBytes( meshAbsolute ) ) )
+				.Substring( 0, 8 ).ToLowerInvariant();
 			var vmdlRelative = meshRelative.Substring( 0, meshRelative.LastIndexOf( '.' ) )
-				+ "_preview.vmdl";
+				+ $"_preview_bind_{meshHash}.vmdl";
 			var vmdlAbsolute = Path.GetFullPath( Path.Combine(
 				assetsPath, vmdlRelative.Replace( '/', Path.DirectorySeparatorChar ) ) );
 
+			// A one-frame channel set keeps unweighted roots/helpers in the preview skeleton;
+			// otherwise ModelDoc culls them and the preview no longer matches final output.
+			var bindRelative = Path.ChangeExtension( vmdlRelative, ".dmx" );
+			var bindAbsolute = Path.GetFullPath( Path.Combine(
+				assetsPath, bindRelative.Replace( '/', Path.DirectorySeparatorChar ) ) );
+			var bindFrame = target.Spec.Rig.Skeleton.Bones.Select( bone => bone.RestLocal ).ToArray();
+			File.WriteAllText( bindAbsolute, HumanoidRetargeter.Formats.Dmx.DmxWriter.Write(
+				target.Spec.Rig.Skeleton,
+				new HumanoidRetargeter.Skeleton.Clip( "preview_bind", 30f, false,
+					new List<HumanoidRetargeter.Maths.XForm[]> { bindFrame } ),
+				new HumanoidRetargeter.Formats.Dmx.DmxWriteOptions
+				{
+					Name = "preview_bind",
+					UpAxisY = target.Spec.UpAxis == TargetUpAxis.YUpCm,
+				} ) );
+			Try( () => AssetSystem.RegisterFile( bindAbsolute ) );
+
 			var text = HumanoidRetargeter.Target.VmdlWriter.GenerateStandalone(
-				"", System.Array.Empty<HumanoidRetargeter.Target.AnimEntry>(),
+				"", new[] { new HumanoidRetargeter.Target.AnimEntry
+				{
+					Name = "preview_bind",
+					SourceFilename = bindRelative.Replace( '\\', '/' ),
+				} },
 				target.Spec.VmdlScale, target.Spec.DefaultRootBone,
 				meshFilePath: meshRelative, meshImportScale: target.Spec.MeshImportScale,
 				materialRemaps: target.Spec.MaterialRemaps );

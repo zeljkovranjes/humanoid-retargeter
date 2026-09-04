@@ -352,7 +352,8 @@ public static class Retargeter
         try
         {
             scene = ImportSource(
-                request.SourceData, request.SourceFileName, request.SampleFps, request.SkeletonData);
+                request.SourceData, request.SourceFileName, request.SampleFps, request.SkeletonData,
+                request.ExternalBufferResolver);
             (map, report) = ResolveMapping(
                 scene.Skeleton, request.MappingOverride, authoredMapping: scene.AuthoredMapping);
             // Import diagnostics (mid-pose exports, cross-stack static disagreements, ...)
@@ -636,13 +637,14 @@ public static class Retargeter
     {
         var events = GenerateFootsteps(request, target, context, report, frames, fps);
         var dmxFileName = SanitizeFileName(clipName) + ".dmx";
-        // Vmdls that EMBED their FBX mesh compile animations whose ROOT-LEVEL bones play
+        // Vmdls that EMBED their source mesh compile animations whose ROOT-LEVEL bones play
         // yawed 90° about up versus the DMX's declared Y-up conversion (measured: all 25
         // re-rooted bones of a real rig at exactly (0,0,1)/90.0° in the engine, child
         // bones unaffected) - the whole character yaws/pitches in ModelDoc ("plays
         // backwards", "totally messed up") while the solve, the preview and external
         // renders of the same data are correct. Compensate on the DMX COPY only.
-        var dmxFrames = target.UpAxis == TargetUpAxis.YUpCm && !string.IsNullOrEmpty(target.MeshFilePath)
+        var dmxFrames = target.UpAxis == TargetUpAxis.YUpCm
+            && !string.IsNullOrEmpty(target.MeshFilePath)
             ? CompensateEmbeddedMeshRootYaw(frames, target.Rig)
             : frames;
         var dmx = DmxWriter.Write(
@@ -986,7 +988,8 @@ public static class Retargeter
     /// re-serialize mutated frames with the same compensation the pipeline applies).</summary>
     public static List<XForm[]> TestHook_CompensateEmbeddedMeshRootYaw(
         IReadOnlyList<XForm[]> frames, RetargetTargetSpec target)
-        => target.UpAxis == TargetUpAxis.YUpCm && !string.IsNullOrEmpty(target.MeshFilePath)
+        => target.UpAxis == TargetUpAxis.YUpCm
+            && !string.IsNullOrEmpty(target.MeshFilePath)
             ? CompensateEmbeddedMeshRootYaw(frames, target.Rig)
             : frames.ToList();
 
@@ -1482,14 +1485,21 @@ public static class Retargeter
     /// <exception cref="FormatException">Thrown when the bytes are not a readable
     /// FBX/BVH/glTF/RenderWare animation.</exception>
     public static SourceScene ImportSource(
-        byte[] data, string fileName, float? sampleFps = null, byte[]? skeletonData = null)
+        byte[] data, string fileName, float? sampleFps = null, byte[]? skeletonData = null,
+        Func<string, byte[]>? externalBufferResolver = null)
     {
         ArgumentNullException.ThrowIfNull(data);
         ArgumentNullException.ThrowIfNull(fileName);
 
         var fbxOptions = sampleFps is { } fbxFps ? new FbxImportOptions { SampleFps = fbxFps } : null;
         var bvhOptions = sampleFps is { } bvhFps ? new BvhImportOptions { SampleFps = bvhFps } : null;
-        var gltfOptions = sampleFps is { } gltfFps ? new GltfImportOptions { SampleFps = gltfFps } : null;
+        var gltfOptions = sampleFps is not null || externalBufferResolver is not null
+            ? new GltfImportOptions
+            {
+                SampleFps = sampleFps ?? 30f,
+                ExternalBufferResolver = externalBufferResolver,
+            }
+            : null;
         // RenderWare banks carry no clip names — takes are named from the file stem.
         var rwOptions = new RwAnmImportOptions
         {

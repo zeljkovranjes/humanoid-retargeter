@@ -6,6 +6,7 @@ using System.IO;
 using System.Numerics;
 using Editor;
 using HumanoidRetargeter.Formats.Fbx;
+using HumanoidRetargeter.Formats.Gltf;
 using HumanoidRetargeter.Mapping;
 using HumanoidRetargeter.Maths;
 using HumanoidRetargeter.Target;
@@ -17,7 +18,7 @@ namespace HumanoidRetargeter.Editor;
 /// <summary>
 /// Builds <see cref="RetargetTargetSpec"/>s for the window's target picker
 /// (Task 9.5.2): the shipped s&amp;box default, a custom compiled model/vmdl asset, or a
-/// custom FBX file. Custom targets run the same humanoid detection as sources and are
+/// custom FBX, GLB, or glTF file. Custom targets run the same humanoid detection as sources and are
 /// rejected with a clear message below the detection threshold.
 /// </summary>
 /// <remarks>
@@ -28,8 +29,8 @@ namespace HumanoidRetargeter.Editor;
 /// <list type="bullet">
 /// <item>Compiled model targets: <c>Model.Bones</c> bind pose is in engine units (inches)
 /// → <c>VmdlScale = 1.0</c>, no conversion anywhere.</item>
-/// <item>FBX targets: imported in source units normalized to cm by
-/// <see cref="FbxImporter"/> → <c>VmdlScale = 0.3937</c> (cm → inch at compile time),
+/// <item>Source-model targets: imported in source units normalized to cm →
+/// <c>VmdlScale = 0.3937</c> (cm → inch at compile time),
 /// matching the s&amp;box citizen pipeline.</item>
 /// </list>
 /// </remarks>
@@ -45,7 +46,7 @@ public static class TargetPickers
 		public string Description { get; set; }
 
 		/// <summary>Asset path of a compiled model whose bone names match the target rig -
-		/// used by the skinned preview. Null when no engine model exists (FBX targets):
+		/// used by the skinned preview. Null before a source-model target's preview compiles:
 		/// the preview then shows a "no preview model" notice.</summary>
 		public string PreviewModelPath { get; set; }
 
@@ -53,23 +54,27 @@ public static class TargetPickers
 		/// preview (0.3937 for cm rigs, 1.0 for engine-unit rigs).</summary>
 		public float PreviewPositionScale { get; set; } = 1.0f;
 
-		/// <summary>Absolute path of the picked target FBX (custom FBX targets only; null
+		/// <summary>Absolute path of the picked target model file (FBX/glTF/GLB; null
 		/// otherwise). At convert time the editor copies it into the output folder and sets
 		/// <see cref="RetargetTargetSpec.MeshFilePath"/> so the standalone vmdl embeds the
 		/// mesh — without it the vmdl compiles into an empty model that plays nothing.</summary>
-		public string FbxAbsolutePath { get; set; }
+		public string ModelFilePath { get; set; }
 
-		/// <summary>The FBX importer's source-unit→cm factor for
-		/// <see cref="FbxAbsolutePath"/> (resourcecompiler reads raw FBX values, so this
+		/// <summary>The importer's source-unit→cm factor for
+		/// <see cref="ModelFilePath"/> (resourcecompiler reads raw values, so this
 		/// becomes the RenderMeshFile <c>import_scale</c>).</summary>
-		public float FbxUnitScaleCm { get; set; } = 1.0f;
+		public float ModelUnitScaleCm { get; set; } = 1.0f;
+
+		// Compatibility aliases for editor gate consumers written before GLB/glTF targets.
+		public string FbxAbsolutePath { get => ModelFilePath; set => ModelFilePath = value; }
+		public float FbxUnitScaleCm { get => ModelUnitScaleCm; set => ModelUnitScaleCm = value; }
 
 		/// <summary>Non-fatal caveat about the pick, surfaced on the window status strip
 		/// (e.g. a skeleton-only target FBX whose standalone vmdl will have no visible
 		/// model). Null when there is nothing to warn about.</summary>
 		public string Warning { get; set; }
 
-		/// <summary>Sequence names of the target FBX's OWN embedded animation takes
+		/// <summary>Sequence names of the target model's own embedded animation takes
 		/// (index-aligned with the imported clips). Converted alongside every batch as
 		/// exact identity retargets so an animated FBX keeps its animations - AnimFile
 		/// nodes referencing the FBX directly cannot rescale translations (no import
@@ -94,14 +99,18 @@ public static class TargetPickers
 		/// <summary>Set for compiled-model picks (mutually exclusive with <see cref="FbxPath"/>).</summary>
 		public Asset ModelAsset { get; set; }
 
-		/// <summary>Set for FBX picks (absolute path).</summary>
-		public string FbxPath { get; set; }
+		/// <summary>Set for source-model-file picks (absolute path).</summary>
+		public string ModelFilePath { get; set; }
 
-		/// <summary>FBX importer's source-unit→cm factor (FBX picks only).</summary>
-		public float FbxUnitScaleCm { get; set; } = 1.0f;
+		/// <summary>Importer's source-unit→cm factor (source-model-file picks only).</summary>
+		public float ModelUnitScaleCm { get; set; } = 1.0f;
 
-		/// <summary>The FBX GlobalSettings up-axis index (1 = Y, 2 = Z; FBX picks only).</summary>
-		public int FbxUpAxis { get; set; } = 1;
+		/// <summary>The source up-axis index (1 = Y, 2 = Z).</summary>
+		public int ModelUpAxis { get; set; } = 1;
+
+		public string FbxPath { get => ModelFilePath; set => ModelFilePath = value; }
+		public float FbxUnitScaleCm { get => ModelUnitScaleCm; set => ModelUnitScaleCm = value; }
+		public int FbxUpAxis { get => ModelUpAxis; set => ModelUpAxis = value; }
 
 		/// <summary>Short name for dialog titles.</summary>
 		public string DisplayName { get; set; }
@@ -121,7 +130,7 @@ public static class TargetPickers
 		{
 			return rejected.ModelAsset is not null
 				? BuildModelTarget( rejected.ModelAsset, rejected.Skeleton, mapping )
-				: BuildFbxTarget( rejected.FbxPath, rejected.FbxUnitScaleCm, rejected.FbxUpAxis,
+				: BuildFileTarget( rejected.ModelFilePath, rejected.ModelUnitScaleCm, rejected.ModelUpAxis,
 					rejected.Skeleton, mapping );
 		}
 		catch ( Exception e )
@@ -230,18 +239,25 @@ public static class TargetPickers
 	}
 
 	/// <summary>
-	/// Builds a target from an FBX file: skeleton via <see cref="FbxImporter"/> (cm →
-	/// VmdlScale 0.3937). No engine model exists for it, so the standalone vmdl gets an
-	/// empty <c>base_model_name</c> (the user can point it at their own mesh model later)
-	/// and the preview is unavailable.
+	/// Compatibility entry point for building a target from an FBX file.
 	/// </summary>
 	public static ResolvedTarget FromFbxFile( string filePath, out string error )
-		=> FromFbxFile( filePath, out error, out _ );
+		=> FromModelFile( filePath, out error, out _ );
+
+	/// <summary>Builds a custom target from an FBX, GLB, or glTF source model.</summary>
+	public static ResolvedTarget FromModelFile( string filePath, out string error )
+		=> FromModelFile( filePath, out error, out _ );
 
 	/// <summary>As <see cref="FromFbxFile(string, out string)"/>; additionally reports a
 	/// <see cref="RejectedTarget"/> when the file imported fine but the skeleton was not
 	/// recognized — the window then offers manual mapping instead of a dead end.</summary>
 	public static ResolvedTarget FromFbxFile( string filePath, out string error, out RejectedTarget rejected )
+		=> FromModelFile( filePath, out error, out rejected );
+
+	/// <summary>As <see cref="FromModelFile(string, out string)"/>; also returns the
+	/// best-effort mapping state when the model needs manual role assignment.</summary>
+	public static ResolvedTarget FromModelFile(
+		string filePath, out string error, out RejectedTarget rejected )
 	{
 		error = null;
 		rejected = null;
@@ -252,13 +268,24 @@ public static class TargetPickers
 		try
 		{
 			var bytes = File.ReadAllBytes( filePath );
-			var imported = FbxImporter.Import( bytes );
+			var extension = Path.GetExtension( filePath ).ToLowerInvariant();
+			var imported = extension switch
+			{
+				".fbx" => FbxImporter.Import( bytes ),
+				".glb" => GltfImporter.Import( bytes ),
+				".gltf" => GltfImporter.Import( bytes, new GltfImportOptions
+				{
+					ExternalBufferResolver = uri => ReadGltfDependency( filePath, uri ),
+				} ),
+				_ => throw new FormatException( "Expected an .fbx, .glb, or .gltf model." ),
+			};
 			skeleton = imported.Skeleton;
 			unitScaleCm = imported.UnitScaleCm;
 			upAxis = imported.UpAxis;
-			// "Geometry" appears in both binary and ASCII FBX whenever mesh geometry
-			// exists; skeleton-only animation exports (Mixamo "without skin") carry none.
-			hasMesh = ContainsToken( bytes, "Geometry" );
+			// Both tokens live uncompressed in their respective container metadata.
+			hasMesh = extension == ".fbx"
+				? ContainsToken( bytes, "Geometry" )
+				: ContainsToken( bytes, "\"meshes\"" );
 		}
 		catch ( Exception e )
 		{
@@ -281,22 +308,36 @@ public static class TargetPickers
 			{
 				Skeleton = skeleton,
 				BestEffortMap = bestEffort,
-				FbxPath = Path.GetFullPath( filePath ),
-				FbxUnitScaleCm = unitScaleCm,
-				FbxUpAxis = upAxis,
+				ModelFilePath = Path.GetFullPath( filePath ),
+				ModelUnitScaleCm = unitScaleCm,
+				ModelUpAxis = upAxis,
 				DisplayName = Path.GetFileName( filePath ),
 			};
 			return null;
 		}
 
-		var resolved = BuildFbxTarget( Path.GetFullPath( filePath ), unitScaleCm, upAxis, skeleton, map );
+		var resolved = BuildFileTarget( Path.GetFullPath( filePath ), unitScaleCm, upAxis, skeleton, map );
 		if ( !hasMesh )
 		{
 			resolved.Warning = $"'{Path.GetFileName( filePath )}' contains no mesh (skeleton-only "
 				+ "export): a NEW vmdl generated for it will have nothing visible to play. Add the "
-				+ "animations to an existing vmdl of this model instead, or re-export the FBX with skin.";
+				+ "animations to an existing vmdl of this model instead, or re-export it with skin.";
 		}
 		return resolved;
+	}
+
+	internal static byte[] ReadGltfDependency( string gltfPath, string uri )
+	{
+		var relative = Uri.UnescapeDataString( uri.Split( '?', '#' )[0] )
+			.Replace( '/', Path.DirectorySeparatorChar );
+		if ( Path.IsPathRooted( relative ) )
+			throw new FormatException( $"glTF dependency must be relative: '{uri}'." );
+		var directory = Path.GetFullPath( Path.GetDirectoryName( gltfPath ) );
+		var path = Path.GetFullPath( Path.Combine( directory, relative ) );
+		if ( !path.StartsWith( directory.TrimEnd( Path.DirectorySeparatorChar )
+			+ Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase ) )
+			throw new FormatException( $"glTF dependency escapes the model folder: '{uri}'." );
+		return File.ReadAllBytes( path );
 	}
 
 	/// <summary>
@@ -409,7 +450,7 @@ public static class TargetPickers
 		return false;
 	}
 
-	static ResolvedTarget BuildFbxTarget(
+	static ResolvedTarget BuildFileTarget(
 		string filePath, float unitScaleCm, int upAxis, SkeletonModel skeleton, MappingResult map )
 	{
 		var rig = TargetRig.FromSkeleton( skeleton, map );
@@ -427,11 +468,11 @@ public static class TargetPickers
 				UpAxis = upAxis == 2 ? TargetUpAxis.ZUpCm : TargetUpAxis.YUpCm,
 				DlWeights = DlAssets.TryLoadWeights(),
 			},
-			Description = $"Custom FBX: {Path.GetFileName( filePath )}",
+			Description = $"Custom {Path.GetExtension( filePath ).TrimStart( '.' ).ToUpperInvariant()}: {Path.GetFileName( filePath )}",
 			PreviewModelPath = null,
 			PreviewPositionScale = RetargetTargetSpec.SboxSourceScale,
-			FbxAbsolutePath = filePath,
-			FbxUnitScaleCm = unitScaleCm,
+			ModelFilePath = filePath,
+			ModelUnitScaleCm = unitScaleCm,
 		};
 	}
 

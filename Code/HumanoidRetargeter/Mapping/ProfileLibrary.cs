@@ -89,8 +89,9 @@ public static class ProfileLibrary
     /// 3ds Max Character Studio Biped rigs: every bone is "&lt;BipedName&gt; &lt;Part&gt;"
     /// where the biped name defaults to <c>Bip01</c> (3ds Max ≤2009) / <c>Bip001</c>
     /// (2010+) per the Autodesk "Naming the Biped" documentation; some exporters mangle
-    /// the spaces to underscores (<c>Bip01_L_Thigh</c>), hence the <c>^Bip\d+[ _]</c>
-    /// namespace pattern (alias comparison is separator-insensitive, so "L UpperArm" and
+    /// the spaces to underscores (<c>Bip01_L_Thigh</c>). Biped names are user-editable
+    /// (<c>BipTrump L Thigh</c> is valid), so the namespace accepts any alphanumeric name
+    /// (alias comparison is separator-insensitive, so "L UpperArm" and
     /// "L_UpperArm" normalize identically). Sided bones use a bare mid-name <c>L/R</c>:
     /// <c>L Clavicle→L UpperArm→L Forearm→L Hand</c> arms,
     /// <c>L Thigh→L Calf→L Foot→L Toe0</c> legs. Fingers are numbered chains
@@ -871,10 +872,9 @@ public static class ProfileLibrary
                 aliases[Role($"{finger}Dist", s)] = new[] { $"{s} Finger{n}2" };
             }
         }
-        // "Bip01 "/"Bip001 " biped-name prefix; underscore form covers exporters that
-        // mangle the spaces ("Bip01_L_Thigh"). The bare COM root "Bip01" is untouched by
-        // the pattern (no trailing separator) and has no alias.
-        return new Profile("biped", new[] { @"^Bip\d+[ _]" }, aliases);
+        // Biped's leading name is user-editable (Bip01, Bip001, BipTrump, ...).
+        // Requiring a trailing separator keeps the bare COM root untouched.
+        return new Profile("biped", new[] { @"^Bip[A-Za-z0-9]+[ _]" }, aliases);
     }
 
     // ---------------------------------------------------------------- daz / poser

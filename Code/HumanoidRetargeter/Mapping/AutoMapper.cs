@@ -137,6 +137,11 @@ public static class AutoMapper
                     AddSided(sided["UpperLeg"], info, result);
                     continue;
                 }
+                // Some production rigs insert pelvis_L/pelvis_R helpers above the actual
+                // upper-leg joints. They are neither the centered hips nor thighs; letting
+                // either one win Hips invalidates every opposite-side chain.
+                if (core == "pelvis" && side != SideTag.None)
+                    continue;
                 hips.Add(info);
                 continue;
             }

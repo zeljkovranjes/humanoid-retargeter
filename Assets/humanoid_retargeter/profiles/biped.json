@@ -2,7 +2,7 @@
   "v": 1,
   "name": "biped",
   "namespace_patterns": [
-    "^Bip\\d\u002B[ _]"
+    "^Bip[A-Za-z0-9]\u002B[ _]"
   ],
   "aliases": {
     "Hips": [

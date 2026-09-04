@@ -156,7 +156,17 @@ public static class VmdlWriter
         var children = new KvArray();
 
         if (!string.IsNullOrEmpty(meshFilePath))
+        {
             children.Items.Add(BuildRenderMeshListNode(meshFilePath, meshImportScale));
+            // Retarget channels may drive unweighted root/helper joints. ModelDoc otherwise
+            // culls them from imported meshes, breaking the hierarchy the animation targets.
+            children.Items.Add(new KvObject
+            {
+                ["_class"] = new KvString("BoneMarkupList"),
+                ["children"] = new KvArray(),
+                ["bone_cull_type"] = new KvString("None"),
+            });
+        }
         if (materialRemaps is { Count: > 0 })
             children.Items.Add(BuildMaterialGroupListNode(materialRemaps));
 

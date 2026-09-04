@@ -67,6 +67,11 @@ internal sealed class GltfDocument
     /// <summary>All nodes, indexed as in the file, with parents resolved from children lists.</summary>
     public List<GltfNode> Nodes { get; } = new();
 
+    /// <summary>The detached JSON root and resolved binary buffers. Kept so the model-DMX
+    /// bridge can reuse the same validated container/buffer handling as animation import.</summary>
+    public JsonElement Root { get; private set; }
+    public List<byte[]> Buffers { get; } = new();
+
     /// <summary>Union of all skins' joint node indices.</summary>
     public HashSet<int> SkinJoints { get; } = new();
 
@@ -95,7 +100,7 @@ internal sealed class GltfDocument
     /// <summary>Parses GLB or plain-JSON glTF bytes.</summary>
     /// <exception cref="FormatException">Truncated/malformed container, invalid JSON,
     /// unresolvable buffers, or unsupported accessor layouts.</exception>
-    public static GltfDocument Parse(byte[] data)
+    public static GltfDocument Parse(byte[] data, Func<string, byte[]>? externalBufferResolver = null)
     {
         ArgumentNullException.ThrowIfNull(data);
 
@@ -126,7 +131,9 @@ internal sealed class GltfDocument
             throw new FormatException("glTF: missing required 'asset' object (not a glTF file?).");
 
         var document = new GltfDocument();
-        var buffers = ResolveBuffers(root, bin);
+        var buffers = ResolveBuffers(root, bin, externalBufferResolver);
+        document.Root = root;
+        document.Buffers.AddRange(buffers);
         document.ReadNodes(root);
         document.ReadSkins(root);
         document.ReadAnimations(root, buffers);
@@ -259,9 +266,11 @@ internal sealed class GltfDocument
     /// <summary>
     /// Resolves every entry of <c>buffers</c>: no <c>uri</c> = the GLB BIN chunk (spec: only
     /// buffer 0 may do this), <c>data:</c> URIs are base64-decoded inline. External file
-    /// URIs are NOT supported — this library does no file IO; users should export .glb.
+    /// URIs are delegated to the optional caller-supplied resolver so this core remains
+    /// independent of the file system.
     /// </summary>
-    private static List<byte[]> ResolveBuffers(JsonElement root, byte[]? bin)
+    private static List<byte[]> ResolveBuffers(
+        JsonElement root, byte[]? bin, Func<string, byte[]>? externalBufferResolver)
     {
         var buffers = new List<byte[]>();
         if (!root.TryGetProperty("buffers", out var array) || array.ValueKind != JsonValueKind.Array)
@@ -293,9 +302,26 @@ internal sealed class GltfDocument
             }
             else
             {
-                throw new FormatException(
-                    $"glTF: buffer references an external file ('{uri}') which this importer cannot "
-                    + "read (no file IO). Export as .glb (binary, self-contained) instead.");
+                if (externalBufferResolver is null)
+                {
+                    throw new FormatException(
+                        $"glTF: buffer references an external file ('{uri}') which this importer cannot "
+                        + "read (no file IO). Export as .glb (binary, self-contained) instead.");
+                }
+                try
+                {
+                    buffers.Add(externalBufferResolver(uri) ?? throw new FormatException(
+                        $"glTF: external buffer resolver returned no data for '{uri}'."));
+                }
+                catch (FormatException)
+                {
+                    throw;
+                }
+                catch (Exception e)
+                {
+                    throw new FormatException(
+                        $"glTF: could not read external buffer '{uri}' ({e.Message}).");
+                }
             }
         }
         return buffers;

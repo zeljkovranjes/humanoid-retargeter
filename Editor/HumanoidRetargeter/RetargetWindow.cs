@@ -130,7 +130,7 @@ public sealed class RetargetWindow : Widget
 		targetCombo.AddItem( "s&box Human (default)", "person", TrySelectSboxTarget, selected: true );
 		targetCombo.AddItem( "s&box Citizen (classic)", "person_outline", TrySelectSboxCitizenTarget );
 		targetCombo.AddItem( "Custom model (.vmdl)…", "view_in_ar", PickCustomModelTarget );
-		targetCombo.AddItem( "Custom FBX…", "category", PickCustomFbxTarget );
+		targetCombo.AddItem( "Custom model file (.fbx/.glb/.gltf)…", "category", PickCustomFbxTarget );
 
 		top.AddSpacingCell( 8 );
 		top.Add( new Label( this ) { Text = "Output:" } );
@@ -357,10 +357,11 @@ public sealed class RetargetWindow : Widget
 
 	void PickCustomFbxTarget()
 	{
-		var path = EditorUtility.OpenFileDialog( "Select target FBX", "FBX Files (*.fbx)", null );
+		var path = EditorUtility.OpenFileDialog( "Select target model",
+			"3D Model Files (*.fbx *.glb *.gltf)", null );
 		if ( string.IsNullOrEmpty( path ) )
 			return;
-		var resolved = TargetPickers.FromFbxFile( path, out var error, out var rejected );
+		var resolved = TargetPickers.FromModelFile( path, out var error, out var rejected );
 		ApplyPickedTarget( resolved, error, rejected );
 	}
 
@@ -402,7 +403,7 @@ public sealed class RetargetWindow : Widget
 	/// placeholder materials in the preview while ModelDoc showed the fixed output.</summary>
 	void RefreshFbxTargetPreview( TargetPickers.ResolvedTarget resolved )
 	{
-		if ( resolved?.FbxAbsolutePath is not null && resolved.Warning is null )
+		if ( resolved?.ModelFilePath is not null && resolved.Warning is null )
 			_fbxPreviewTask = CompileFbxTargetPreviewAsync( resolved );
 	}
 
@@ -413,7 +414,7 @@ public sealed class RetargetWindow : Widget
 	async Task CompileFbxTargetPreviewAsync( TargetPickers.ResolvedTarget resolved )
 	{
 		SetStatus( $"Target: {resolved.Description}   ·   compiling its preview model…", Theme.Blue );
-		var ok = await EditorPipeline.CompileFbxTargetPreviewAsync( resolved, NormalizedOutputFolder() );
+		var ok = await EditorPipeline.CompileModelTargetPreviewAsync( resolved, NormalizedOutputFolder() );
 		await EditorPipeline.SwitchToMainThread();
 		if ( !ReferenceEquals( _target, resolved ) )
 			return; // user picked something else meanwhile
@@ -1036,7 +1037,7 @@ public sealed class RetargetWindow : Widget
 		// output vmdl can be healed with the mesh node too.
 		var prepNotes = new List<string>();
 		if ( !_augmentMode
-			&& !EditorPipeline.PrepareFbxTargetMesh( _target, NormalizedOutputFolder(), out var meshError, prepNotes ) )
+			&& !EditorPipeline.PrepareModelTargetMesh( _target, NormalizedOutputFolder(), out var meshError, prepNotes ) )
 		{
 			SetStatus( meshError, Theme.Red );
 			return;
