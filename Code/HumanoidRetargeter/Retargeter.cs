@@ -840,8 +840,8 @@ public static class Retargeter
         var twistCount = TwistBoneFollow.Apply(frames, target.Rig,
             target.Rig.HelpersAreConstraintDriven ? context.ConstraintDrivenBones : null);
         if (twistCount > 0)
-            AddNote(report, $"{twistCount} limb twist bone(s) follow their joint's roll "
-                + "(left at rest they candy-wrap the skin at wrists/knees).");
+            AddNote(report, $"{twistCount} limb deform helper bone(s) follow their "
+                + "neighboring joints (left at rest they pinch or candy-wrap the skin).");
 
         // ---- orphan helper bones ride the hips (LAST: anchored to the FINAL hips, after
         // foot-plant pinning / root motion have settled the trajectory) -------------------
@@ -1617,6 +1617,7 @@ public static class Retargeter
 
         if (ProfileDetector.Detect(skeleton) is { } detected)
         {
+            AutoMapper.PruneNonArticulatedFingerStubs(skeleton, detected.Result);
             VetoImpossibleHead(skeleton, detected.Result);
             return (detected.Result, BuildReport(detected.Result, needsUserDecision: false, skeleton));
         }

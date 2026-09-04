@@ -302,10 +302,62 @@ public static class AutoMapper
             }
         }
 
+        CompleteFingersByTopology(skeleton, result);
         ValidateChains(skeleton, result);
 
         result.Confidence = MappingConfidence.Compute(map.Keys, Enum.GetValues<BoneRole>());
         return result;
+    }
+
+    /// <summary>Completes an otherwise reliable name map when the hand has clearly
+    /// articulated child chains but their exporter-specific names carry no finger words.</summary>
+    private static void CompleteFingersByTopology(SkeletonModel skeleton, MappingResult result)
+    {
+        var children = BuildChildren(skeleton);
+        var subtreeDepth = BuildSubtreeDepth(skeleton, children);
+        var positions = skeleton.RestWorld.Select(x => x.Pos).ToArray();
+        foreach (var side in new[] { "L", "R" })
+        {
+            var hasFinger = result.RoleToBone.Keys.Any(role =>
+                IsFingerRole(role, side));
+            if (!hasFinger
+                && result.RoleToBone.TryGetValue(
+                    Enum.Parse<BoneRole>("Hand" + side), out var hand))
+                MapFingersByTopology(
+                    result, skeleton, children, subtreeDepth, positions, hand, side);
+        }
+    }
+
+    /// <summary>Removes the common two-leaf hand placeholders that Biped-style naming can
+    /// otherwise mistake for articulated fingers. Explicit/user mappings remain authoritative;
+    /// this is used only on automatically detected profiles.</summary>
+    internal static void PruneNonArticulatedFingerStubs(
+        SkeletonModel skeleton, MappingResult result)
+    {
+        var children = BuildChildren(skeleton);
+        foreach (var side in new[] { "L", "R" })
+        {
+            var roles = result.RoleToBone.Keys.Where(role => IsFingerRole(role, side)).ToArray();
+            if (roles.Length == 0 || roles.Length > 2
+                || roles.Any(role => children[result.RoleToBone[role]].Count > 0))
+                continue;
+            foreach (var role in roles)
+                result.RoleToBone.Remove(role);
+            result.Notes.Add(
+                $"Hand {side}: {roles.Length} leaf placeholder bone(s) left unmapped; "
+                + "no articulated finger chain was present.");
+        }
+    }
+
+    private static bool IsFingerRole(BoneRole role, string side)
+    {
+        var name = role.ToString();
+        return name.EndsWith(side, StringComparison.Ordinal)
+            && (name.StartsWith("Thumb", StringComparison.Ordinal)
+                || name.StartsWith("Index", StringComparison.Ordinal)
+                || name.StartsWith("Middle", StringComparison.Ordinal)
+                || name.StartsWith("Ring", StringComparison.Ordinal)
+                || name.StartsWith("Pinky", StringComparison.Ordinal));
     }
 
     private static List<NameInfo>[] NewSided() => new[] { new List<NameInfo>(), new List<NameInfo>() };
@@ -658,7 +710,8 @@ public static class AutoMapper
             if (handIndex >= 3)
                 map[Enum.Parse<BoneRole>("Clavicle" + side)] = chain[handIndex - 3];
 
-            MapFingersByTopology(result, children, subtreeDepth, positions, chain[handIndex], side);
+            MapFingersByTopology(
+                result, skeleton, children, subtreeDepth, positions, chain[handIndex], side);
         }
 
         result.Confidence =
@@ -845,7 +898,7 @@ public static class AutoMapper
     /// pinky.
     /// </summary>
     private static void MapFingersByTopology(
-        MappingResult result, List<int>[] children, int[] subtreeDepth,
+        MappingResult result, SkeletonModel skeleton, List<int>[] children, int[] subtreeDepth,
         Vector3[] positions, int hand, string side)
     {
         var chains = children[hand]
@@ -858,37 +911,86 @@ public static class AutoMapper
             return;
         }
 
-        var thumbChain = chains.OrderBy(c => (positions[c[0]] - positions[hand]).Length()).First();
+        // Prefer explicit thumb evidence. Some DCC rigs call the digits finger1..5 but
+        // uniquely omit a metacarpal for finger1 (the thumb); that hierarchy is stronger
+        // evidence than root distance, which can put a middle metacarpal closest to wrist.
+        var namedThumbs = chains.Where(chain => chain.Any(bone =>
+            skeleton[bone].Name.Contains("thumb", StringComparison.OrdinalIgnoreCase))).ToList();
+        var withoutMetacarpal = chains.Where(chain => !IsMetacarpal(skeleton[chain[0]].Name)).ToList();
+        var thumbChain = namedThumbs.Count == 1
+            ? namedThumbs[0]
+            : withoutMetacarpal.Count == 1 && chains.Count(chain =>
+                IsMetacarpal(skeleton[chain[0]].Name)) == chains.Count - 1
+                ? withoutMetacarpal[0]
+                : chains.OrderBy(c => (positions[c[0]] - positions[hand]).Length()).First();
         var others = chains.Where(c => c != thumbChain).ToList();
 
         if (others.Count > 1)
         {
-            // Splay line through the two farthest finger roots, oriented thumb-first.
-            var (u, v) = others
-                .SelectMany(x => others.Select(y => (x, y)))
-                .OrderByDescending(p => (positions[p.x[0]] - positions[p.y[0]]).Length())
-                .First();
-            var start = (positions[u[0]] - positions[thumbChain[0]]).Length()
-                <= (positions[v[0]] - positions[thumbChain[0]]).Length() ? u : v;
-            var direction = positions[(start == u ? v : u)[0]] - positions[start[0]];
-            others = others
-                .OrderBy(c => Vector3.Dot(positions[c[0]] - positions[start[0]], direction))
-                .ToList();
+            var numbered = others.Select(chain => (Chain: chain,
+                Number: FingerNumber(skeleton, chain))).ToList();
+            if (numbered.All(entry => entry.Number >= 0)
+                && numbered.Select(entry => entry.Number).Distinct().Count() == numbered.Count)
+            {
+                others = numbered.OrderBy(entry => entry.Number)
+                    .Select(entry => entry.Chain).ToList();
+            }
+            else
+            {
+                // Splay line through the two farthest finger roots, oriented thumb-first.
+                var (u, v) = others
+                    .SelectMany(x => others.Select(y => (x, y)))
+                    .OrderByDescending(p => (positions[p.x[0]] - positions[p.y[0]]).Length())
+                    .First();
+                var start = (positions[u[0]] - positions[thumbChain[0]]).Length()
+                    <= (positions[v[0]] - positions[thumbChain[0]]).Length() ? u : v;
+                var direction = positions[(start == u ? v : u)[0]] - positions[start[0]];
+                others = others
+                    .OrderBy(c => Vector3.Dot(positions[c[0]] - positions[start[0]], direction))
+                    .ToList();
+            }
         }
 
-        AssignFingerChain(result, thumbChain, "Thumb", side);
+        AssignFingerChain(result, skeleton, thumbChain, "Thumb", side);
         var fingerNames = new[] { "Index", "Middle", "Ring", "Pinky" };
         for (var i = 0; i < others.Count && i < fingerNames.Length; i++)
-            AssignFingerChain(result, others[i], fingerNames[i], side);
+            AssignFingerChain(result, skeleton, others[i], fingerNames[i], side);
     }
 
-    private static void AssignFingerChain(MappingResult result, List<int> chain, string finger, string side)
+    private static void AssignFingerChain(
+        MappingResult result, SkeletonModel skeleton, List<int> chain, string finger, string side)
     {
-        // 4+ joints include an exported fingertip end marker — use the first three.
-        var segments = new[] { "Prox", "Mid", "Dist" };
+        // A named metacarpal is a real palm segment; otherwise 4+ joints commonly end in
+        // an exported tip marker and the first three are the phalanges.
+        var segments = IsMetacarpal(skeleton[chain[0]].Name)
+            ? new[] { "Meta", "Prox", "Mid", "Dist" }
+            : new[] { "Prox", "Mid", "Dist" };
         var count = Math.Min(segments.Length, chain.Count);
         for (var i = 0; i < count; i++)
             result.RoleToBone[Enum.Parse<BoneRole>(finger + segments[i] + side)] = chain[i];
+    }
+
+    private static bool IsMetacarpal(string name)
+        => name.Contains("metacarp", StringComparison.OrdinalIgnoreCase);
+
+    private static int FingerNumber(SkeletonModel skeleton, IEnumerable<int> chain)
+    {
+        foreach (var bone in chain)
+        {
+            var name = skeleton[bone].Name;
+            var start = name.IndexOf("finger", StringComparison.OrdinalIgnoreCase);
+            if (start < 0)
+                continue;
+            start += "finger".Length;
+            while (start < name.Length && !char.IsDigit(name[start]))
+                start++;
+            var end = start;
+            while (end < name.Length && char.IsDigit(name[end]))
+                end++;
+            if (end > start && int.TryParse(name[start..end], out var number))
+                return number;
+        }
+        return -1;
     }
 
     // ================================================================ topology helpers
