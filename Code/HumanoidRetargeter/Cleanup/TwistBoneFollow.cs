@@ -30,7 +30,10 @@ using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global
 /// Serial deform bones between two mapped limb joints are handled separately: their
 /// world-space motion delta is interpolated between the endpoints while both mapped
 /// endpoint transforms remain unchanged. This covers rigs that split each bend/twist
-/// section into two weighted bones without relying on exporter-specific names.
+/// section into two weighted bones without relying on exporter-specific names. An
+/// unmapped sibling at the mapped joint's same pivot follows its complete rotation;
+/// this covers dual control/deform rigs where a mechanism forearm/femur drives the next
+/// joint while coincident anatomical bones carry the skin.
 /// </remarks>
 public static class TwistBoneFollow
 {
@@ -48,6 +51,8 @@ public static class TwistBoneFollow
 
     private readonly record struct InlineBone(int Bone, int Parent, int Child, float Fraction);
 
+    private readonly record struct FullFollower(int Bone, int Driver);
+
     /// <summary>Applies the pass in place; returns how many limb helpers were driven.</summary>
     public static int Apply(
         IReadOnlyList<XForm[]> frames, TargetRig rig, IReadOnlySet<int>? excluded)
@@ -57,6 +62,8 @@ public static class TwistBoneFollow
         var skeleton = rig.Skeleton;
 
         var twists = new List<(int Bone, int Driver, Vector3 Axis, float Fraction)>();
+        var fullFollowers = new List<FullFollower>();
+        var fullFollowerBones = new HashSet<int>();
         foreach (var (parentRole, childRole) in Segments)
         {
             if (rig.BoneForRole(parentRole) is not { } parent
@@ -78,6 +85,19 @@ public static class TwistBoneFollow
                     || rig.RoleOf(i) is not null || excluded?.Contains(i) == true)
                     continue;
                 var pos = skeleton[i].RestLocal.Pos;
+                // Blender control/deform exports commonly put a mechanism joint and one
+                // or more skinned anatomical joints at the same pivot (MCH_forearm beside
+                // radius/ulna, MCH_femur beside femur). The mapped mechanism drives the
+                // next joint, but its deform siblings need the complete bend and roll;
+                // treating them as ordinary twist bones copies roll only and leaves the
+                // mesh behind while the hand/leg moves away.
+                if ((pos - skeleton[child].RestLocal.Pos).Length()
+                    <= MathF.Max(0.01f, length * 0.01f))
+                {
+                    if (fullFollowerBones.Add(i))
+                        fullFollowers.Add(new FullFollower(i, child));
+                    continue;
+                }
                 var along = Vector3.Dot(pos, axis);
                 var fraction = along / length;
                 if (fraction is < 0.05f or > 1.1f)
@@ -89,11 +109,21 @@ public static class TwistBoneFollow
             }
         }
         var inline = FindInlineBones(rig, excluded);
-        if (twists.Count == 0 && inline.Count == 0)
+        if (twists.Count == 0 && inline.Count == 0 && fullFollowers.Count == 0)
             return 0;
 
         foreach (var frame in frames)
         {
+            foreach (var follower in fullFollowers)
+            {
+                // Both bones share a parent, so the driver's local-space rotation delta
+                // can be applied directly while retaining the deform bone's bind offset.
+                var delta = MathQ.Normalize(frame[follower.Driver].Rot
+                    * Quaternion.Conjugate(skeleton[follower.Driver].RestLocal.Rot));
+                frame[follower.Bone] = new XForm(
+                    frame[follower.Bone].Pos,
+                    MathQ.Normalize(delta * skeleton[follower.Bone].RestLocal.Rot));
+            }
             foreach (var (bone, driver, axis, fraction) in twists)
             {
                 // The driver's rotation delta from rest, in the shared parent's space,
@@ -122,7 +152,7 @@ public static class TwistBoneFollow
             if (inline.Count > 0)
                 FollowInlineBones(frame, skeleton, inline);
         }
-        return twists.Count + inline.Count;
+        return twists.Count + inline.Count + fullFollowers.Count;
     }
 
     private static List<InlineBone> FindInlineBones(

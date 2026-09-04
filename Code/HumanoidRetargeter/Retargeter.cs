@@ -861,7 +861,9 @@ public static class Retargeter
     /// the HIPS — or to an extremity (hand/foot/head) when its rest sits clearly closer
     /// to it (a sword resting in the hand follows the hand, not the pelvis). Descendants
     /// ride along on their rest locals; bones on the hips' own ancestor path stay
-    /// solver-owned (trajectory).
+    /// solver-owned (trajectory). A mapped body branch on a separate control tree is
+    /// similarly anchored to the nearest hips-connected mapped joint; its solved rotation
+    /// remains unchanged.
     /// </summary>
     private static void FollowHipsWithOrphanBones(
         TargetRig rig, List<XForm[]> frames, MappingReportInfo report)
@@ -885,6 +887,14 @@ public static class Retargeter
         }
 
         var rest = skeleton.RestWorld;
+
+        bool DescendsFrom(int bone, int ancestor)
+        {
+            for (var b = bone; b >= 0; b = skeleton[b].ParentIndex)
+                if (b == ancestor)
+                    return true;
+            return false;
+        }
 
         // Extremity anchors: adopted only when the orphan rests at less than half its
         // hips distance — near-torso helpers (skirts, tails, capes) stay on the hips,
@@ -925,11 +935,35 @@ public static class Retargeter
             }
             tops.Add((i, anchor));
         }
-        if (tops.Count == 0)
+
+        // A few constraint-oriented exports place a real mapped body branch on a parallel
+        // control hierarchy. The common case is a skinned head under CONTROL_NECK while
+        // the deform cervical chain is under the hips. glTF/FBX does not preserve the DCC
+        // constraint that joined those trees, so rotations solve but the branch stays at
+        // its bind position. Anchor each topmost detached mapped branch to the nearest
+        // mapped joint that really descends from the hips, preserving its solved rotation.
+        var connectedMapped = Enumerable.Range(0, skeleton.Count)
+            .Where(i => rig.RoleOf(i) is not null && DescendsFrom(i, hips))
+            .ToList();
+        var detachedMapped = new List<(int Bone, int Anchor)>();
+        for (var i = 0; i < skeleton.Count; i++)
+        {
+            if (rig.RoleOf(i) is null || hipsPath.Contains(i) || DescendsFrom(i, hips)
+                || HasMappedAncestor(i) || connectedMapped.Count == 0)
+                continue;
+            var anchor = connectedMapped
+                .OrderBy(candidate => (rest[i].Pos - rest[candidate].Pos).LengthSquared())
+                .First();
+            detachedMapped.Add((i, anchor));
+        }
+
+        if (tops.Count == 0 && detachedMapped.Count == 0)
             return;
 
         var anchorRestInverse = new Dictionary<int, XForm>();
         foreach (var (_, anchor) in tops)
+            anchorRestInverse[anchor] = rest[anchor].Inverse();
+        foreach (var (_, anchor) in detachedMapped)
             anchorRestInverse[anchor] = rest[anchor].Inverse();
 
         foreach (var frame in frames)
@@ -943,10 +977,34 @@ public static class Retargeter
                 frame[top] = XForm.ToLocal(
                     parentWorld, XForm.Compose(delta, rest[top]));
             }
+
+            if (detachedMapped.Count == 0)
+                continue;
+
+            // Re-evaluate after moving orphan control roots (the detached branch's actual
+            // parent may be inside one). Only position is anchored: its mapped rotation is
+            // the solver's result and must remain authoritative.
+            world = new Skeleton.Pose(frame).ToWorld(skeleton);
+            foreach (var (bone, anchor) in detachedMapped)
+            {
+                var delta = XForm.Compose(world[anchor], anchorRestInverse[anchor]);
+                var desired = new XForm(
+                    XForm.Compose(delta, rest[bone]).Pos,
+                    world[bone].Rot);
+                var parent = skeleton[bone].ParentIndex;
+                frame[bone] = parent < 0
+                    ? desired
+                    : XForm.ToLocal(world[parent], desired);
+            }
         }
-        AddNote(report,
-            $"{tops.Count} helper bone subtree(s) outside the mapped skeleton ride the "
-            + "character (cloth/physics/prop bones would otherwise freeze at their bind position).");
+        if (tops.Count > 0)
+            AddNote(report,
+                $"{tops.Count} helper bone subtree(s) outside the mapped skeleton ride the "
+                + "character (cloth/physics/prop bones would otherwise freeze at their bind position).");
+        if (detachedMapped.Count > 0)
+            AddNote(report,
+                $"{detachedMapped.Count} mapped body branch(es) on separate control hierarchies "
+                + "follow the connected skeleton (exported DCC constraints are not available at runtime).");
     }
 
     /// <summary>

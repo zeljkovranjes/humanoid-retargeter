@@ -54,7 +54,7 @@ public static class AutoMapper
 
     /// <summary>Tokens marking helper bones that must never receive a role.</summary>
     private static readonly string[] ExcludedTokens =
-        { "twist", "roll", "share", "helper", "ik", "end", "nub", "tip", "dummy", "null" };
+        { "twist", "roll", "share", "helper", "ik", "end", "nub", "tip", "dummy", "null", "control" };
 
     /// <summary>
     /// Tokens dropped while building the core (the bone is still considered): Auto-Rig Pro
@@ -62,18 +62,26 @@ public static class AutoMapper
     /// names the deform limb bones <c>*_stretch</c> (<c>thigh_stretch.l</c>,
     /// <c>arm_stretch.l</c>) — both are naming decoration, not identity.
     /// </summary>
-    private static readonly string[] IgnoredCoreTokens = { "x", "stretch" };
+    private static readonly string[] IgnoredCoreTokens = { "x", "stretch", "mch" };
 
     private static readonly string[] HipsCores = { "hips", "hip", "pelvis" };
-    private static readonly string[] SpineCores = { "spine", "chest", "torso", "waist", "lowerback", "abdomen" };
-    private static readonly string[] ClavicleCores = { "shoulder", "clavicle", "collar", "collarbone" };
+    private static readonly string[] SpineCores =
+        { "spine", "chest", "torso", "waist", "lowerback", "abdomen", "vertebrae", "vertebraet", "lumbar", "thoracic" };
+    private static readonly string[] NeckCores = { "neck", "vertebraec", "cervical" };
+    private static readonly string[] HeadCores = { "head", "skull", "cranium" };
+    private static readonly string[] ClavicleCores =
+        { "shoulder", "pivshoulder", "clavicle", "collar", "collarbone", "scapula" };
     // "armupper"/"legupper" etc. are the s&box-style reversed word order (arm_upper_L) -
     // custom rigs built for s&box reuse that convention with their own skeletons.
-    private static readonly string[] UpperArmCores = { "upperarm", "uparm", "armupper", "arm", "bicep" };
-    private static readonly string[] LowerArmCores = { "forearm", "lowerarm", "lowarm", "armlower", "elbow" };
+    private static readonly string[] UpperArmCores =
+        { "upperarm", "uparm", "armupper", "arm", "bicep", "humerus" };
+    private static readonly string[] LowerArmCores =
+        { "forearm", "lowerarm", "lowarm", "armlower", "elbow", "radius", "ulna" };
     private static readonly string[] HandCores = { "hand", "wrist" };
-    private static readonly string[] UpperLegCores = { "upleg", "upperleg", "legupper", "thigh" };
-    private static readonly string[] LowerLegCores = { "lowerleg", "lowleg", "leglower", "calf", "shin", "knee" };
+    private static readonly string[] UpperLegCores =
+        { "upleg", "upperleg", "legupper", "thigh", "femur" };
+    private static readonly string[] LowerLegCores =
+        { "lowerleg", "lowleg", "leglower", "calf", "shin", "knee", "tibia" };
     private static readonly string[] FootCores = { "foot", "ankle" };
     private static readonly string[] ToeCores = { "toe", "toebase", "toes", "ball" };
 
@@ -147,8 +155,8 @@ public static class AutoMapper
             }
             if (core == "root") { rootCandidates.Add(info); continue; }
             if (SpineCores.Contains(core)) { spine.Add(info); continue; }
-            if (core == "neck") { neck.Add(info); continue; }
-            if (core == "head") { head.Add(info); continue; }
+            if (NeckCores.Contains(core)) { neck.Add(info); continue; }
+            if (HeadCores.Contains(core)) { head.Add(info); continue; }
             if (ClavicleCores.Contains(core)) { AddSided(sided["Clavicle"], info, result); continue; }
             if (UpperArmCores.Contains(core)) { AddSided(sided["UpperArm"], info, result); continue; }
             if (LowerArmCores.Contains(core)) { AddSided(sided["LowerArm"], info, result); continue; }
@@ -228,7 +236,7 @@ public static class AutoMapper
         if (hips.Count > 0)
             map[BoneRole.Hips] = ResolvePreferAncestor(skeleton, hips, result, "Hips");
 
-        var orderedSpine = spine.OrderBy(s => Depth(skeleton, s.Index)).ToList();
+        var orderedSpine = PrimaryNamedChain(skeleton, spine);
         for (var i = 0; i < orderedSpine.Count && i < 5; i++)
             map[BoneRole.Spine0 + i] = orderedSpine[i].Index;
         if (orderedSpine.Count > 5)
@@ -252,7 +260,21 @@ public static class AutoMapper
                 if (bucket.Count == 0)
                     continue;
                 var role = Enum.Parse<BoneRole>(family + side);
-                map[role] = ResolvePreferAncestor(skeleton, bucket, result, role.ToString());
+                var parentRole = ParentRoleFor(role);
+                var coherent = parentRole is { } parent && map.TryGetValue(parent, out var parentBone)
+                    ? bucket.Where(c => IsAncestor(skeleton, parentBone, c.Index)).ToList()
+                    : bucket;
+                if (ChildFamilyFor(family) is { } childFamily)
+                {
+                    var childCandidates = sided[childFamily][(int)side - 1];
+                    var reachesChild = coherent
+                        .Where(c => childCandidates.Any(child => IsAncestor(skeleton, c.Index, child.Index)))
+                        .ToList();
+                    if (reachesChild.Count > 0)
+                        coherent = reachesChild;
+                }
+                map[role] = ResolvePreferAncestor(
+                    skeleton, coherent.Count > 0 ? coherent : bucket, result, role.ToString());
             }
         }
 
@@ -400,14 +422,21 @@ public static class AutoMapper
         else if (core.Contains("middle")) finger = "Middle";
         else if (core.Contains("pinky") || core.Contains("little")) finger = "Pinky";
         else if (core.Contains("ring")) finger = "Ring";
-        else if (core == "mid" || core == "handmid") finger = "Middle";
+        else if (core == "mid" || core == "handmid" || core.Contains("fingmid")) finger = "Middle";
         else return false;
-        return info.Digit >= 0 || core.Contains("meta");
+        return info.Digit >= 0 || core.Contains("meta") || core.Contains("palm")
+            || HasAlphabeticFingerSegment(core, 'a')
+            || HasAlphabeticFingerSegment(core, 'b')
+            || HasAlphabeticFingerSegment(core, 'c');
     }
 
     private static string? SegmentOf(NameInfo info) => info switch
     {
         _ when info.Core.Contains("meta") => "Meta",
+        _ when info.Core.Contains("palm") => "Meta",
+        _ when HasAlphabeticFingerSegment(info.Core, 'a') => "Prox",
+        _ when HasAlphabeticFingerSegment(info.Core, 'b') => "Mid",
+        _ when HasAlphabeticFingerSegment(info.Core, 'c') => "Dist",
         // Auto-Rig Pro chains: index1_base → index1 → index2 → index3. The '_base' bone
         // is the metacarpal inside the palm; its digit belongs to the FINGER, not the
         // phalanx (digit-only reading collided it with the true first knuckle, whose
@@ -419,6 +448,64 @@ public static class AutoMapper
         { Digit: 3 } => "Dist",
         _ => null, // 4+ are fingertip end markers
     };
+
+    private static bool HasAlphabeticFingerSegment(string core, char segment)
+    {
+        foreach (var finger in new[] { "thumb", "index", "middle", "mid", "ring", "pinky", "little" })
+        {
+            if (core.EndsWith(finger + segment, StringComparison.Ordinal))
+                return true;
+        }
+        return false;
+    }
+
+    private static BoneRole? ParentRoleFor(BoneRole role) => role switch
+    {
+        BoneRole.ClavicleL or BoneRole.UpperLegL => BoneRole.Hips,
+        BoneRole.ClavicleR or BoneRole.UpperLegR => BoneRole.Hips,
+        BoneRole.UpperArmL => BoneRole.ClavicleL,
+        BoneRole.UpperArmR => BoneRole.ClavicleR,
+        BoneRole.LowerArmL => BoneRole.UpperArmL,
+        BoneRole.LowerArmR => BoneRole.UpperArmR,
+        BoneRole.HandL => BoneRole.LowerArmL,
+        BoneRole.HandR => BoneRole.LowerArmR,
+        BoneRole.LowerLegL => BoneRole.UpperLegL,
+        BoneRole.LowerLegR => BoneRole.UpperLegR,
+        BoneRole.FootL => BoneRole.LowerLegL,
+        BoneRole.FootR => BoneRole.LowerLegR,
+        BoneRole.ToeL => BoneRole.FootL,
+        BoneRole.ToeR => BoneRole.FootR,
+        _ => null,
+    };
+
+    private static string? ChildFamilyFor(string family) => family switch
+    {
+        "Clavicle" => "UpperArm",
+        "UpperArm" => "LowerArm",
+        "LowerArm" => "Hand",
+        "UpperLeg" => "LowerLeg",
+        "LowerLeg" => "Foot",
+        "Foot" => "Toe",
+        _ => null,
+    };
+
+    /// <summary>Chooses the longest connected chain among same-family axial candidates.
+    /// This rejects disconnected chest/control pivots without depending on exporter names.</summary>
+    private static List<NameInfo> PrimaryNamedChain(
+        SkeletonModel skeleton, List<NameInfo> candidates)
+    {
+        if (candidates.Count < 2)
+            return candidates.OrderBy(c => Depth(skeleton, c.Index)).ToList();
+        var root = candidates
+            .OrderByDescending(c => candidates.Count(other => other.Index == c.Index
+                || IsAncestor(skeleton, c.Index, other.Index)))
+            .ThenBy(c => Depth(skeleton, c.Index))
+            .First();
+        return candidates
+            .Where(c => c.Index == root.Index || IsAncestor(skeleton, root.Index, c.Index))
+            .OrderBy(c => Depth(skeleton, c.Index))
+            .ToList();
+    }
 
     /// <summary>Resolves multiple candidates for one role: prefer the candidate that is an
     /// ancestor of all others (e.g. CC_Base_Hip over CC_Base_Pelvis), else the first.</summary>
@@ -537,7 +624,7 @@ public static class AutoMapper
             new[]
             {
                 BoneRole.Hips, BoneRole.Spine0, BoneRole.Spine1, BoneRole.Spine2,
-                BoneRole.Spine3, BoneRole.Spine4, BoneRole.Neck, BoneRole.Head,
+                BoneRole.Spine3, BoneRole.Spine4, BoneRole.Neck,
             },
         };
         foreach (var side in new[] { "L", "R" })
