@@ -7,6 +7,9 @@ using System.Numerics;
 using System.Text;
 using System.Text.Json;
 using HumanoidRetargeter.Formats.Dmx;
+using HumanoidRetargeter.Formats.Fbx;
+using HumanoidRetargeter.Maths;
+using HumanoidRetargeter.Skeleton;
 using SkeletonModel = HumanoidRetargeter.Skeleton.Skeleton;
 
 namespace HumanoidRetargeter.Formats.Gltf;
@@ -85,7 +88,7 @@ public static class GltfModelDmxWriter
                 ? skinProperty.GetInt32() : -1;
             var skinJoints = MapSkinJoints(
                 document, skeleton, bonesByName, skinArray, skinIndex);
-            var skinTransforms = SkinTransforms(document, skinArray, skinIndex, worlds, skinJoints);
+            var skinTransforms = SkinTransforms(document, skinArray, skinIndex, worlds, skinJoints, skeleton);
             var normalMatrix = NormalMatrix(worlds[nodeIndex]);
             var primitiveIndex = 0;
             foreach (var primitive in primitives.EnumerateArray())
@@ -221,7 +224,7 @@ public static class GltfModelDmxWriter
     // Keeping the full matrices here also bakes inherited scale into the rigid DMX rig.
     private static Dictionary<int, Matrix4x4>? SkinTransforms(
         GltfDocument document, JsonElement skins, int skinIndex,
-        Matrix4x4[] worlds, int[] mappedJoints)
+        Matrix4x4[] worlds, int[] mappedJoints, SkeletonModel skeleton)
     {
         if (mappedJoints.Length == 0)
             return null;
@@ -236,15 +239,92 @@ public static class GltfModelDmxWriter
         {
             var inverse = Matrix4x4.Identity;
             if (inverseBinds is not null)
-                inverse = new Matrix4x4(
-                    inverseBinds.Float(i, 0), inverseBinds.Float(i, 1), inverseBinds.Float(i, 2), inverseBinds.Float(i, 3),
-                    inverseBinds.Float(i, 4), inverseBinds.Float(i, 5), inverseBinds.Float(i, 6), inverseBinds.Float(i, 7),
-                    inverseBinds.Float(i, 8), inverseBinds.Float(i, 9), inverseBinds.Float(i, 10), inverseBinds.Float(i, 11),
-                    inverseBinds.Float(i, 12), inverseBinds.Float(i, 13), inverseBinds.Float(i, 14), inverseBinds.Float(i, 15));
-            result[mappedJoints[i]] = inverse * worlds[nodes[i].GetInt32()];
+                inverse = ReadMatrix(inverseBinds, i);
+            // The target can use the authored skin bind instead of the posed scene TRS.
+            // Rebind the mesh to that exact skeleton; retain scale omitted by XForm.
+            Matrix4x4.Decompose(worlds[nodes[i].GetInt32()], out var scale, out _, out _);
+            var rest = skeleton.RestWorld[mappedJoints[i]];
+            var jointWorld = Matrix4x4.CreateScale(scale)
+                * Matrix4x4.CreateFromQuaternion(rest.Rot)
+                * Matrix4x4.CreateTranslation(rest.Pos / MetersToCentimeters);
+            result[mappedJoints[i]] = inverse * jointWorld;
         }
         return result;
     }
+
+    internal static SkeletonModel WithSkinBindPose(GltfDocument document, SkeletonModel skeleton)
+    {
+        if (!document.Root.TryGetProperty("skins", out var skins))
+            return skeleton;
+        var byName = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < skeleton.Count; i++)
+            byName[Sanitize(skeleton[i].Name)] = i;
+        var binds = new Dictionary<int, XForm>();
+        var nodeWorlds = NodeWorlds(document);
+        for (var s = 0; s < skins.GetArrayLength(); s++)
+        {
+            if (!skins[s].TryGetProperty("inverseBindMatrices", out var property))
+                continue;
+            var joints = MapSkinJoints(document, skeleton, byName, skins, s);
+            var accessor = new Accessor(document, property.GetInt32(), 16);
+            RequireCount(accessor, joints.Length, "inverseBindMatrices");
+            for (var j = 0; j < joints.Length; j++)
+            {
+                if (!Matrix4x4.Invert(ReadMatrix(accessor, j), out var matrix))
+                    throw new FormatException("glTF skin has a singular inverse bind matrix.");
+                // Some exporters fold a bind-shape scale into these matrices. Those
+                // are valid for skinning but cannot replace the scene's rigid rest.
+                // Zero-offset scaffold joints do not describe the character's scale.
+                if (skeleton[joints[j]].RestLocal.Pos.LengthSquared() > 1e-6f)
+                {
+                    Matrix4x4.Decompose(matrix, out var bindScale, out _, out _);
+                    var node = skins[s].GetProperty("joints")[j].GetInt32();
+                    Matrix4x4.Decompose(nodeWorlds[node], out var sceneScale, out _, out _);
+                    if (Vector3.Distance(bindScale, sceneScale) > .001f * sceneScale.Length())
+                        return skeleton;
+                }
+                var bind = FbxTransform.ToRigid(matrix);
+                bind.Pos *= MetersToCentimeters;
+                if (binds.TryGetValue(joints[j], out var previous)
+                    && (Vector3.Distance(previous.Pos, bind.Pos) > .01f
+                        || MathQ.AngleBetween(previous.Rot, bind.Rot) > .001f))
+                    return skeleton; // Different per-mesh bind spaces cannot define one rig rest.
+                binds[joints[j]] = bind;
+            }
+        }
+        if (binds.Count == 0)
+            return skeleton;
+        // Bind matrices may use an origin below the displayed scene. Preserve the
+        // scene's floor placement (glTF is Y-up), rather than burying the new rest.
+        var sceneFloor = float.PositiveInfinity;
+        var bindFloor = float.PositiveInfinity;
+        foreach (var pair in binds)
+        {
+            sceneFloor = MathF.Min(sceneFloor, skeleton.RestWorld[pair.Key].Pos.Y);
+            bindFloor = MathF.Min(bindFloor, pair.Value.Pos.Y);
+        }
+        var placement = new Vector3(0f, sceneFloor - bindFloor, 0f);
+        var world = new XForm[skeleton.Count];
+        var definitions = new List<BoneDefinition>();
+        for (var i = 0; i < skeleton.Count; i++)
+        {
+            var bone = skeleton[i];
+            var parent = bone.ParentIndex;
+            world[i] = binds.TryGetValue(i, out var bind) ? bind
+                : parent < 0 ? bone.RestLocal : XForm.Compose(world[parent], bone.RestLocal);
+            if (binds.ContainsKey(i))
+                world[i].Pos += placement;
+            var local = parent < 0 ? world[i] : XForm.ToLocal(world[parent], world[i]);
+            definitions.Add(new BoneDefinition(bone.Name, parent < 0 ? null : skeleton[parent].Name, local));
+        }
+        return SkeletonModel.Create(definitions);
+    }
+
+    private static Matrix4x4 ReadMatrix(Accessor source, int i) => new(
+        source.Float(i, 0), source.Float(i, 1), source.Float(i, 2), source.Float(i, 3),
+        source.Float(i, 4), source.Float(i, 5), source.Float(i, 6), source.Float(i, 7),
+        source.Float(i, 8), source.Float(i, 9), source.Float(i, 10), source.Float(i, 11),
+        source.Float(i, 12), source.Float(i, 13), source.Float(i, 14), source.Float(i, 15));
 
     private static int[] MapSkinJoints(
         GltfDocument document, SkeletonModel skeleton, Dictionary<string, int> bonesByName,

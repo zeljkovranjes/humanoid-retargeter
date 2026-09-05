@@ -14,6 +14,10 @@ using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global
 /// <summary>Options for <see cref="GltfImporter.Import"/>.</summary>
 public sealed class GltfImportOptions
 {
+    /// <summary>Use authored skin binds as the target rest instead of a potentially posed
+    /// scene state when the skins share a compatible bind space. Animation samples
+    /// remain in their original node hierarchy.</summary>
+    public bool UseSkinBindPose { get; init; }
     /// <summary>Fixed resampling rate for all clips, frames per second.</summary>
     public float SampleFps { get; init; } = 30f;
 
@@ -35,8 +39,8 @@ public sealed class GltfImportOptions
 /// all animation-channel targets (rotation/translation paths), plus every ancestor of those
 /// — multi-root is fine. Mesh-only leaves outside that closure are excluded. The REST pose
 /// is each node's own TRS (or decomposed <c>matrix</c>); skin <c>inverseBindMatrices</c> are
-/// deliberately ignored — node TRS is the rest pose of the node hierarchy the animations
-/// drive.</para>
+/// ignored by default — node TRS is the rest pose of the node hierarchy the animations
+/// drive. Custom targets may opt into <see cref="GltfImportOptions.UseSkinBindPose"/>.</para>
 /// <para><b>Units/axes</b>: glTF is meters, Y-up, right-handed (assets face +Z). All
 /// translations are converted to centimeters (×100, <see cref="SourceScene.UnitScaleCm"/> =
 /// 100); axes are preserved and recorded on the scene like the other importers (up = Y,
@@ -84,6 +88,8 @@ public static class GltfImporter
 
         // ---- rest pose: node TRS, worlds chained, rigid locals in cm ----------------
         var skeleton = BuildSkeleton(ctx, WorldsToLocals(ctx, EvaluateRestWorlds(ctx)));
+        if (options.UseSkinBindPose)
+            skeleton = GltfModelDmxWriter.WithSkinBindPose(document, skeleton);
 
         // ---- clips: one per glTF animation ------------------------------------------
         var clips = new List<Clip>();

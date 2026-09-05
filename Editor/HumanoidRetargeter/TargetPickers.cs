@@ -278,9 +278,10 @@ public static class TargetPickers
 			var imported = extension switch
 			{
 				".fbx" => FbxImporter.Import( bytes ),
-				".glb" => GltfImporter.Import( bytes ),
+				".glb" => GltfImporter.Import( bytes, new GltfImportOptions { UseSkinBindPose = true } ),
 				".gltf" => GltfImporter.Import( bytes, new GltfImportOptions
 				{
+					UseSkinBindPose = true,
 					ExternalBufferResolver = uri => ReadGltfDependency( filePath, uri ),
 				} ),
 				_ => throw new FormatException( "Expected an .fbx, .glb, or .gltf model." ),
