@@ -777,6 +777,7 @@ public static class Retargeter
         var solver = ResolveSolver(request, target, context, report);
         var solved = solver.Solve(scene, map, target.Rig, new SolveOptions
         {
+            GroundedLegDirections = request.FootPlantCleanup,
             HipScaleHorizontal = requested.HipScaleHorizontal,
             HipScaleVertical = requested.HipScaleVertical,
             TransferFingers = requested.TransferFingers,

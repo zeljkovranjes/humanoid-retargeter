@@ -45,6 +45,10 @@ public enum RoleTransferMode
 /// <summary>Options controlling a single retarget solve (one clip → one output clip).</summary>
 public sealed class SolveOptions
 {
+    // The grounding pipeline uses world vertical for legs as well as pelvis travel.
+    // Keep the standalone solver's character-relative direction contract unchanged.
+    internal bool GroundedLegDirections { get; init; }
+
     /// <summary>
     /// Default per-role transfer modes: shoulder girdle and neck carriage are
     /// <see cref="RoleTransferMode.DeltaFromRest"/> (each rig's clavicle line / neck-base

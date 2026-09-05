@@ -243,6 +243,7 @@ public sealed class GeometricSolver : IRetargetSolver
         /// map: the map is then exact and every fallback heuristic (the virtual-foot delta
         /// fallback below) is disabled — see <see cref="SolveOptions.TransferModes"/>.</summary>
         private readonly bool _explicitModes;
+        private readonly bool _groundedLegDirections;
 
         public Plan(SourceScene source, Clip clip, MappingResult srcMap, TargetRig rig, SolveOptions options)
         {
@@ -250,6 +251,7 @@ public sealed class GeometricSolver : IRetargetSolver
             _src = src;
             _tgt = rig.Skeleton;
             _explicitModes = options.TransferModes is not null;
+            _groundedLegDirections = options.GroundedLegDirections;
             _modes = options.TransferModes ?? SolveOptions.DefaultTransferModes;
 
             // Non-anatomical binds (SOMA uniform-skeleton sticks — see RestNormalizer
@@ -564,6 +566,13 @@ public sealed class GeometricSolver : IRetargetSolver
                     // Y·D·Y⁻¹ re-applies the divergence about the CURRENT heading.
                     RoleTransferMode.DeltaFromRest => MathQ.Normalize(
                         Quaternion.Conjugate(div) * ct * Quaternion.Conjugate(cs)),
+                    // Leg directions share the pelvis travel's gravity-aligned basis.
+                    // A hunched torso is not a tilted floor: carrying its rest lean into
+                    // a staggered stance lifts one planted foot above the other.
+                    RoleTransferMode.AbsoluteDirection when _groundedLegDirections
+                        && role is BoneRole.UpperLegL or BoneRole.UpperLegR
+                            or BoneRole.LowerLegL or BoneRole.LowerLegR
+                        => MathQ.Normalize(_travelTgt * _travelSrcInv),
                     _ => _basisChange,
                 },
                 B = mode == RoleTransferMode.CharacterDeltaFromRest
