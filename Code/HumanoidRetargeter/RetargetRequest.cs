@@ -264,6 +264,10 @@ public sealed class RetargetTargetSpec
     /// </summary>
     public float MeshImportScale { get; set; } = 1.0f;
 
+    /// <summary>Source mesh instances to import separately, preserving their skin buffers.
+    /// Null or a single name keeps the default whole-file import.</summary>
+    public IReadOnlyList<string>? MeshImportNames { get; set; }
+
     /// <summary>
     /// Material remaps written into generated standalone vmdls as a
     /// MaterialGroupList/DefaultMaterialGroup (bare mesh material reference → assets-relative

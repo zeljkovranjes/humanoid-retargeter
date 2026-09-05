@@ -261,6 +261,7 @@ public static class EditorPipeline
 				: outputFolderRelative.TrimEnd( '/' ) + "/" + fileName;
 			var destination = Path.GetFullPath( Path.Combine(
 				assetsPath, relative.Replace( '/', Path.DirectorySeparatorChar ) ) );
+			var modelBytes = File.ReadAllBytes( target.ModelFilePath );
 
 			if ( !string.Equals( Path.GetFullPath( target.ModelFilePath ), destination,
 				StringComparison.OrdinalIgnoreCase ) )
@@ -274,7 +275,6 @@ public static class EditorPipeline
 				// solver's anatomy (leg chains down, mirrored hands) is silently wrong and
 				// the retarget mangles exactly the posed limbs. The BindPose section holds
 				// the truth; rewrite the node transforms to it.
-				var modelBytes = File.ReadAllBytes( target.ModelFilePath );
 				if ( extension == ".fbx" )
 				{
 					var repaired = HumanoidRetargeter.Formats.Fbx.FbxBindPoseFixer.TryFix(
@@ -351,6 +351,8 @@ public static class EditorPipeline
 
 			target.Spec.MeshFilePath = meshRelative;
 			target.Spec.MeshImportScale = meshImportScale;
+			target.Spec.MeshImportNames = extension == ".fbx"
+				? HumanoidRetargeter.Formats.Fbx.FbxMeshParts.ReadNames( modelBytes ) : null;
 
 			// The target model's own embedded animations must survive the conversion (user report:
 			// "if I import an fbx with an animation and retarget another one onto it, it
@@ -1460,7 +1462,7 @@ public static class EditorPipeline
 				} },
 				target.Spec.VmdlScale, target.Spec.DefaultRootBone,
 				meshFilePath: meshRelative, meshImportScale: target.Spec.MeshImportScale,
-				materialRemaps: target.Spec.MaterialRemaps );
+				materialRemaps: target.Spec.MaterialRemaps, meshImportNames: target.Spec.MeshImportNames );
 			File.WriteAllText( vmdlAbsolute, text );
 			// A compiled artifact from an OLDER library version has placeholder materials
 			// baked in (pre-remap era) - never let it satisfy anything; the fresh compile

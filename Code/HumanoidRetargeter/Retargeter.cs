@@ -169,7 +169,8 @@ public static class Retargeter
 
         result.StandaloneVmdl = VmdlWriter.GenerateStandalone(
             target.BaseModelPath, entries, target.VmdlScale, target.DefaultRootBone,
-            locomotionSets, target.MeshFilePath, target.MeshImportScale, target.MaterialRemaps);
+            locomotionSets, target.MeshFilePath, target.MeshImportScale, target.MaterialRemaps,
+            target.MeshImportNames);
 
         if (options.AugmentVmdlText is not null)
         {

@@ -147,7 +147,8 @@ public static class VmdlWriter
         float scale, string defaultRootBone,
         IReadOnlyList<LocomotionSetSpec>? locomotionSets = null,
         string meshFilePath = "", float meshImportScale = 1.0f,
-        IReadOnlyDictionary<string, string>? materialRemaps = null)
+        IReadOnlyDictionary<string, string>? materialRemaps = null,
+        IReadOnlyList<string>? meshImportNames = null)
     {
         ArgumentNullException.ThrowIfNull(baseModelPath);
         ArgumentNullException.ThrowIfNull(anims);
@@ -157,7 +158,7 @@ public static class VmdlWriter
 
         if (!string.IsNullOrEmpty(meshFilePath))
         {
-            children.Items.Add(BuildRenderMeshListNode(meshFilePath, meshImportScale));
+            children.Items.Add(BuildRenderMeshListNode(meshFilePath, meshImportScale, meshImportNames));
             // Retarget channels may drive unweighted root/helper joints. ModelDoc otherwise
             // culls them from imported meshes, breaking the hierarchy the animation targets.
             children.Items.Add(new KvObject
@@ -315,29 +316,45 @@ public static class VmdlWriter
     /// set mirrors the shipped citizen_human_male_staging.vmdl). Shared with
     /// <see cref="VmdlAugmenter.EnsureMeshFile"/> so accumulated pipeline-owned vmdls that
     /// predate mesh embedding can be healed in place.</summary>
-    internal static KvObject BuildRenderMeshListNode(string meshFilePath, float meshImportScale)
+    internal static KvObject BuildRenderMeshListNode(string meshFilePath, float meshImportScale,
+        IReadOnlyList<string>? meshImportNames = null)
     {
         var meshChildren = new KvArray();
-        meshChildren.Items.Add(new KvObject
+        // Keep source mesh instances separate: merging a large multi-part FBX into one
+        // skin buffer can corrupt rendered vertices despite correct bones and weights.
+        IEnumerable<string?> parts = meshImportNames is { Count: > 1 }
+            ? (IEnumerable<string?>)meshImportNames.Distinct(StringComparer.OrdinalIgnoreCase) : new string?[] { null };
+        foreach (var part in parts)
         {
-            ["_class"] = new KvString("RenderMeshFile"),
-            ["name"] = new KvString(Path.GetFileNameWithoutExtension(meshFilePath)),
-            ["filename"] = new KvString(meshFilePath),
-            ["import_translation"] = MakeVector3(0, 0, 0),
-            ["import_rotation"] = MakeVector3(0, 0, 0),
-            ["import_scale"] = new KvDouble(
-                double.Parse(meshImportScale.ToString("R", CultureInfo.InvariantCulture),
-                    CultureInfo.InvariantCulture)),
-            ["align_origin_x_type"] = new KvString("None"),
-            ["align_origin_y_type"] = new KvString("None"),
-            ["align_origin_z_type"] = new KvString("None"),
-            ["parent_bone"] = new KvString(""),
-            ["import_filter"] = new KvObject
+            var names = new KvArray();
+            if (part is not null)
+                names.Items.Add(new KvString(part));
+            // Do not reuse an input mesh name as a ModelDoc node name (self-reference).
+            var name = Path.GetFileNameWithoutExtension(meshFilePath);
+            if (part is not null)
+                name += $"_part_{meshChildren.Items.Count}";
+            var node = new KvObject
             {
-                ["exclude_by_default"] = new KvBool(false),
-                ["exception_list"] = new KvArray(),
-            },
-        });
+                ["_class"] = new KvString("RenderMeshFile"),
+                ["name"] = new KvString(name),
+                ["filename"] = new KvString(meshFilePath),
+                ["import_translation"] = MakeVector3(0, 0, 0),
+                ["import_rotation"] = MakeVector3(0, 0, 0),
+                ["import_scale"] = new KvDouble(
+                    double.Parse(meshImportScale.ToString("R", CultureInfo.InvariantCulture),
+                        CultureInfo.InvariantCulture)),
+                ["align_origin_x_type"] = new KvString("None"),
+                ["align_origin_y_type"] = new KvString("None"),
+                ["align_origin_z_type"] = new KvString("None"),
+                ["parent_bone"] = new KvString(""),
+                ["import_filter"] = new KvObject
+                {
+                    ["exclude_by_default"] = new KvBool(part is not null),
+                    ["exception_list"] = names,
+                },
+            };
+            meshChildren.Items.Add(node);
+        }
         return new KvObject
         {
             ["_class"] = new KvString("RenderMeshList"),

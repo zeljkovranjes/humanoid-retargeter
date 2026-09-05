@@ -140,7 +140,8 @@ public static class VmdlAugmenter
     /// models through untouched. Returns the (possibly unchanged) vmdl text.
     /// </summary>
     public static string EnsureMeshFile(string vmdlText, string meshFilePath, float meshImportScale,
-        IReadOnlyDictionary<string, string>? materialRemaps = null)
+        IReadOnlyDictionary<string, string>? materialRemaps = null,
+        IReadOnlyList<string>? meshImportNames = null)
     {
         ArgumentNullException.ThrowIfNull(vmdlText);
         if (string.IsNullOrEmpty(meshFilePath))
@@ -160,13 +161,15 @@ public static class VmdlAugmenter
 
         var meshList = children.Items.OfType<KvObject>()
             .FirstOrDefault(o => o.GetString("_class") == "RenderMeshList");
+        var replacement = VmdlWriter.BuildRenderMeshListNode(meshFilePath, meshImportScale, meshImportNames);
         var alreadyEmbedded = meshList?.GetOrNull("children") is KvArray existing
             && existing.Items.OfType<KvObject>().Any(o =>
                 o.GetString("_class") == "RenderMeshFile"
-                && string.Equals(o.GetString("filename"), meshFilePath, StringComparison.OrdinalIgnoreCase));
+                && string.Equals(o.GetString("filename"), meshFilePath, StringComparison.OrdinalIgnoreCase))
+            && (meshImportNames is not { Count: > 1 }
+                || KvValue.DeepEquals(existing, replacement.GetOrNull("children")));
         if (!alreadyEmbedded)
         {
-            var replacement = VmdlWriter.BuildRenderMeshListNode(meshFilePath, meshImportScale);
             if (meshList is null)
                 children.Items.Insert(0, replacement);
             else

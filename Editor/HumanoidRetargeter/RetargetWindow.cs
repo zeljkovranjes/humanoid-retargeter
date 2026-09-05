@@ -1134,7 +1134,7 @@ public sealed class RetargetWindow : Widget
 							{
 								text = HumanoidRetargeter.Target.VmdlAugmenter.EnsureMeshFile(
 									text, targetMesh, _target.Spec.MeshImportScale,
-									_target.Spec.MaterialRemaps );
+									_target.Spec.MaterialRemaps, _target.Spec.MeshImportNames );
 							}
 
 							augmentPath = standalonePath;
