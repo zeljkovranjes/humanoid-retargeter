@@ -895,7 +895,16 @@ public static class EditorPipeline
 				if ((alphaTest || translucent) && opacity is null)
 					opacity = color; // common packed RGBA texture (including glTF baseColor)
 				if (opacity is not null && string.Equals(opacity, color, StringComparison.OrdinalIgnoreCase))
+				{
 					opacity = ExtractPackedAlpha(opacity);
+					// Exporters often connect the diffuse image to opacity even when every
+					// pixel is opaque. Do not put that surface in the translucent sorting pass.
+					if ( opacity is null )
+					{
+						alphaTest = false;
+						translucent = false;
+					}
+				}
 
 				color = PrepareTexture( color );
 				normal = PrepareTexture( normal );

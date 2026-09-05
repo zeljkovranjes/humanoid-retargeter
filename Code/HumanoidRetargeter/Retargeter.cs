@@ -813,6 +813,7 @@ public static class Retargeter
                 // restores the SOURCE-authored foot-to-ground relationship (southpaw
                 // final regeneration package, gate4_review.md 3.1 / DEFERRED.md f2).
                 AlignSupportToGround(frames, scene, map, target.Rig, feet, up, report, take);
+                MatchSourceFootHeights(frames, scene, map, target.Rig, feet, up, take);
             }
             else
             {
@@ -1028,6 +1029,97 @@ public static class Retargeter
         if (neutralHead >= 0)
             AddNote(report,
                 "Detached head bind pitch was leveled to the character facing plane while preserving animation.");
+    }
+
+    private static void MatchSourceFootHeights(
+        List<XForm[]> frames, SourceScene scene, MappingResult map, TargetRig rig,
+        (FootChain Left, FootChain Right) feet, Vector3 up, int take)
+    {
+        if (frames.Count == 0 || !map.RoleToBone.TryGetValue(BoneRole.Hips, out var srcHips)
+            || rig.BoneForRole(BoneRole.Hips) is not int tgtHips)
+            return;
+        var source = scene.Skeleton;
+        var target = rig.Skeleton;
+        if (!RestNormalizer.IsAnatomicalRest(source, map, source.RestWorld))
+            return; // Bone-length-only rests cannot calibrate an anatomical support height.
+        var srcFrames = scene.Clips[take].Frames;
+        if (srcFrames.Count != frames.Count)
+            return;
+        var srcUp = scene.UpAxis switch
+        {
+            0 => new Vector3(scene.UpAxisSign, 0, 0),
+            2 => new Vector3(0, 0, scene.UpAxisSign),
+            _ => new Vector3(0, scene.UpAxisSign, 0),
+        };
+        var abs = Vector3.Abs(up);
+        up = abs.X >= abs.Y && abs.X >= abs.Z ? new Vector3(MathF.Sign(up.X), 0, 0)
+            : abs.Y >= abs.Z ? new Vector3(0, MathF.Sign(up.Y), 0) : new Vector3(0, 0, MathF.Sign(up.Z));
+        var worlds = new XForm[frames.Count][];
+        var restGround = float.PositiveInfinity;
+        var motionGround = float.PositiveInfinity;
+        foreach (var rest in source.RestWorld)
+            restGround = MathF.Min(restGround, Vector3.Dot(rest.Pos, srcUp));
+        for (var f = 0; f < frames.Count; f++)
+        {
+            worlds[f] = new Skeleton.Pose(srcFrames[f]).ToWorld(source);
+            foreach (var bone in worlds[f])
+                motionGround = MathF.Min(motionGround, Vector3.Dot(bone.Pos, srcUp));
+        }
+        var placement = scene.RestPlacementAuthored ? 0f : motionGround - restGround;
+        var corrections = new List<(FootChain Chain, Vector3[] Goals)>();
+        var lowerPelvis = new float[frames.Count];
+        foreach (var (footRole, toeRole, chain) in new[]
+        {
+            (BoneRole.FootL, BoneRole.ToeL, feet.Left), (BoneRole.FootR, BoneRole.ToeR, feet.Right),
+        })
+        {
+            if (!map.RoleToBone.TryGetValue(footRole, out var foot)
+                || !map.RoleToBone.TryGetValue(toeRole, out var toe) || chain.Toe is not int tgtToe)
+                continue;
+            float Support(IReadOnlyList<XForm> pose, int ankle, int tip, Vector3 vertical)
+                => MathF.Min(Vector3.Dot(pose[ankle].Pos, vertical), Vector3.Dot(pose[tip].Pos, vertical));
+            var srcRest = Support(source.RestWorld, foot, toe, srcUp);
+            var tgtRest = Support(target.RestWorld, chain.Ankle, tgtToe, up);
+            var srcHeight = Vector3.Dot(source.RestWorld[srcHips].Pos, srcUp) - srcRest;
+            if (srcHeight <= .001f)
+                continue;
+            var ratio = Math.Clamp((Vector3.Dot(target.RestWorld[tgtHips].Pos, up) - tgtRest) / srcHeight, .25f, 4f);
+            var goals = new Vector3[frames.Count];
+            for (var f = 0; f < frames.Count; f++)
+            {
+                var world = new Skeleton.Pose(frames[f]).ToWorld(target);
+                var desired = tgtRest + (Support(worlds[f], foot, toe, srcUp) - srcRest - placement) * ratio;
+                goals[f] = world[chain.Ankle].Pos + up * (desired - Support(world, chain.Ankle, tgtToe, up));
+                var reach = Vector3.Distance(world[chain.Hip].Pos, world[chain.Knee].Pos)
+                    + Vector3.Distance(world[chain.Knee].Pos, world[chain.Ankle].Pos);
+                var toHip = world[chain.Hip].Pos - goals[f];
+                var vertical = Vector3.Dot(toHip, up);
+                var horizontal = toHip - up * vertical;
+                if (horizontal.LengthSquared() < reach * reach)
+                    lowerPelvis[f] = MathF.Max(lowerPelvis[f], vertical
+                        - MathF.Sqrt(reach * reach - horizontal.LengthSquared()));
+            }
+            corrections.Add((chain, goals));
+        }
+        // At full extension, lower the pelvis only as far as needed to reach BOTH
+        // contacts. Stretching bones or accepting an unreachable goal leaves a hover.
+        for (var f = 0; f < frames.Count; f++)
+        {
+            if (lowerPelvis[f] <= 0f) continue;
+            var parent = target[tgtHips].ParentIndex;
+            var shift = -up * lowerPelvis[f];
+            if (parent >= 0)
+                shift = Vector3.Transform(shift, Quaternion.Conjugate(
+                    new Skeleton.Pose(frames[f]).ToWorld(target)[parent].Rot));
+            frames[f][tgtHips].Pos += shift;
+        }
+        foreach (var (chain, goals) in corrections)
+        {
+            // Vertical IK preserves horizontal travel and foot rotation; it never scales bones.
+            EffectorIk.ApplyGoals(frames, target,
+                new LimbChain { Upper = chain.Hip, Lower = chain.Knee, End = chain.Ankle },
+                goals, ArmIkCleanup.RestBendAxis(target, chain.Hip, chain.Knee, chain.Ankle), soften: 0f);
+        }
     }
 
     private static bool TryDetachedHeadNeutralCorrection(
@@ -2164,7 +2256,7 @@ public static class Retargeter
         }
 
         /// <summary>Hinge-axis fallback from the rest bend plane (elbow), like the foot pass.</summary>
-        private static Vector3 RestBendAxis(SkeletonModel skeleton, int upper, int lower, int end)
+        internal static Vector3 RestBendAxis(SkeletonModel skeleton, int upper, int lower, int end)
         {
             var a = skeleton.RestWorld[upper].Pos;
             var b = skeleton.RestWorld[lower].Pos;
