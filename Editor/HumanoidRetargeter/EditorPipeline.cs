@@ -423,6 +423,7 @@ public static class EditorPipeline
 		var materials = new Dictionary<long, SourceMaterialInfo>();
 		var textures = new Dictionary<long, string>();
 		var videos = new Dictionary<long, string>();
+		var doubleSidedModels = new HashSet<long>();
 
 		if ( objects is not null )
 		{
@@ -432,6 +433,10 @@ public static class EditorPipeline
 					|| node.Properties[1] is not string rawName )
 					continue;
 				var id = node.Prop<long>( 0 );
+				if ( node.Name == "Model" && string.Equals(
+					node.Child( "Culling" )?.Properties.FirstOrDefault() as string,
+					"CullingOff", StringComparison.OrdinalIgnoreCase ) )
+					doubleSidedModels.Add( id );
 				if ( node.Name == "Material" )
 				{
 					materials[id] = new SourceMaterialInfo
@@ -479,6 +484,10 @@ public static class EditorPipeline
 				continue;
 			var source = connection.Prop<long>( 1 );
 			var target = connection.Prop<long>( 2 );
+			// FBX stores sidedness on the mesh model, not its material.
+			if ( kind == "OO" && doubleSidedModels.Contains( target )
+				&& materials.TryGetValue( source, out var boundMaterial ) )
+				boundMaterial.DoubleSided = true;
 			if ( !textures.TryGetValue( source, out var file )
 				|| !materials.TryGetValue( target, out var material ) )
 				continue;
