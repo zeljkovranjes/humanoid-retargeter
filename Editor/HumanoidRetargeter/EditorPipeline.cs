@@ -323,8 +323,11 @@ public static class EditorPipeline
 			var meshImportScale = target.ModelUnitScaleCm;
 			if ( extension is ".glb" or ".gltf" )
 			{
-				meshDestination = Path.ChangeExtension( destination, ".dmx" );
-				meshRelative = Path.ChangeExtension( relative, ".dmx" ).Replace( '\\', '/' );
+				// Embedded takes may share the source filename (e.g. scene). Keep model
+				// DMX separate so writing animation DMX cannot overwrite the mesh.
+				meshDestination = Path.Combine( Path.GetDirectoryName( destination )!, "mesh", Path.GetFileNameWithoutExtension( destination ) + ".dmx" );
+				meshRelative = Path.Combine( Path.GetDirectoryName( relative )!, "mesh", Path.GetFileNameWithoutExtension( relative ) + ".dmx" ).Replace( '\\', '/' );
+				Directory.CreateDirectory( Path.GetDirectoryName( meshDestination )! );
 				// Preview compilation rebuilds Spec.Rig from the engine's converted bind.
 				// Re-emitting the mesh with that rebuilt skeleton converts the bind twice:
 				// the preview remains correct, but the final vmdl skins animated hands/limbs

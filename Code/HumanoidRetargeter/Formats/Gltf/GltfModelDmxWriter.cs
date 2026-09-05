@@ -85,6 +85,7 @@ public static class GltfModelDmxWriter
                 ? skinProperty.GetInt32() : -1;
             var skinJoints = MapSkinJoints(
                 document, skeleton, bonesByName, skinArray, skinIndex);
+            var skinTransforms = SkinTransforms(document, skinArray, skinIndex, worlds, skinJoints);
             var normalMatrix = NormalMatrix(worlds[nodeIndex]);
             var primitiveIndex = 0;
             foreach (var primitive in primitives.EnumerateArray())
@@ -105,11 +106,26 @@ public static class GltfModelDmxWriter
                 }
 
                 var transformedPositions = new Vector3[vertexCount];
+                ReadSkinning(document, attributes, vertexCount, skinJoints,
+                    out var weights, out var joints);
+                var vertexTransforms = new Matrix4x4[vertexCount];
                 for (var i = 0; i < vertexCount; i++)
                 {
+                    var transform = worlds[nodeIndex];
+                    if (skinTransforms is not null)
+                    {
+                        transform = default;
+                        for (var influence = 0; influence < 4; influence++)
+                        {
+                            var at = i * 4 + influence;
+                            if (weights[at] > 0f)
+                                transform += skinTransforms[joints[at]] * weights[at];
+                        }
+                    }
+                    vertexTransforms[i] = transform;
                     var value = new Vector3(
                         positions.Float(i, 0), positions.Float(i, 1), positions.Float(i, 2));
-                    transformedPositions[i] = Vector3.Transform(value, worlds[nodeIndex])
+                    transformedPositions[i] = Vector3.Transform(value, transform)
                         * MetersToCentimeters;
                 }
 
@@ -127,7 +143,8 @@ public static class GltfModelDmxWriter
                     {
                         var value = new Vector3(
                             source.Float(i, 0), source.Float(i, 1), source.Float(i, 2));
-                        normals[i] = NormalizeOr(Vector3.TransformNormal(value, normalMatrix), Vector3.UnitY);
+                        var transform = skinTransforms is null ? normalMatrix : NormalMatrix(vertexTransforms[i]);
+                        normals[i] = NormalizeOr(Vector3.TransformNormal(value, transform), Vector3.UnitY);
                     }
                 }
                 else
@@ -143,9 +160,6 @@ public static class GltfModelDmxWriter
                     for (var i = 0; i < vertexCount; i++)
                         texCoords[i] = new Vector2(source.Float(i, 0), source.Float(i, 1));
                 }
-
-                ReadSkinning(document, attributes, vertexCount, skinJoints,
-                    out var weights, out var joints);
 
                 var baseName = node.TryGetProperty("name", out var nodeName)
                     ? nodeName.GetString()
@@ -202,6 +216,36 @@ public static class GltfModelDmxWriter
         return Matrix4x4.Transpose(inverse);
     }
 
+    // Bake the authored skin into the node rest pose before DMX generates new inverse
+    // binds. glTF skinned vertices use inverseBind * jointWorld, NOT meshNodeWorld.
+    // Keeping the full matrices here also bakes inherited scale into the rigid DMX rig.
+    private static Dictionary<int, Matrix4x4>? SkinTransforms(
+        GltfDocument document, JsonElement skins, int skinIndex,
+        Matrix4x4[] worlds, int[] mappedJoints)
+    {
+        if (mappedJoints.Length == 0)
+            return null;
+        var skin = skins[skinIndex];
+        var nodes = skin.GetProperty("joints");
+        var inverseBinds = skin.TryGetProperty("inverseBindMatrices", out var property)
+            ? new Accessor(document, property.GetInt32(), 16) : null;
+        if (inverseBinds is not null)
+            RequireCount(inverseBinds, mappedJoints.Length, "inverseBindMatrices");
+        var result = new Dictionary<int, Matrix4x4>();
+        for (var i = 0; i < mappedJoints.Length; i++)
+        {
+            var inverse = Matrix4x4.Identity;
+            if (inverseBinds is not null)
+                inverse = new Matrix4x4(
+                    inverseBinds.Float(i, 0), inverseBinds.Float(i, 1), inverseBinds.Float(i, 2), inverseBinds.Float(i, 3),
+                    inverseBinds.Float(i, 4), inverseBinds.Float(i, 5), inverseBinds.Float(i, 6), inverseBinds.Float(i, 7),
+                    inverseBinds.Float(i, 8), inverseBinds.Float(i, 9), inverseBinds.Float(i, 10), inverseBinds.Float(i, 11),
+                    inverseBinds.Float(i, 12), inverseBinds.Float(i, 13), inverseBinds.Float(i, 14), inverseBinds.Float(i, 15));
+            result[mappedJoints[i]] = inverse * worlds[nodes[i].GetInt32()];
+        }
+        return result;
+    }
+
     private static int[] MapSkinJoints(
         GltfDocument document, SkeletonModel skeleton, Dictionary<string, int> bonesByName,
         JsonElement skinArray, int skinIndex)
@@ -246,7 +290,10 @@ public static class GltfModelDmxWriter
             || !attributes.TryGetProperty("WEIGHTS_0", out var weightProperty))
         {
             for (var i = 0; i < vertexCount; i++)
+            {
                 weights[i * 4] = 1f;
+                joints[i * 4] = skinJoints.Length > 0 ? skinJoints[0] : 0;
+            }
             return;
         }
 
@@ -271,7 +318,7 @@ public static class GltfModelDmxWriter
             if (total <= 1e-8f)
             {
                 weights[vertex * 4] = 1f;
-                joints[vertex * 4] = 0;
+                joints[vertex * 4] = skinJoints[0];
                 continue;
             }
             for (var influence = 0; influence < 4; influence++)
@@ -430,6 +477,7 @@ public static class GltfModelDmxWriter
                 "VEC2" => 2,
                 "VEC3" => 3,
                 "VEC4" => 4,
+                "MAT4" => 16,
                 var type => throw new FormatException($"Unsupported glTF accessor type '{type}'."),
             };
             if (Components != expectedComponents)
