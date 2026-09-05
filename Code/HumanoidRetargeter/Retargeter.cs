@@ -1839,6 +1839,7 @@ public static class Retargeter
         if (ProfileDetector.Detect(skeleton) is { } detected)
         {
             AutoMapper.CompleteSingleJointThumbs(skeleton, detected.Result);
+            AutoMapper.CompleteFingersByTopology(skeleton, detected.Result);
             AutoMapper.PruneNonArticulatedFingerStubs(skeleton, detected.Result);
             VetoImpossibleHead(skeleton, detected.Result);
             return (detected.Result, BuildReport(detected.Result, needsUserDecision: false, skeleton));

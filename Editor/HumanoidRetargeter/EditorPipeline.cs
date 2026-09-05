@@ -403,6 +403,8 @@ public static class EditorPipeline
 	{
 		public string Name { get; init; }
 		public string ColorTexture { get; set; }
+		public System.Numerics.Vector3? ColorFactor { get; set; }
+		public bool VertexColors { get; set; }
 		public string NormalTexture { get; set; }
 		public string RoughnessTexture { get; set; }
 		public string MetalnessTexture { get; set; }
@@ -444,6 +446,7 @@ public static class EditorPipeline
 					materials[id] = new SourceMaterialInfo
 					{
 						Name = HumanoidRetargeter.Formats.Fbx.FbxNode.SplitName( rawName ).Name,
+						ColorFactor = HumanoidRetargeter.Formats.Fbx.FbxMaterialColor.Read( node ),
 					};
 				}
 				else if ( node.Name is "Texture" or "Video" )
@@ -464,6 +467,15 @@ public static class EditorPipeline
 
 		if ( connections is null )
 			return materials.Values.ToList();
+
+		var coloredGeometry = objects?.Children.Where( n => n.Name == "Geometry"
+			&& HumanoidRetargeter.Formats.Fbx.FbxMaterialColor.HasVertexColors( n ) )
+			.Select( n => n.Prop<long>( 0 ) ).ToHashSet() ?? new HashSet<long>();
+		var coloredModels = connections.ChildrenNamed( "C" )
+			.Where( n => n.Properties.Count >= 3 && n.Properties[0] is "OO"
+				&& n.Properties[1] is long or int && n.Properties[2] is long or int
+				&& coloredGeometry.Contains( n.Prop<long>( 1 ) ) )
+			.Select( n => n.Prop<long>( 2 ) ).ToHashSet();
 
 		// Video objects commonly carry the only usable filename and parent a Texture.
 		foreach ( var connection in connections.ChildrenNamed( "C" ) )
@@ -487,6 +499,9 @@ public static class EditorPipeline
 			var source = connection.Prop<long>( 1 );
 			var target = connection.Prop<long>( 2 );
 			// FBX stores sidedness on the mesh model, not its material.
+			if ( kind == "OO" && coloredModels.Contains( target )
+				&& materials.TryGetValue( source, out var coloredMaterial ) )
+				coloredMaterial.VertexColors = true;
 			if ( kind == "OO" && doubleSidedModels.Contains( target )
 				&& materials.TryGetValue( source, out var boundMaterial ) )
 				boundMaterial.DoubleSided = true;
@@ -930,7 +945,9 @@ public static class EditorPipeline
 				builder.AppendLine( "// Regenerated on conversion while this header stays - DELETE THE LINE ABOVE to make manual edits permanent." );
 				builder.AppendLine( "Layer0" );
 				builder.AppendLine( "{" );
-				builder.AppendLine( "\tshader \"shaders/complex.shader\"" );
+				builder.AppendLine( authored?.VertexColors == true && color is null
+					? "\tshader \"shaders/vertex_color.shader\""
+					: "\tshader \"shaders/complex.shader\"" );
 				if ( alphaTest )
 				{
 					builder.AppendLine( "\tF_ALPHA_TEST 1" );
@@ -941,6 +958,9 @@ public static class EditorPipeline
 				if ( authored?.DoubleSided == true )
 					builder.AppendLine( "\tF_RENDER_BACKFACES 1" );
 				builder.AppendLine( $"\tTextureColor \"{(color ?? "materials/default/default_color.tga")}\"" );
+				if ( color is null && authored?.ColorFactor is { } tint )
+					builder.AppendLine( FormattableString.Invariant(
+						$"\tg_vColorTint \"[{tint.X:R} {tint.Y:R} {tint.Z:R} 1]\"" ) );
 				if ( opacity is not null )
 					builder.AppendLine( $"\tTextureTranslucency \"{opacity}\"" );
 				builder.AppendLine( $"\tTextureNormal \"{(normal ?? "materials/default/default_normal.tga")}\"" );

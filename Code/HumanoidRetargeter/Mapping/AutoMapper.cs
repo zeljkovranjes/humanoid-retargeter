@@ -333,20 +333,31 @@ public static class AutoMapper
 
     /// <summary>Completes an otherwise reliable name map when the hand has clearly
     /// articulated child chains but their exporter-specific names carry no finger words.</summary>
-    private static void CompleteFingersByTopology(SkeletonModel skeleton, MappingResult result)
+    internal static void CompleteFingersByTopology(SkeletonModel skeleton, MappingResult result)
     {
         var children = BuildChildren(skeleton);
         var subtreeDepth = BuildSubtreeDepth(skeleton, children);
         var positions = skeleton.RestWorld.Select(x => x.Pos).ToArray();
         foreach (var side in new[] { "L", "R" })
         {
-            var hasFinger = result.RoleToBone.Keys.Any(role =>
-                IsFingerRole(role, side));
-            if (!hasFinger
-                && result.RoleToBone.TryGetValue(
-                    Enum.Parse<BoneRole>("Hand" + side), out var hand))
-                MapFingersByTopology(
-                    result, skeleton, children, subtreeDepth, positions, hand, side);
+            if (!result.RoleToBone.TryGetValue(
+                Enum.Parse<BoneRole>("Hand" + side), out var hand))
+                continue;
+            var inferred = new MappingResult("topology", MappingSource.AutoTopology);
+            MapFingersByTopology(inferred, skeleton, children, subtreeDepth, positions, hand, side);
+            // Fill only entirely missing chains. Existing profile/name assignments win,
+            // and a bone already assigned to another digit must never be reused.
+            foreach (var finger in new[] { "Thumb", "Index", "Middle", "Ring", "Pinky" })
+            {
+                var chain = inferred.RoleToBone.Where(p => p.Key.ToString().StartsWith(finger)
+                    && p.Key.ToString().EndsWith(side)).ToArray();
+                if (result.RoleToBone.Keys.Any(r => r.ToString().StartsWith(finger)
+                    && r.ToString().EndsWith(side))
+                    || chain.Any(p => result.RoleToBone.ContainsValue(p.Value)))
+                    continue;
+                foreach (var pair in chain)
+                    result.RoleToBone.Add(pair.Key, pair.Value);
+            }
         }
     }
 
