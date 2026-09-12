@@ -132,7 +132,8 @@ public static class RestNormalizer
     /// <exception cref="ArgumentException">As the two-argument overload; a non-anatomical
     /// bind only throws when <paramref name="referencePoseLocals"/> is null.</exception>
     public static (RestPose Normalized, RestReport Report) Normalize(
-        SkeletonModel skeleton, MappingResult map, IReadOnlyList<XForm>? referencePoseLocals)
+        SkeletonModel skeleton, MappingResult map, IReadOnlyList<XForm>? referencePoseLocals,
+        Vector3? worldUp = null)
     {
         ArgumentNullException.ThrowIfNull(skeleton);
         ArgumentNullException.ThrowIfNull(map);
@@ -174,7 +175,7 @@ public static class RestNormalizer
 
         // Arm/leg normalization never moves the hip or shoulder joints, so the character
         // frame computed on the input rest stays valid throughout.
-        var cf = CharacterFrame.Compute(skeleton, map, world);
+        var cf = CharacterFrame.Compute(skeleton, map, world, worldUp);
 
         DetectArms(map, world, cf, report);
         NormalizeArms(skeleton, map, world, cf, report);

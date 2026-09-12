@@ -260,11 +260,19 @@ public sealed class GeometricSolver : IRetargetSolver
             var srcReferencePose = clip.Frames.Count > 0 ? clip.Frames[0] : null;
 
             var tgtMap = rig.ToMappingResult();
-            var (srcNorm, _) = RestNormalizer.Normalize(src, srcMap, srcReferencePose);
+            // Grounded source motion uses the file's declared vertical. Inferring up
+            // from a crouched rest can turn forward root travel into upward motion.
+            var fileUp = AxisVector(source.UpAxis, source.UpAxisSign);
+            var anatomicalUp = CharacterFrame.Compute(src, srcMap, src.RestWorld).Up;
+            // Preserve the anatomical calibration of upright binds. Only replace it
+            // when body lean would make the gravity-axis inference select another axis.
+            Vector3? sourceUp = _groundedLegDirections && Vector3.Dot(anatomicalUp, fileUp) < 0.70710678f
+                ? fileUp : null;
+            var (srcNorm, _) = RestNormalizer.Normalize(src, srcMap, srcReferencePose, sourceUp);
             var (tgtNorm, _) = RestNormalizer.Normalize(_tgt, tgtMap);
             _srcNormRest = srcNorm.WorldRest;
             _tgtNormRest = tgtNorm.WorldRest;
-            _srcCanon = CanonicalFrames.Build(src, srcMap, _srcNormRest);
+            _srcCanon = CanonicalFrames.Build(src, srcMap, _srcNormRest, sourceUp);
             _tgtCanon = CanonicalFrames.Build(_tgt, tgtMap, _tgtNormRest);
 
             _chrSrcInv = Quaternion.Conjugate(

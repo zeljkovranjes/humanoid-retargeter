@@ -638,10 +638,10 @@ public static class Retargeter
     {
         var events = GenerateFootsteps(request, target, context, report, frames, fps);
         var dmxFileName = SanitizeFileName(clipName) + ".dmx";
-        // Vmdls that embed their source mesh compile root channels 90° about the declared
+        // Embedded-mesh vmdls and compiled Z-up targets compile root channels 90° about the declared
         // up axis away from the mesh bind; child channels are unaffected. Compensate the
         // serialized copy only so compiled playback matches the solved preview.
-        var dmxFrames = !string.IsNullOrEmpty(target.MeshFilePath)
+        var dmxFrames = !string.IsNullOrEmpty(target.MeshFilePath) || target.UpAxis == TargetUpAxis.ZUpEngine
             ? CompensateEmbeddedMeshRootYaw(frames, target.Rig, target.UpAxis)
             : frames;
         var dmx = DmxWriter.Write(
@@ -1041,7 +1041,7 @@ public static class Retargeter
             return;
         var source = scene.Skeleton;
         var target = rig.Skeleton;
-        if (!RestNormalizer.IsAnatomicalRest(source, map, source.RestWorld))
+        if (!scene.RestPlacementAuthored && !RestNormalizer.IsAnatomicalRest(source, map, source.RestWorld))
             return; // Bone-length-only rests cannot calibrate an anatomical support height.
         var srcFrames = scene.Clips[take].Frames;
         if (srcFrames.Count != frames.Count)
@@ -1052,9 +1052,7 @@ public static class Retargeter
             2 => new Vector3(0, 0, scene.UpAxisSign),
             _ => new Vector3(0, scene.UpAxisSign, 0),
         };
-        var abs = Vector3.Abs(up);
-        up = abs.X >= abs.Y && abs.X >= abs.Z ? new Vector3(MathF.Sign(up.X), 0, 0)
-            : abs.Y >= abs.Z ? new Vector3(0, MathF.Sign(up.Y), 0) : new Vector3(0, 0, MathF.Sign(up.Z));
+        up = GroundUp(up);
         var worlds = new XForm[frames.Count][];
         var restGround = float.PositiveInfinity;
         var motionGround = float.PositiveInfinity;
@@ -1081,6 +1079,13 @@ public static class Retargeter
                 => MathF.Min(Vector3.Dot(pose[ankle].Pos, vertical), Vector3.Dot(pose[tip].Pos, vertical));
             var srcRest = Support(source.RestWorld, foot, toe, srcUp);
             var tgtRest = Support(target.RestWorld, chain.Ankle, tgtToe, up);
+            // Animation-only FBXs can store a mid-stride rest, with one foot lifted.
+            // That raised foot is not a ground reference: subtracting it drives its
+            // planted frames below the floor. An authored rest never needs a higher
+            // support baseline than the lowest support actually reached by that foot.
+            if (scene.RestPlacementAuthored)
+                foreach (var pose in worlds)
+                    srcRest = MathF.Min(srcRest, Support(pose, foot, toe, srcUp));
             var srcHeight = Vector3.Dot(source.RestWorld[srcHips].Pos, srcUp) - srcRest;
             if (srcHeight <= .001f)
                 continue;
@@ -1171,7 +1176,7 @@ public static class Retargeter
     }
 
     /// <summary>
-    /// The engine-side yaw correction for embedded-mesh vmdls (see the call site in
+    /// The engine-side yaw correction for embedded meshes and compiled Z-up targets (see
     /// <see cref="EmitClip"/>): the compiler's source-axis conversion for ROOT-LEVEL
     /// animation channels lands 90° about up away from where it puts the mesh bind.
     /// Pre-rotating root locals by the inverse importer yaw (−90° for Y-up,
@@ -1205,7 +1210,7 @@ public static class Retargeter
     /// re-serialize mutated frames with the same compensation the pipeline applies).</summary>
     public static List<XForm[]> TestHook_CompensateEmbeddedMeshRootYaw(
         IReadOnlyList<XForm[]> frames, RetargetTargetSpec target)
-        => !string.IsNullOrEmpty(target.MeshFilePath)
+        => !string.IsNullOrEmpty(target.MeshFilePath) || target.UpAxis == TargetUpAxis.ZUpEngine
             ? CompensateEmbeddedMeshRootYaw(frames, target.Rig, target.UpAxis)
             : frames.ToList();
 
@@ -1431,12 +1436,7 @@ public static class Retargeter
         // the character frame's up tilts a few degrees with the rest posture, and a
         // tilted dot-metric slants the ground line across a traveling clip (measured:
         // 28 cm of false offset on a long corpus walk). Snap to the dominant axis.
-        var aUp = Vector3.Abs(up);
-        up = aUp.X >= aUp.Y && aUp.X >= aUp.Z
-            ? new Vector3(MathF.Sign(up.X), 0f, 0f)
-            : aUp.Y >= aUp.Z
-                ? new Vector3(0f, MathF.Sign(up.Y), 0f)
-                : new Vector3(0f, 0f, MathF.Sign(up.Z));
+        up = GroundUp(up);
 
         // ---- support-bone set: the roles mapped on BOTH rigs (metrics must compare
         // the same anatomical points or anthropometric offsets leak into the gap) ----
@@ -1567,6 +1567,16 @@ public static class Retargeter
               + "(source feet unmapped; clip support aligned to target rest support).");
     }
 
+    private static Vector3 GroundUp(Vector3 up)
+    {
+        var absolute = Vector3.Abs(up);
+        return absolute.X >= absolute.Y && absolute.X >= absolute.Z
+            ? new Vector3(MathF.Sign(up.X), 0, 0)
+            : absolute.Y >= absolute.Z
+                ? new Vector3(0, MathF.Sign(up.Y), 0)
+                : new Vector3(0, 0, MathF.Sign(up.Z));
+    }
+
     private static void ApplyRootMotion(
         RootMotionMode mode, List<XForm[]> frames, TargetContext context, MappingReportInfo report)
     {
@@ -1597,15 +1607,36 @@ public static class Retargeter
         }
 
         var root = context.DedicatedRootIndex ?? hips;
+        var worldUp = GroundUp(up);
         // Skeleton-aware overload: hips world via real parent-chain FK, locals re-derived
         // against the actual parent (HipsParentIsRoot is ignored by this overload).
         RootMotion.Apply(frames, context.Rig.Skeleton, new RootMotionAxes
         {
-            Up = up,
+            // Match the world vertical used by support-height cleanup. A slightly
+            // leaning target torso must not tilt the plane used to remove travel;
+            // otherwise this final pass reintroduces vertical drift into grounded feet.
+            Up = worldUp,
             RootIndex = root,
             HipsIndex = hips,
             HipsParentIsRoot = context.HipsParentIsRoot,
         }, mode);
+        if (mode == RootMotionMode.InPlace && frames.Count > 0)
+        {
+            // Animation-only files may start far from their static reference pose.
+            // Removing travel alone freezes that offset into the clip, so blending
+            // directions moves the mesh away from its controller. Center every clip
+            // on the target bind hips, preserving vertical motion and local rotations.
+            var skeleton = context.Rig.Skeleton;
+            var center = Vector3.Zero;
+            foreach (var frame in frames)
+                center += FkUtil.BoneWorld(frame, skeleton, hips).Pos;
+            var offset = skeleton.RestWorld[hips].Pos - center / frames.Count;
+            offset -= Vector3.Dot(offset, worldUp) * worldUp;
+            foreach (var frame in frames)
+                for (var b = 0; b < skeleton.Count; b++)
+                    if (skeleton[b].ParentIndex < 0)
+                        frame[b] = new XForm(frame[b].Pos + offset, frame[b].Rot);
+        }
         AddNote(report, mode == RootMotionMode.Extract
             ? $"Root motion extracted onto dedicated root bone (index {root})."
             : "Root motion removed (in-place clip).");

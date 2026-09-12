@@ -100,7 +100,7 @@ public sealed class CanonicalFrames
     /// produced by <see cref="RestNormalizer"/>), indexed like <c>skeleton.Bones</c>.
     /// </summary>
     public static CanonicalFrames Build(
-        SkeletonModel skeleton, MappingResult map, IReadOnlyList<XForm> worldRest)
+        SkeletonModel skeleton, MappingResult map, IReadOnlyList<XForm> worldRest, Vector3? worldUp = null)
     {
         ArgumentNullException.ThrowIfNull(skeleton);
         ArgumentNullException.ThrowIfNull(map);
@@ -109,7 +109,7 @@ public sealed class CanonicalFrames
             throw new ArgumentException(
                 $"worldRest has {worldRest.Count} entries for a {skeleton.Count}-bone skeleton.");
 
-        var cf = CharacterFrame.Compute(skeleton, map, worldRest);
+        var cf = CharacterFrame.Compute(skeleton, map, worldRest, worldUp);
         var frames = new Dictionary<BoneRole, Quaternion>();
         var virtualPrimary = new HashSet<BoneRole>();
 

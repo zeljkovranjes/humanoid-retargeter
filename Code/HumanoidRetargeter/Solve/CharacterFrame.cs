@@ -58,7 +58,7 @@ internal sealed class CharacterFrame
     /// <exception cref="ArgumentException">Thrown when the mapping lacks the bones the frame
     /// needs (both upper legs, plus arms/clavicles/neck for the shoulder line).</exception>
     public static CharacterFrame Compute(
-        SkeletonModel skeleton, MappingResult map, IReadOnlyList<XForm> worldRest)
+        SkeletonModel skeleton, MappingResult map, IReadOnlyList<XForm> worldRest, Vector3? worldUp = null)
     {
         ArgumentNullException.ThrowIfNull(skeleton);
         ArgumentNullException.ThrowIfNull(map);
@@ -83,7 +83,9 @@ internal sealed class CharacterFrame
         var upRaw = midShoulders - midHips;
         if (upRaw.LengthSquared() < 1e-8f)
             throw new ArgumentException("Degenerate rig: shoulder line coincides with hip line.");
-        var up = Vector3.Normalize(upRaw);
+        // A locomotion export may store a crouched animation frame as its rest.
+        // Its shoulder-to-hip vector describes body lean, not the ground normal.
+        var up = Vector3.Normalize(worldUp ?? upRaw);
 
         var acrossHips = legL.Value - legR.Value;
         var lateralRaw = acrossHips - up * Vector3.Dot(acrossHips, up);
