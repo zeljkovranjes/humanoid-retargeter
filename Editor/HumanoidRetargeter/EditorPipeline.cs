@@ -299,7 +299,8 @@ public static class EditorPipeline
 			// references the model makes to files that do not exist anywhere (e.g. .tga names
 			// shipped as .png conversions) cannot be resolved by any importer.
 			CopySidecarTextures( Path.GetDirectoryName( target.ModelFilePath ),
-				Path.GetDirectoryName( destination ) );
+				Path.GetDirectoryName( destination ), extension == ".fbx"
+					? ExtractFbxMaterials( modelBytes ).SelectMany( m => m.TextureReferences ) : null );
 			if ( extension == ".gltf" )
 				CopyGltfDependencies( target.ModelFilePath, destination );
 
@@ -402,6 +403,10 @@ public static class EditorPipeline
 	sealed class SourceMaterialInfo
 	{
 		public string Name { get; init; }
+		public string ImportName { get; init; }
+		public IEnumerable<string> TextureReferences => new[] { ColorTexture, NormalTexture,
+			RoughnessTexture, MetalnessTexture, OcclusionTexture, EmissiveTexture, OpacityTexture }
+			.Where( path => !string.IsNullOrWhiteSpace( path ) );
 		public string ColorTexture { get; set; }
 		public System.Numerics.Vector3? ColorFactor { get; set; }
 		public bool VertexColors { get; set; }
@@ -446,6 +451,8 @@ public static class EditorPipeline
 					materials[id] = new SourceMaterialInfo
 					{
 						Name = HumanoidRetargeter.Formats.Fbx.FbxNode.SplitName( rawName ).Name,
+						// Native FBX import retains literal Class:: prefixes in binary exports.
+						ImportName = rawName.Split( '\0' )[0],
 						ColorFactor = HumanoidRetargeter.Formats.Fbx.FbxMaterialColor.Read( node ),
 					};
 				}
@@ -840,6 +847,10 @@ public static class EditorPipeline
 				// pre-existing (resource paths are lowercase by engine convention).
 				remaps[material.ToLowerInvariant() + ".vmat"] =
 					Path.GetRelativePath( assetsPath, vmatPath ).Replace( '\\', '/' ).ToLowerInvariant();
+				var authored = materialInfo.FirstOrDefault( m =>
+					string.Equals( m.Name, material, StringComparison.OrdinalIgnoreCase ) );
+				if ( !string.IsNullOrEmpty( authored?.ImportName ) )
+					remaps[authored.ImportName.ToLowerInvariant() + ".vmat"] = remaps[material.ToLowerInvariant() + ".vmat"];
 				if ( File.Exists( vmatPath ) )
 				{
 					// Files still carrying the auto-generated header are ours to UPGRADE -
@@ -862,8 +873,6 @@ public static class EditorPipeline
 				// Suffix conventions collected from real exports (Sketchfab rips, Unity
 				// packs, Blender/Substance/Marmoset outputs) - the user's assets keep
 				// arriving with new ones, so every known spelling is listed.
-				var authored = materialInfo.FirstOrDefault( m =>
-					string.Equals( m.Name, material, StringComparison.OrdinalIgnoreCase ) );
 				var color = FindAuthoredTexture( authored?.ColorTexture, textures )
 					?? BestTextureMatch( material, textures, new[]
 					{
@@ -1356,7 +1365,7 @@ public static class EditorPipeline
 	/// loose image files next to it, and a "textures" folder next to it or next to its
 	/// parent (the source/-plus-textures/ layout). Per-file best effort - a failed texture
 	/// must never fail the conversion.</summary>
-	static void CopySidecarTextures( string sourceDir, string destDir )
+	static void CopySidecarTextures( string sourceDir, string destDir, IEnumerable<string> references = null )
 	{
 		try
 		{
@@ -1366,6 +1375,25 @@ public static class EditorPipeline
 			destDir = Path.GetFullPath( destDir );
 			if ( string.Equals( sourceDir, destDir, StringComparison.OrdinalIgnoreCase ) )
 				return;
+
+			// Preserve model-local authored paths; do not flatten filenames or copy an
+			// arbitrary parent directory when an exporter supplies an external path.
+			foreach ( var reference in references ?? Enumerable.Empty<string>() )
+			{
+				var sourceFile = Path.GetFullPath( Path.Combine( sourceDir, reference.Replace( '\\', '/' ) ) );
+				var relative = Path.GetRelativePath( sourceDir, sourceFile );
+				if ( Path.IsPathRooted( relative ) || relative == ".."
+					|| relative.StartsWith( ".." + Path.DirectorySeparatorChar ) || !File.Exists( sourceFile ) )
+					continue;
+				var destFile = Path.Combine( destDir, relative );
+				Try( () =>
+				{
+					Directory.CreateDirectory( Path.GetDirectoryName( destFile ) );
+					File.Copy( sourceFile, destFile, true );
+					AssetSystem.RegisterFile( destFile );
+					return true;
+				} );
+			}
 
 			// Every copied file must be REGISTERED: assets copied onto disk mid-session are
 			// unknown to the asset system, so the material chain cannot generate their vtex
