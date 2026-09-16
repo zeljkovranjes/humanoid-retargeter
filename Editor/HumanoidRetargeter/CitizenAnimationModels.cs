@@ -52,7 +52,8 @@ internal static class CitizenAnimationModels
 	}
 
 	internal static async Task<EditorPipeline.WriteResult> CreateAsync(
-		TargetPickers.ResolvedTarget target, string outputFolder, string outputName, bool copyAnimGraph = false, Action<string> progress = null )
+		TargetPickers.ResolvedTarget target, string outputFolder, string outputName, bool copyAnimGraph = false, Action<string> progress = null,
+		bool groundModel = false )
 	{
 		await EditorPipeline.SwitchToMainThread();
 		if ( !TryDetect( target, out var referencePath, out var reason ) )
@@ -84,6 +85,7 @@ internal static class CitizenAnimationModels
 			additionalFiles.Add( graphFile );
 			vmdl = StockAnimationGraph.Attach( vmdl, graphPath );
 		}
+		if ( groundModel ) vmdl = ModelGrounding.Apply( vmdl, Model.Load( target.PreviewModelPath ).Bounds.Mins.z );
 		progress?.Invoke( "Compiling the Citizen animation model and graph…" );
 		var batch = new RetargetBatchResult { StandaloneVmdl = vmdl };
 		var result = await EditorPipeline.WriteAndCompileAsync( batch, outputFolder,

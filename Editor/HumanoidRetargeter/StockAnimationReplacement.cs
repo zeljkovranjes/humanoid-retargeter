@@ -88,9 +88,12 @@ internal static class StockAnimationReplacement
 		var spec = referencePath == RetargetTargetSpec.SboxCitizenPath
 			? EditorPipeline.LoadSboxCitizenTarget() : EditorPipeline.LoadSboxDefaultTarget();
 		var engine = TargetPickers.SkeletonFromModel( Sandbox.Model.Load( modelPath ) );
+		var sourceFile = AssetSystem.FindByPath( modelPath )?.AbsolutePath;
+		var offset = sourceFile is not null && File.Exists( sourceFile ) ? ModelGrounding.Offset( File.ReadAllText( sourceFile ) ) : 0;
 		var skeleton = HumanoidRetargeter.Skeleton.Skeleton.Create( engine.Bones.Select( bone => new BoneDefinition(
 			bone.Name, bone.ParentIndex < 0 ? null : engine[bone.ParentIndex].Name,
-			CompiledRigSourceSpace.FromEngineLocal( bone.RestLocal, bone.ParentIndex < 0, TargetUpAxis.YUpCm ) ) ).ToArray() );
+			CompiledRigSourceSpace.FromEngineLocal( ModelGrounding.SourceLocal( bone.RestLocal, bone.ParentIndex < 0, offset ),
+				bone.ParentIndex < 0, TargetUpAxis.YUpCm ) ) ).ToArray() );
 		// Use the compiled destination's bind/facing, but keep the stock classification:
 		// its graph, IK and CopyPinky constraints still own the same helper channels.
 		spec.Rig = spec.Rig.WithBindPose( skeleton );

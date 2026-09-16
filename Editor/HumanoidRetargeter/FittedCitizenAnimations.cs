@@ -38,6 +38,10 @@ internal static class FittedCitizenAnimations
 		var model = Model.Load( captured.VmdlAsset.Path );
 		var source = TargetPickers.SkeletonFromModel( model );
 		var destination = TargetPickers.SkeletonFromModel( Model.Load( target.PreviewModelPath ) );
+		var offset = ModelGrounding.Offset( vmdl );
+		if ( offset != 0 ) destination = HumanoidRetargeter.Skeleton.Skeleton.Create( destination.Bones.Select( bone => new BoneDefinition(
+			bone.Name, bone.ParentIndex < 0 ? null : destination[bone.ParentIndex].Name,
+			ModelGrounding.SourceLocal( bone.RestLocal, bone.ParentIndex < 0, offset ) ) ).ToArray() );
 		var transfer = new FittedCitizenPose( source, destination );
 		var spec = StockAnimationReplacement.TargetSpec( referencePath, target.PreviewModelPath );
 		var sourceIndices = source.Bones.Select( b => model.Bones.GetBone( b.Name ).Index ).ToArray();

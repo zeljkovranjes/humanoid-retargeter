@@ -129,6 +129,7 @@ public static class CitizenAnimationSetup
         if (modifiers?.GetOrNull("children") is KvArray items)
         foreach (var modifier in items.Items.OfType<KvObject>())
         {
+            if (ModelGrounding.IsGrounding(modifier)) { _ = ModelGrounding.Offset(vmdl); continue; }
             if (modifier.GetString("_class") != "ModelModifier_ScaleAndMirror"
                 || modifier.Keys.Any(k => modifier[k] is KvBool b && b.Value))
                 throw new InvalidOperationException("Unsupported or mirrored model modifier; stock animations require retargeting.");

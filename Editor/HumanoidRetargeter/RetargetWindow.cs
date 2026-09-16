@@ -446,7 +446,7 @@ public sealed class RetargetWindow : Widget
 		try
 		{
 			var result = await CitizenAnimationModels.CreateAsync( target, NormalizedOutputFolder(), NormalizedOutputName(), _copyAnimGraph,
-				message => SetStatus( message, Theme.Blue ) );
+				message => SetStatus( message, Theme.Blue ), groundModel: true );
 			await EditorPipeline.SwitchToMainThread();
 			SetStatus( result.Compiled ? $"Citizen animation model ready: {result.VmdlAsset?.Path}"
 				: result.Errors.FirstOrDefault() ?? "The Citizen animation model did not compile.",
@@ -1016,7 +1016,16 @@ public sealed class RetargetWindow : Widget
 		}
 
 		// Heavy, engine-free math: off the main thread so the editor stays responsive.
-		var batch = await Task.Run( () => Retargeter.ConvertBatch( requests, target.Spec, options ) );
+		var conversionSpec = target.Spec;
+		if ( options.AugmentVmdlText is not null && ModelGrounding.Offset( options.AugmentVmdlText ) != 0 )
+		{
+			var destination = TargetPickers.FromModelAsset( AssetSystem.FindByPath( augmentVmdlPath ), out var error );
+			if ( !CitizenAnimationModels.TryDetect( destination, out var reference, out var reason ) )
+				throw new InvalidOperationException( error ?? reason );
+			// Compiled preview includes grounding; source clips must not bake that modifier a second time.
+			conversionSpec = StockAnimationReplacement.TargetSpec( reference, destination.PreviewModelPath );
+		}
+		var batch = await Task.Run( () => Retargeter.ConvertBatch( requests, conversionSpec, options ) );
 
 		// Task.Run continuations are not guaranteed to resume on the editor main thread;
 		// everything from here on may touch widgets/assets, so hop explicitly.

@@ -118,5 +118,6 @@ internal static class FittedCitizenAnimationGate
 		}
 		finally { stockScene.Delete(); scene.Delete(); world.Delete(); }
 		Log.Info( $"[hr-ui-smoke] Fitted Citizen: enabled button, retained bind, all {stock.AnimationCount} sequences, no stretched limbs and working editable graph." );
+		await ModelGroundingGate.RunAsync( result, folder, reference );
 	}
 }

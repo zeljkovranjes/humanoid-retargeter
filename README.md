@@ -24,6 +24,8 @@ For a custom model with a matching Citizen or Human Citizen armature, **Create C
 
 Complete fitted Citizen armatures also enable the green button. Clicking it retargets the stock animation sources to the custom bind pose, keeping the fitted rig settings and original sequence processing. Converted sources are saved under `<model name>_citizen_sources` in your output folder; exact stock armatures still use the faster direct-copy path.
 
+Models whose geometry starts below the floor are raised to ground level in the new Citizen animation model. This moves the mesh, skeleton and animations together; your original model files stay untouched.
+
 **Copy editable Citizen animgraph** saves the actual graph to `graphs/<model name>.vanmgrph` inside your output folder and connects it to the model. Turn it off to keep using the shipped graph.
 
 The complete stock animation definitions are retained, including nested blends, additive subtraction, events, timing and prefab dependencies—not just clip names. The setup also carries attachments, IK, pose parameters, bone masks, helper constraints and animation game data. Your custom mesh, materials and collision setup are preserved.
