@@ -77,6 +77,33 @@ public sealed class TargetRig
     /// </summary>
     public Vector3? TailWorldOf(int boneIndex) => _tailWorld?[boneIndex];
 
+    /// <summary>Uses an authoritative bind skeleton while retaining this rig's curated
+    /// roles, helper classes and constraint ownership. Additional bones keep rest channels.</summary>
+    public TargetRig WithBindPose(SkeletonModel skeleton)
+    {
+        ArgumentNullException.ThrowIfNull(skeleton);
+        var classes = new BoneClass[skeleton.Count];
+        var roles = new BoneRole?[skeleton.Count];
+        var byRole = new Dictionary<BoneRole, int>();
+        var tails = new Vector3?[skeleton.Count];
+        for (var i = 0; i < skeleton.Count; i++)
+        {
+            var old = Skeleton.IndexOf(skeleton[i].Name);
+            if (old < 0) continue;
+            classes[i] = _classes[old];
+            roles[i] = _roles[old];
+            if (roles[i] is { } role) byRole.Add(role, i);
+            if (TailWorldOf(old) is { } tail)
+            {
+                var relative = Vector3.Transform(tail - Skeleton.RestWorld[old].Pos, Quaternion.Inverse(Skeleton.RestWorld[old].Rot));
+                tails[i] = skeleton.RestWorld[i].Pos + Vector3.Transform(relative, skeleton.RestWorld[i].Rot);
+            }
+        }
+        foreach (var role in _boneByRole.Keys)
+            if (!byRole.ContainsKey(role)) throw new ArgumentException($"New bind skeleton is missing role {role}.", nameof(skeleton));
+        return new TargetRig(Name, skeleton, classes, roles, byRole, tails, HelpersAreConstraintDriven);
+    }
+
     /// <summary>Indices of all bones of the given class, in skeleton order.</summary>
     public IEnumerable<int> BonesOfClass(BoneClass boneClass)
     {

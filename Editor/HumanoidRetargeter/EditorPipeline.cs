@@ -1637,7 +1637,7 @@ public static class EditorPipeline
 	public static async Task<WriteResult> WriteAndCompileAsync(
 		RetargetBatchResult batch, string dmxFolderRelative, string augmentVmdlPath = null,
 		string standaloneVmdlName = "retargeted_animations", float compileTimeoutSeconds = 120f,
-		bool allowAnimationSetupOnly = false )
+		bool allowAnimationSetupOnly = false, IReadOnlyList<string> additionalAssetPaths = null )
 	{
 		var result = new WriteResult();
 		var assetsPath = Project.Current?.GetAssetsPath();
@@ -1730,6 +1730,9 @@ public static class EditorPipeline
 
 		foreach ( var dmxPath in dmxPaths )
 			Try( () => AssetSystem.RegisterFile( dmxPath ) );
+		if ( additionalAssetPaths is not null )
+			foreach ( var path in additionalAssetPaths )
+				Try( () => AssetSystem.RegisterFile( path ) );
 
 		result.VmdlAsset = AssetSystem.RegisterFile( result.VmdlPath );
 		if ( result.VmdlAsset is null )

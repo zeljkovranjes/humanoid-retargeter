@@ -139,7 +139,8 @@ public sealed class SourceFileEntry
 		{
 			entry.Bytes = File.ReadAllBytes( filePath );
 			ResolveSkeletonFile( entry, skeletonPath );
-			entry.Scene = Retargeter.ImportSource( entry.Bytes, filePath, skeletonData: entry.SkeletonBytes );
+			entry.Scene = Retargeter.ImportSource( entry.Bytes, filePath, skeletonData: entry.SkeletonBytes,
+				externalBufferResolver: uri => TargetPickers.ReadGltfDependency( filePath, uri ) );
 			entry.Signature = SkeletonSignature.Compute( entry.Scene.Skeleton );
 			for ( var i = 0; i < entry.Scene.Clips.Count; i++ )
 				entry.Takes.Add( new SourceTakeEntry( entry, i, entry.Scene.Clips[i].Name ) );
@@ -436,6 +437,15 @@ public sealed class SourceTakeEntry
 	/// it came from relegated to the row tooltip. Single-animation files keep the file name
 	/// (their take name is often exporter junk like <c>mixamo.com</c>).</summary>
 	public string DisplayName => File.Takes.Count > 1 ? TakeName : File.FileName;
+
+	internal Target.LocomotionSuggestion SuggestLocomotion()
+	{
+		// External definitions are sub-ranges of a timeline; do not infer their travel
+		// from the entire take. Their explicit names are still useful suggestions.
+		var clip = File.ClipDefinitions is null && TakeIndex < File.Scene.Clips.Count ? File.Scene.Clips[TakeIndex] : null;
+		var name = File.ClipDefinitions is not null ? TakeName : Path.GetFileNameWithoutExtension( DisplayName );
+		return Target.LocomotionSuggestion.Detect( name, File.Scene.Skeleton, File.Mapping, clip );
+	}
 
 	/// <summary>What the row shows: the take's conversion status when one ran, else the
 	/// file's mapping status.</summary>

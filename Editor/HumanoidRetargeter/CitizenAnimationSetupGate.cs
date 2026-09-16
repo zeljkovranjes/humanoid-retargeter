@@ -109,6 +109,7 @@ internal static class CitizenAnimationSetupGate
 				|| sourceModel.AnimationNames.Except( fileModel.AnimationNames ).Any() )
 				throw new Exception( "FBX model did not receive the complete Citizen animation setup." );
 			Log.Info( $"[hr-ui-smoke] Citizen FBX setup {name}: complete." );
+			await StockAnimationReplacementGate.RunAsync( target, folder, name, sourceModel );
 		}
 	}
 

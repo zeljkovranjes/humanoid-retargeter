@@ -308,7 +308,7 @@ public static class FootPlant
     /// stay until either exceeds 1.5× its threshold (hysteresis); drop intervals shorter than
     /// <see cref="FootPlantOptions.MinPlantFrames"/>.
     /// </summary>
-    private static List<FrameRange> DetectPlants(
+    internal static List<FrameRange> DetectPlants(
         Vector3[] ankle, Vector3 up, float ground, float fps, FootPlantOptions options)
     {
         int n = ankle.Length;
@@ -371,7 +371,7 @@ public static class FootPlant
     }
 
     /// <summary>Ground = 5th percentile of per-frame min(left, right) ankle heights along up.</summary>
-    private static float EstimateGround(Vector3[] ankleL, Vector3[] ankleR, Vector3 up)
+    internal static float EstimateGround(Vector3[] ankleL, Vector3[] ankleR, Vector3 up)
     {
         int n = ankleL.Length;
         var minHeights = new float[n];
@@ -408,7 +408,7 @@ public static class FootPlant
         return fallback.LengthSquared() > 1e-12f ? Vector3.Normalize(fallback) : Vector3.UnitX;
     }
 
-    private static Vector3[] AnkleWorldPositions(List<XForm[]> frames, SkeletonModel skeleton, int ankle)
+    internal static Vector3[] AnkleWorldPositions(List<XForm[]> frames, SkeletonModel skeleton, int ankle)
     {
         var positions = new Vector3[frames.Count];
         for (int i = 0; i < frames.Count; i++)

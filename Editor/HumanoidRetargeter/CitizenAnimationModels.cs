@@ -48,14 +48,48 @@ internal static class CitizenAnimationModels
 	}
 
 	internal static async Task<EditorPipeline.WriteResult> CreateAsync(
-		TargetPickers.ResolvedTarget target, string outputFolder, string outputName )
+		TargetPickers.ResolvedTarget target, string outputFolder, string outputName, bool copyAnimGraph = false )
 	{
 		await EditorPipeline.SwitchToMainThread();
 		if ( !TryDetect( target, out var referencePath, out var reason ) )
 			throw new InvalidOperationException( reason );
-		var destination = Path.Combine( Project.Current.GetAssetsPath(), outputFolder, outputName + ".vmdl" );
+		var destination = ProjectFile( outputFolder + "/" + outputName + ".vmdl" );
 		if ( File.Exists( destination ) )
 			throw new InvalidOperationException( "That output VMDL already exists. Choose a new name; existing models are not overwritten by this action." );
+		var vmdl = BuildModelText( target, referencePath, outputFolder );
+		string graphFile = null;
+		if ( copyAnimGraph )
+		{
+			var graphPath = StockAnimationGraph.GraphPath( outputFolder, outputName );
+			graphFile = ProjectFile( graphPath );
+			if ( File.Exists( graphFile ) )
+				throw new InvalidOperationException( "The copied animgraph already exists. Choose a new output name to preserve your edits." );
+			var graph = StockAnimationGraph.CopyForModel( ReadGraph( vmdl ), outputFolder + "/" + outputName + ".vmdl" );
+			Directory.CreateDirectory( Path.GetDirectoryName( graphFile ) );
+			File.WriteAllText( graphFile, graph );
+			vmdl = StockAnimationGraph.Attach( vmdl, graphPath );
+		}
+		var batch = new RetargetBatchResult { StandaloneVmdl = vmdl };
+		var result = await EditorPipeline.WriteAndCompileAsync( batch, outputFolder,
+			standaloneVmdlName: outputName, compileTimeoutSeconds: EditorPipeline.MeshCompileTimeoutSeconds,
+			allowAnimationSetupOnly: true, additionalAssetPaths: graphFile is null ? null : new[] { graphFile } );
+		await EditorPipeline.SwitchToMainThread();
+		VerifyGraph( result, StockAnimationGraph.GraphName( vmdl ) );
+		return result;
+	}
+
+	internal static void VerifyGraph( EditorPipeline.WriteResult result, string expectedPath )
+	{
+		if ( !result.Compiled ) return;
+		var graph = Model.Load( result.VmdlAsset.Path )?.AnimGraph;
+		if ( graph is not null && !graph.IsError && string.Equals( graph.Name, expectedPath, StringComparison.OrdinalIgnoreCase ) ) return;
+		result.Compiled = false;
+		result.Errors.Add( "The model compiled, but its animation graph did not load correctly: " + expectedPath );
+	}
+
+	internal static string BuildModelText( TargetPickers.ResolvedTarget target, string referencePath, string outputFolder )
+	{
+		var shipped = File.ReadAllText( AssetSystem.FindByPath( referencePath ).AbsolutePath );
 		string custom;
 		if ( target.ModelFilePath is not null )
 		{
@@ -66,12 +100,30 @@ internal static class CitizenAnimationModels
 				spec.DefaultRootBone, meshFilePath: spec.MeshFilePath, meshImportScale: spec.MeshImportScale,
 				materialRemaps: spec.MaterialRemaps, meshImportNames: spec.MeshImportNames );
 		}
-		else
+		else if ( target.CustomVmdlPath is not null )
 			custom = File.ReadAllText( target.CustomVmdlPath );
-		var shipped = File.ReadAllText( AssetSystem.FindByPath( referencePath ).AbsolutePath );
-		var batch = new RetargetBatchResult { StandaloneVmdl = CitizenAnimationSetup.Apply( custom, shipped ) };
-		return await EditorPipeline.WriteAndCompileAsync( batch, outputFolder,
-			standaloneVmdlName: outputName, compileTimeoutSeconds: EditorPipeline.MeshCompileTimeoutSeconds,
-			allowAnimationSetupOnly: true );
+		else
+			custom = shipped;
+		return CitizenAnimationSetup.Apply( custom, shipped );
+	}
+
+	internal static string ReadGraph( string vmdl )
+	{
+		var path = StockAnimationGraph.GraphName( vmdl );
+		if ( string.IsNullOrWhiteSpace( path ) ) throw new InvalidOperationException( "The model has no animation graph. Create its Citizen animation setup first." );
+		var local = ProjectFile( path );
+		var source = File.Exists( local ) ? local : AssetSystem.FindByPath( path )?.AbsolutePath;
+		if ( source is null || !File.Exists( source ) ) throw new InvalidOperationException( "Editable animgraph source is unavailable: " + path );
+		return File.ReadAllText( source );
+	}
+
+	internal static string ProjectFile( string relative )
+	{
+		var root = Path.GetFullPath( Project.Current?.GetAssetsPath() ?? throw new InvalidOperationException( "No project is open." ) )
+			.TrimEnd( Path.DirectorySeparatorChar ) + Path.DirectorySeparatorChar;
+		var path = Path.GetFullPath( Path.Combine( root, relative ) );
+		if ( !path.StartsWith( root, StringComparison.OrdinalIgnoreCase ) || EditorPipeline.IsUnderEngineInstall( path ) )
+			throw new InvalidOperationException( "Output must be inside your project's Assets folder, not the s&box installation." );
+		return path;
 	}
 }

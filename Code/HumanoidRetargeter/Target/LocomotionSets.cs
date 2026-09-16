@@ -318,22 +318,27 @@ public static class LocomotionSetDetector
             return null;
 
         var token = name[(separator + 1)..];
-        int? direction = token.ToLowerInvariant() switch
-        {
-            "n" or "forward" => N,
-            "ne" => NE,
-            "e" or "right" => E,
-            "se" => SE,
-            "s" or "backward" or "back" => S,
-            "sw" => SW,
-            "w" or "left" => W,
-            "nw" => NW,
-            _ => null,
-        };
+        var direction = DirectionIndex(token);
         if (direction is not { } d)
             return null;
         return (name[..separator], d);
     }
+
+    internal static string? CanonicalDirection(string token)
+        => DirectionIndex(token) is { } index ? DirectionTokens[index] : null;
+
+    private static int? DirectionIndex(string token) => token.ToLowerInvariant() switch
+        {
+            "n" or "north" or "forward" or "forwards" => N,
+            "ne" or "northeast" or "forwardright" => NE,
+            "e" or "east" or "right" => E,
+            "se" or "southeast" or "backwardright" or "backright" => SE,
+            "s" or "south" or "backward" or "backwards" or "back" => S,
+            "sw" or "southwest" or "backwardleft" or "backleft" => SW,
+            "w" or "west" or "left" => W,
+            "nw" or "northwest" or "forwardleft" => NW,
+            _ => null,
+        };
 
     /// <summary>Same collision auto-suffixing the batch applies to clip names
     /// (<c>name</c>, <c>name_2</c>, …); registers the result in <paramref name="usedNames"/>.</summary>

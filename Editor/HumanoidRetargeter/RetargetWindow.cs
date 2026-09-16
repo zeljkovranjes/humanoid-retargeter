@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using Editor;
 using HumanoidRetargeter.Cleanup;
 using HumanoidRetargeter.Mapping;
+using HumanoidRetargeter.Target;
 using Sandbox;
 
 namespace HumanoidRetargeter.Editor;
@@ -48,6 +49,8 @@ public sealed class RetargetWindow : Widget
 	bool _footstepEvents;
 	bool _mirroredVariants;
 	bool _additiveVariants;
+	bool _copyAnimGraph = true;
+	LineEdit _additiveReferenceEdit;
 	bool _detectLocomotionSets;
 	bool? _loopOverride;
 	Checkbox _locomotionCheckbox;
@@ -201,6 +204,10 @@ public sealed class RetargetWindow : Widget
 		var additive = col1.Add( new Checkbox( "Additive variants" ) { Value = _additiveVariants } );
 		additive.ToolTip = "Also emit an additive '<clip>_delta' sequence per clip (AnimSubtract) for animgraph layering.";
 		additive.Clicked = () => _additiveVariants = additive.Value;
+		var additiveRow = col1.AddRow();
+		additiveRow.Add( new Label( this ) { Text = "Additive reference frame:" } );
+		_additiveReferenceEdit = additiveRow.Add( new LineEdit( this ) { Text = "0", MaximumWidth = 55 } );
+		_additiveReferenceEdit.ToolTip = "Zero-based frame in the sampled output. Choose a neutral pose; additive variants carry no footstep events or motion extraction.";
 
 		// Smart-disabled toggle: RefreshLocomotionCheckbox (run on every list refresh) only
 		// enables it while the current take rows actually contain a complete directional
@@ -246,6 +253,9 @@ public sealed class RetargetWindow : Widget
 			{ Text = "retargeted_animations", MinimumWidth = 140 }, 1 );
 		_outputNameEdit.ToolTip = "Filename for New animation vmdl output. The .vmdl extension is optional; existing-vmdl mode ignores this field.";
 
+		var copyGraph = col2.Add( new Checkbox( "Copy editable Citizen animgraph" ) { Value = _copyAnimGraph } );
+		copyGraph.ToolTip = "Setup copies the actual Citizen graph to graphs/<model name>.vanmgrph beside the output model. Stock replacements always use a project-owned copy.";
+		copyGraph.Clicked = () => _copyAnimGraph = copyGraph.Value;
 		_citizenSetupButton = col2.Add( new Button( "Create Citizen animation model", "accessibility_new" ) );
 		_citizenSetupButton.Enabled = false;
 		_citizenSetupButton.Clicked = () => _ = CreateCitizenAnimationModelAsync();
@@ -435,7 +445,7 @@ public sealed class RetargetWindow : Widget
 		SetStatus( "Setting up all Citizen animations and the animation graph…", Theme.Blue );
 		try
 		{
-			var result = await CitizenAnimationModels.CreateAsync( target, NormalizedOutputFolder(), NormalizedOutputName() );
+			var result = await CitizenAnimationModels.CreateAsync( target, NormalizedOutputFolder(), NormalizedOutputName(), _copyAnimGraph );
 			await EditorPipeline.SwitchToMainThread();
 			SetStatus( result.Compiled ? $"Citizen animation model ready: {result.VmdlAsset?.Path}"
 				: result.Errors.FirstOrDefault() ?? "The Citizen animation model did not compile.",
@@ -892,10 +902,11 @@ public sealed class RetargetWindow : Widget
 	/// definitions through and ALWAYS set the row index — TakeIndex then addresses the
 	/// definition the row represents, and the facade slices the take to its frame range
 	/// (preview re-solves via this same request, so it previews the sliced range too).</summary>
-	HumanoidRetargeter.RetargetRequest BuildRequest( SourceTakeEntry take ) => new()
+	HumanoidRetargeter.RetargetRequest BuildRequest( SourceTakeEntry take, StockAnimationSlot slot = null ) => new()
 	{
 		SourceData = take.File.Bytes,
 		SourceFileName = take.File.FileName,
+		ExternalBufferResolver = uri => TargetPickers.ReadGltfDependency( take.File.FilePath, uri ),
 		SkeletonData = take.File.SkeletonBytes, // RenderWare companion .dff; null otherwise
 		SourceId = take.SourceId, // full path + take index: rows must join results unambiguously
 		ClipDefinitions = take.File.ClipDefinitions,
@@ -906,13 +917,15 @@ public sealed class RetargetWindow : Widget
 		Solver = take.File.UseDlSolver
 			? HumanoidRetargeter.SolverKind.DeepLearning
 			: HumanoidRetargeter.SolverKind.Geometric,
-		RootMotion = _rootMotion,
+		RootMotion = slot is null ? _rootMotion : RootMotionMode.InPlace,
 		FootPlantCleanup = _footPlant,
 		ArmEffectorIk = _armIk,
 		GenerateFootstepEvents = _footstepEvents,
-		CreateMirroredVariant = _mirroredVariants,
-		CreateAdditiveVariant = _additiveVariants,
-		LoopingOverride = _loopOverride,
+		CreateMirroredVariant = slot is null && _mirroredVariants,
+		CreateAdditiveVariant = slot is null && _additiveVariants,
+		AdditiveReferenceFrame = int.TryParse( _additiveReferenceEdit?.Text ?? "0", out var referenceFrame ) ? referenceFrame : -1,
+		LoopingOverride = slot?.Looping ?? _loopOverride,
+		ClipNameOverride = slot is null ? null : slot.ReplacementPrefix + Guid.NewGuid().ToString( "N" )[..8],
 		SampleFps = ParsePositive( _sampleFpsEdit ),
 		Solve = new HumanoidRetargeter.Solve.SolveOptions
 		{
@@ -1215,7 +1228,7 @@ public sealed class RetargetWindow : Widget
 		try
 		{
 			var outputFolder = NormalizedOutputFolder();
-			var requests = list.Select( BuildRequest ).ToList();
+			var requests = list.Select( take => BuildRequest( take ) ).ToList();
 			// Custom FBX target: convert its own embedded takes alongside the batch so the
 			// output model keeps the animations the FBX shipped with.
 			if ( !_augmentMode )
@@ -1550,6 +1563,50 @@ public sealed class RetargetWindow : Widget
 
 	// ============================================================================ row widget
 
+	void OpenStockReplacement( SourceTakeEntry take )
+	{
+		if ( _converting || _target is null ) return;
+		if ( _augmentMode && _augmentAsset is null ) { SetStatus( "Choose an existing output model first.", Theme.Yellow ); return; }
+		var path = _augmentMode ? _augmentAsset.Path : NormalizedOutputFolder() + "/" + NormalizedOutputName() + ".vmdl";
+		var dialog = new Dialog( this );
+		dialog.Window.WindowTitle = "Replace stock animation";
+		dialog.Window.MinimumWidth = 540;
+		dialog.Layout = Layout.Column();
+		dialog.Layout.Margin = 20;
+		dialog.Layout.Spacing = 12;
+		dialog.Layout.Add( new Label( dialog ) { Text = take.DisplayName + " → " + path, WordWrap = true } );
+		var suggestion = take.SuggestLocomotion();
+		StockAnimationSlot selected = suggestion is null ? null : StockAnimationGraph.Slots.FirstOrDefault( s => s.Id == suggestion.SlotId );
+		var combo = dialog.Layout.Add( new ComboBox( dialog ) );
+		var note = dialog.Layout.Add( new Label( dialog ) { WordWrap = true, Text = selected?.Warning ?? "Choose which stock animation to replace." } );
+		var apply = dialog.Layout.Add( new Button.Primary( "Retarget and replace" ) { Enabled = selected is not null } );
+		combo.AddItem( "Choose stock slot…", null, () => { selected = null; apply.Enabled = false; }, selected: selected is null );
+		foreach ( var slot in StockAnimationGraph.Slots )
+			combo.AddItem( slot.Label, null, () => { selected = slot; note.Text = slot.Warning; apply.Enabled = true; }, selected: slot == selected );
+		dialog.Layout.Add( new Label( dialog ) { WordWrap = true, Text =
+			(suggestion is null ? "No confident direction suggestion. " : $"Suggested from {suggestion.Basis}: {suggestion.Direction}. You can override this. ")
+			+ "Requires a compatible Citizen armature. Uses an editable project-owned graph copy and keeps stock helper/CopyPinky constraints. The clip is made in-place with the slot's loop setting; variants are not generated." } );
+		apply.Clicked = () => { var slot = selected; dialog.Close(); _ = ReplaceStockAsync( take, slot, path ); };
+		dialog.Show();
+	}
+
+	async Task ReplaceStockAsync( SourceTakeEntry take, StockAnimationSlot slot, string modelPath )
+	{
+		if ( _converting || slot is null ) return;
+		_converting = true;
+		RefreshStatus();
+		SetStatus( "Retargeting clip and updating the project animgraph…", Theme.Blue );
+		try
+		{
+			var result = await StockAnimationReplacement.ReplaceAsync( _target, BuildRequest( take, slot ), slot, modelPath );
+			await EditorPipeline.SwitchToMainThread();
+			SetStatus( result.Compiled ? $"Replaced {slot.Label}. Editable graph: {StockAnimationGraph.GraphPath( Path.GetDirectoryName( modelPath ).Replace( '\\', '/' ), Path.GetFileNameWithoutExtension( modelPath ) )}"
+				: string.Join( "\n", result.Errors ), result.Compiled ? Theme.Green : Theme.Red );
+		}
+		catch ( Exception e ) { await EditorPipeline.SwitchToMainThread(); SetStatus( e.Message, Theme.Red ); }
+		finally { _converting = false; RefreshCitizenSetupButton(); _convertButton.Enabled = _entries.Any( e => e.Scene is not null ); }
+	}
+
 	/// <summary>One take row (or a file-level row for unreadable files): status icon, label
 	/// ("file.fbx · TakeName" for multi-take files), profile chip (green/amber/red, file
 	/// level — the mapping is per file), and Mapping/Preview/Remove actions. Preview and
@@ -1619,6 +1676,12 @@ public sealed class RetargetWindow : Widget
 				var preview = Layout.Add( new Button( "Preview…", "preview" ) );
 				preview.ToolTip = "Solve and preview this take on the target before converting";
 				preview.Clicked = () => _window.OpenPreview( take );
+				var replace = Layout.Add( new Button( "Replace stock…", "swap_horiz" ) );
+				var suggestion = take.SuggestLocomotion();
+				replace.ToolTip = suggestion is null ? "Choose an Idle, Walk, Run or Jump slot in a copied Citizen graph."
+					: $"Suggested: {suggestion.Family} {suggestion.Direction} ({suggestion.Basis}). Click to review and confirm.";
+				if ( suggestion is not null ) name.Text += " · " + suggestion.Direction;
+				replace.Clicked = () => _window.OpenStockReplacement( take );
 			}
 
 			var remove = Layout.Add( new IconButton( "close" ) );

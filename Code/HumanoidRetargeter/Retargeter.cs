@@ -638,12 +638,14 @@ public static class Retargeter
         MappingReportInfo report, string sourceId,
         string clipName, List<XForm[]> frames, float fps, bool looping, bool isMirrored)
     {
+        if (request.CreateAdditiveVariant && (request.AdditiveReferenceFrame < 0 || request.AdditiveReferenceFrame >= frames.Count))
+            throw new ArgumentOutOfRangeException(nameof(request.AdditiveReferenceFrame), "Additive reference frame must be inside the sampled output clip.");
         var events = GenerateFootsteps(request, target, context, report, frames, fps);
         var dmxFileName = SanitizeFileName(clipName) + ".dmx";
         // Embedded-mesh vmdls and compiled Z-up targets compile root channels 90° about the declared
         // up axis away from the mesh bind; child channels are unaffected. Compensate the
         // serialized copy only so compiled playback matches the solved preview.
-        var dmxFrames = !string.IsNullOrEmpty(target.MeshFilePath) || target.UpAxis == TargetUpAxis.ZUpEngine
+        var dmxFrames = target.CompensateDmxRootYaw || !string.IsNullOrEmpty(target.MeshFilePath) || target.UpAxis == TargetUpAxis.ZUpEngine
             ? CompensateEmbeddedMeshRootYaw(frames, target.Rig, target.UpAxis)
             : frames;
         var dmx = DmxWriter.Write(
@@ -709,6 +711,9 @@ public static class Retargeter
         });
         if (deltaName is not null)
         {
+            AddNote(report, $"Additive '{deltaName}' subtracts output frame {request.AdditiveReferenceFrame}; "
+                + "check that this is the intended neutral pose. No events or motion extraction are added to the layer."
+                + (request.RootMotion == RootMotionMode.InPlace ? "" : " Authored root movement remains in the delta; use In place for a stationary layer."));
             // The shipped _delta sequences carry the AnimSubtract child and nothing else
             // (no motion extraction, no events) — an additive layer fires no footsteps and
             // extracting root motion from a delta makes no sense.
@@ -718,7 +723,7 @@ public static class Retargeter
                 SourceFilename = sourceFilename,
                 Looping = looping,
                 SubtractAnimName = clipName,
-                SubtractFrame = 0,
+                SubtractFrame = request.AdditiveReferenceFrame,
             });
         }
     }
@@ -742,9 +747,11 @@ public static class Retargeter
             AddNote(report, "Footstep events skipped: " + context.UpOrChainProblem);
             return Array.Empty<AnimEventEntry>();
         }
+        var options = ScaledPlantOptions(target);
+        options.MinPlantFrames = Math.Max(2, (int)MathF.Ceiling(fps * 0.1f));
         return FootstepEvents.Generate(
             frames, target.Rig.Skeleton, feet.Left, feet.Right, up, fps,
-            ScaledPlantOptions(target));
+            options);
     }
 
     /// <summary>Default plant thresholds are cm-tuned; engine-space rigs are in inches, so
@@ -1212,7 +1219,7 @@ public static class Retargeter
     /// re-serialize mutated frames with the same compensation the pipeline applies).</summary>
     public static List<XForm[]> TestHook_CompensateEmbeddedMeshRootYaw(
         IReadOnlyList<XForm[]> frames, RetargetTargetSpec target)
-        => !string.IsNullOrEmpty(target.MeshFilePath) || target.UpAxis == TargetUpAxis.ZUpEngine
+        => target.CompensateDmxRootYaw || !string.IsNullOrEmpty(target.MeshFilePath) || target.UpAxis == TargetUpAxis.ZUpEngine
             ? CompensateEmbeddedMeshRootYaw(frames, target.Rig, target.UpAxis)
             : frames.ToList();
 

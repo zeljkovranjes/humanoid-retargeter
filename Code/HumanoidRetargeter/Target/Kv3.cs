@@ -507,6 +507,7 @@ public static class Kv3
                 {
                     '"' => '"',
                     '\'' => '\'',
+                    '?' => '?', // escaped question marks occur in shipped animgraph notes
                     '\\' => '\\',
                     'n' => '\n',
                     't' => '\t',

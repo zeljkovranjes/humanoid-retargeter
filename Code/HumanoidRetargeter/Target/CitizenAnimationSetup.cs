@@ -61,28 +61,13 @@ public static class CitizenAnimationSetup
             throw new InvalidOperationException("The custom model already uses a different animation graph.");
         var children = (KvArray)root["children"];
         var shippedChildren = (KvArray)shipped["children"];
-        // Stock animation sources are in cm. A differently scaled VMDL would stretch the mesh.
-        double Scale(KvArray nodes)
-        {
-            var modifiers = nodes.Items.OfType<KvObject>().FirstOrDefault(n => n.GetString("_class") == "ModelModifierList");
-            if (modifiers?.GetOrNull("children") is not KvArray items) return 1;
-            var scale = 1.0;
-            foreach (var modifier in items.Items.OfType<KvObject>())
-            {
-                if (modifier.GetString("_class") != "ModelModifier_ScaleAndMirror")
-                    throw new InvalidOperationException("Unsupported model modifier for stock Citizen animations.");
-                if (modifier.Keys.Any(k => modifier[k] is KvBool b && b.Value))
-                    throw new InvalidOperationException("Mirrored models require animation retargeting.");
-                scale *= modifier["scale"] is KvDouble d ? d.Value : ((KvLong)modifier["scale"]).Value;
-            }
-            return scale;
-        }
-        if (Math.Abs(Scale(children) - Scale(shippedChildren)) > 0.000001)
-            throw new InvalidOperationException("The custom VMDL must use the Citizen source scale. Import its source mesh instead.");
+        ValidateSourceScale(customVmdl);
         foreach (var category in Categories)
         {
             var source = shippedChildren.Items.OfType<KvObject>().SingleOrDefault(n => n.GetString("_class") == category);
             if (source is null) continue;
+            var existing = children.Items.OfType<KvObject>().SingleOrDefault(n => n.GetString("_class") == category);
+            var matchesStock = existing is not null && KvValue.DeepEquals(existing, source);
             if (category == "AnimConstraintList" && source.GetOrNull("children") is KvArray stockConstraints
                 && stockConstraints.Items.OfType<KvObject>().Any(n => n.GetString("name") == "CopyPinky"))
             {
@@ -95,11 +80,10 @@ public static class CitizenAnimationSetup
                 });
                 source["children"] = constraints;
             }
-            var existing = children.Items.OfType<KvObject>().SingleOrDefault(n => n.GetString("_class") == category);
             if (existing is not null)
             {
                 if (KvValue.DeepEquals(existing, source)) continue;
-                if (existing.GetOrNull("children") is KvArray entries && entries.Items.Count > 0)
+                if (!matchesStock && existing.GetOrNull("children") is KvArray entries && entries.Items.Count > 0)
                     throw new InvalidOperationException($"The custom model already has {category} settings. Use its source mesh to create a new Citizen-ready model.");
                 children.Items.Remove(existing);
             }
@@ -108,5 +92,26 @@ public static class CitizenAnimationSetup
         }
         root["anim_graph_name"] = new KvString(graph);
         return Kv3.Serialize(document);
+    }
+
+    /// <summary>Stock Citizen animation sources use centimeters, even when the compiled rig uses inches.</summary>
+    public static void ValidateSourceScale(string vmdl)
+    {
+        var root = (KvObject)((KvObject)Kv3.Parse(vmdl).Root)["rootNode"];
+        if (!string.IsNullOrEmpty(root.GetString("base_model_name")))
+            throw new InvalidOperationException("Use a standalone model, not an animation-only Base Model.");
+        var children = (KvArray)root["children"];
+        var modifiers = children.Items.OfType<KvObject>().SingleOrDefault(n => n.GetString("_class") == "ModelModifierList");
+        var scale = 1.0;
+        if (modifiers?.GetOrNull("children") is KvArray items)
+        foreach (var modifier in items.Items.OfType<KvObject>())
+        {
+            if (modifier.GetString("_class") != "ModelModifier_ScaleAndMirror"
+                || modifier.Keys.Any(k => modifier[k] is KvBool b && b.Value))
+                throw new InvalidOperationException("Unsupported or mirrored model modifier; stock animations require retargeting.");
+            scale *= modifier["scale"] is KvDouble d ? d.Value : ((KvLong)modifier["scale"]).Value;
+        }
+        if (!double.IsFinite(scale) || Math.Abs(scale - 0.3937) > 0.000001)
+            throw new InvalidOperationException("The custom VMDL must use the Citizen source scale. Import its source mesh instead.");
     }
 }

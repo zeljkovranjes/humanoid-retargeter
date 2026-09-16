@@ -149,9 +149,9 @@ public sealed class RetargetRequest
 
     /// <summary>
     /// Generate <c>AE_FOOTSTEP</c> AnimEvent nodes on each produced clip's vmdl AnimFile
-    /// entry (default OFF). After solving and cleanup, foot-plant intervals are detected on
-    /// the SOLVED target clip (<see cref="Cleanup.FootPlant.DetectPlantIntervals"/>); each
-    /// plant's start frame is a touchdown and becomes one footstep event, in the exact node
+    /// entry (default OFF). After solving and cleanup, settled contacts following foot
+    /// lifts are detected on the SOLVED target clip, including in-place locomotion. Each
+    /// touchdown becomes one footstep event, in the exact node
     /// shape the shipped citizen data uses (see <see cref="Target.FootstepEvents"/>).
     /// Skipped (with a report note) when the target rig lacks complete leg chains.
     /// </summary>
@@ -171,13 +171,17 @@ public sealed class RetargetRequest
     /// generated/augmented vmdl (default OFF), named <c>&lt;clip&gt;_delta</c> (the shipped
     /// citizen naming; collision-suffixed across the batch as usual). The twin is a second
     /// AnimFile entry REUSING the clip's DMX with an <c>AnimSubtract</c> child
-    /// (<c>anim_name</c> = the base sequence, <c>frame</c> = 0) — exactly the shipped
+    /// (<c>anim_name</c> = the base sequence, <c>frame</c> = <see cref="AdditiveReferenceFrame"/>) — the shipped
     /// <c>IdleLayer_01</c>/<c>IdleLayer_01_delta</c> pattern, where resourcecompiler
     /// subtracts the reference frame at compile time (no frame math happens here). The
     /// resulting <c>_delta</c> sequence is what s&amp;box layered animation additively
     /// blends on top of a base pose.
     /// </summary>
     public bool CreateAdditiveVariant { get; init; }
+
+    /// <summary>Reference pose in the sampled output clip (zero-based). Defaults to its
+    /// first frame; choose a neutral pose for the intended additive layer.</summary>
+    public int AdditiveReferenceFrame { get; init; }
 
     /// <summary>Output clip name override; with multiple takes an index suffix is appended.
     /// Null = the source take name.</summary>
@@ -254,6 +258,10 @@ public sealed class RetargetTargetSpec
     /// folder is known. Empty (default) = no mesh node.
     /// </summary>
     public string MeshFilePath { get; set; } = "";
+
+    /// <summary>Apply the standalone ModelDoc mesh-import root-axis correction even
+    /// when its mesh comes from a prefab and has no explicit <see cref="MeshFilePath"/>.</summary>
+    public bool CompensateDmxRootYaw { get; set; }
 
     /// <summary>
     /// Import scale of <see cref="MeshFilePath"/> (raw mesh-file units → the target

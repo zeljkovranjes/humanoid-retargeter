@@ -13,7 +13,7 @@ using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global
 
 /// <summary>
 /// Generates <c>AE_FOOTSTEP</c> <see cref="AnimEventEntry"/> lists from foot-plant detection
-/// on a solved TARGET clip: each detected plant interval's START frame is the touchdown
+/// on a solved TARGET clip: each settled contact after a lift is the touchdown
 /// moment, so it becomes one footstep event for that foot.
 /// </summary>
 /// <remarks>
@@ -38,10 +38,11 @@ public static class FootstepEvents
     public const double FootstepVolume = 0.7;
 
     /// <summary>
-    /// Detects plant intervals on <paramref name="frames"/> (via
-    /// <see cref="FootPlant.DetectPlantIntervals"/>) and returns one <c>AE_FOOTSTEP</c> event
-    /// per plant START (frame-0 plants skipped, see class remarks), merged across both feet
-    /// in frame order.
+    /// Detects vertical settling near the ground after a foot lift and returns one
+    /// <c>AE_FOOTSTEP</c> per contact (frame-0 contacts skipped), merged in frame order.
+    /// Horizontal sliding is allowed for in-place locomotion; cleanup still uses its
+    /// stricter world-speed detector. Without explicit options, minimum contact duration
+    /// scales with sample rate (0.1 seconds).
     /// </summary>
     /// <param name="frames">Solved per-frame local transforms (target skeleton bone order).</param>
     /// <param name="skeleton">Target skeleton the frames are expressed against.</param>
@@ -65,18 +66,47 @@ public static class FootstepEvents
         ArgumentNullException.ThrowIfNull(left);
         ArgumentNullException.ThrowIfNull(right);
 
-        var (plantsL, plantsR) = FootPlant.DetectPlantIntervals(
-            frames, skeleton, left, right, up, fps, options);
-
         var events = new List<AnimEventEntry>();
-        AddFoot(events, plantsL, attachment: "foot_L", foot: "0");
-        AddFoot(events, plantsR, attachment: "foot_R", foot: "1");
+        if (frames.Count < 2 || !float.IsFinite(fps) || fps <= 0 || !float.IsFinite(up.LengthSquared()) || up.LengthSquared() < 1e-12f)
+            return events;
+        up = Vector3.Normalize(up);
+        options ??= new FootPlantOptions
+        {
+            // Same minimum contact time at every sample rate (three frames at 30 Hz).
+            MinPlantFrames = Math.Max(2, (int)MathF.Ceiling(fps * 0.1f)),
+        };
+        var ankleL = FootPlant.AnkleWorldPositions(frames, skeleton, left.Ankle);
+        var ankleR = FootPlant.AnkleWorldPositions(frames, skeleton, right.Ankle);
+        var ground = FootPlant.EstimateGround(ankleL, ankleR, up);
+        AddFoot(events, Contacts(ankleL, up, ground, fps, options), attachment: "foot_L", foot: "0");
+        AddFoot(events, Contacts(ankleR, up, ground, fps, options), attachment: "foot_R", foot: "1");
         // Stable frame ordering across both feet (List.Sort is unstable; the comparer breaks
         // frame ties on the side key so the result is deterministic).
         events.Sort((a, b) => a.Frame != b.Frame
             ? a.Frame.CompareTo(b.Frame)
             : string.CompareOrdinal(a.Foot, b.Foot));
         return events;
+    }
+
+    // A planted foot slides horizontally in an in-place clip. Detect vertical settling
+    // near the floor instead, but require a real lift before another touchdown. This
+    // also prevents horizontal speed jitter from generating repeated step sounds.
+    private static List<FrameRange> Contacts(Vector3[] ankle, Vector3 up, float ground, float fps, FootPlantOptions options)
+    {
+        var heights = new Vector3[ankle.Length];
+        for (var i = 0; i < ankle.Length; i++) heights[i] = up * Vector3.Dot(ankle[i], up);
+        var candidates = FootPlant.DetectPlants(heights, up, ground, fps, options);
+        var contacts = new List<FrameRange>();
+        var previousEnd = 0;
+        foreach (var candidate in candidates)
+        {
+            var lifted = false;
+            for (var i = previousEnd; i < candidate.Start; i++)
+                lifted |= Vector3.Dot(ankle[i], up) - ground >= options.HeightThresholdCm * 1.5f;
+            if (lifted) contacts.Add(candidate);
+            previousEnd = candidate.End;
+        }
+        return contacts;
     }
 
     private static void AddFoot(
