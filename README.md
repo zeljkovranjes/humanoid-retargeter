@@ -20,6 +20,8 @@ Keep only one copy of the library installed.
 5. Choose an output folder and filename, or select an existing VMDL.
 6. Click **Convert All** and use the compiled sequences in your model or animgraph.
 
+For a custom model with a matching Citizen or Human Citizen armature, **Create Citizen animation model** includes all stock animations and sets up the matching animgraph, IK and helper constraints. No animation files are needed. The button stays disabled until the compiled skeleton passes compatibility checks. Choose an unused output name; this action never overwrites an existing VMDL. Human Citizen keeps `CopyPinky` enabled for the stock animations, so pinkies follow ring fingers, including in subsequently added clips.
+
 Custom models need a rig and skin weights. Automatic mapping is not perfect; check the
 preview before exporting. Facial and morph animations are not transferred. Use FBX 7.x,
 and keep external model textures and glTF buffers alongside their model.

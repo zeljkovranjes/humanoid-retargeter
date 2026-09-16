@@ -60,6 +60,9 @@ public static class TargetPickers
 		/// mesh — without it the vmdl compiles into an empty model that plays nothing.</summary>
 		public string ModelFilePath { get; set; }
 
+		/// <summary>Source VMDL for a custom compiled-model pick (never the built-in targets).</summary>
+		public string CustomVmdlPath { get; set; }
+
 		/// <summary>The importer's source-unit→cm factor for
 		/// <see cref="ModelFilePath"/> (resourcecompiler reads raw values, so this
 		/// becomes the RenderMeshFile <c>import_scale</c>).</summary>
@@ -239,6 +242,7 @@ public static class TargetPickers
 				DlWeights = DlAssets.TryLoadWeights(),
 			},
 			Description = $"Custom model: {asset.Name}",
+			CustomVmdlPath = asset.AbsolutePath,
 			PreviewModelPath = asset.Path,
 			PreviewPositionScale = 1.0f,
 		};
@@ -544,7 +548,7 @@ public static class TargetPickers
 	/// mesh" class; near-root bones like the pelvis stay coincidentally correct, which is
 	/// why position asserts on the pelvis alone never caught it). Convert to the
 	/// parent-relative locals <see cref="SkeletonModel.Create"/> expects.</summary>
-	static SkeletonModel SkeletonFromModel( Model model )
+	internal static SkeletonModel SkeletonFromModel( Model model )
 	{
 		static XForm ToXForm( Transform transform ) => new(
 			new System.Numerics.Vector3( transform.Position.x, transform.Position.y, transform.Position.z ),

@@ -123,6 +123,7 @@ public static class UiSmokeGate
 			&& Result.windowConstructed && Result.optionsPlumbingOk
 			&& Result.locomotionSmartDisableOk
 			&& Result.dlSolverOk && Result.citizenTargetOk
+			&& Result.citizenAnimationSetupOk
 			&& (!Result.augmentMode || Result.augmentOk)
 			&& (!Result.customMode || Result.customOk);
 		Flush();
@@ -627,6 +628,10 @@ public static class UiSmokeGate
 		Note( $"modelLoads={Result.modelLoads} bones={Result.boneCount} anims={Result.animationCount} "
 			+ $"names=[{string.Join( ", ", Result.animationNames )}] sequenceVisible={Result.sequenceVisible} "
 			+ $"additiveSequenceVisible={Result.additiveSequenceVisible}" );
+		Flush();
+
+		await CitizenAnimationSetupGate.RunAsync();
+		Result.citizenAnimationSetupOk = true;
 		Flush();
 
 		// ---- 8.5 custom-target repro (HR_UI_SMOKE_CUSTOM) ------------------------
@@ -1875,6 +1880,7 @@ public static class UiSmokeGate
 		public bool userPresetRoundTrip { get; set; }
 		public bool dlSolverOk { get; set; }
 		public bool citizenTargetOk { get; set; }
+		public bool citizenAnimationSetupOk { get; set; }
 		public int dmxFilesWritten { get; set; }
 		public string vmdlPath { get; set; }
 		public bool assetRegistered { get; set; }

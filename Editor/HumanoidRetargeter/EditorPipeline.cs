@@ -1636,7 +1636,8 @@ public static class EditorPipeline
 	/// </summary>
 	public static async Task<WriteResult> WriteAndCompileAsync(
 		RetargetBatchResult batch, string dmxFolderRelative, string augmentVmdlPath = null,
-		string standaloneVmdlName = "retargeted_animations", float compileTimeoutSeconds = 120f )
+		string standaloneVmdlName = "retargeted_animations", float compileTimeoutSeconds = 120f,
+		bool allowAnimationSetupOnly = false )
 	{
 		var result = new WriteResult();
 		var assetsPath = Project.Current?.GetAssetsPath();
@@ -1670,7 +1671,7 @@ public static class EditorPipeline
 		var settleDelayMs = installResident ? DefensiveInputSettleDelayMs : InputSettleDelayMs;
 
 		var successful = batch.Clips.Where( c => c.Success ).ToList();
-		if ( successful.Count == 0 )
+		if ( successful.Count == 0 && !allowAnimationSetupOnly )
 		{
 			result.Errors.Add( "No clip converted successfully - nothing written." );
 			return result;

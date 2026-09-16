@@ -608,6 +608,10 @@ public static class VmdlAugmenter
     /// </summary>
     private static void NeutralizePinky(KvObject node)
     {
+        // Stock Citizen clips have no pinky tracks. Disabling their CopyPinky globally
+        // when adding one custom clip would break every stock hand pose.
+        if (node.GetString("name") == CitizenAnimationSetup.ConstraintFolder)
+            return;
         var cls = node.GetString("_class") ?? "";
 
         var isCopyPinkyFolder = cls == "Folder"

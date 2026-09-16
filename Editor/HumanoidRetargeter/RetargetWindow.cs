@@ -64,6 +64,7 @@ public sealed class RetargetWindow : Widget
 	// UI
 	Layout _listLayout;
 	Button _convertButton;
+	Button _citizenSetupButton;
 	Button _pickAugmentButton;
 	Label _statusLabel;
 	Widget _progressBar;
@@ -245,6 +246,10 @@ public sealed class RetargetWindow : Widget
 			{ Text = "retargeted_animations", MinimumWidth = 140 }, 1 );
 		_outputNameEdit.ToolTip = "Filename for New animation vmdl output. The .vmdl extension is optional; existing-vmdl mode ignores this field.";
 
+		_citizenSetupButton = col2.Add( new Button( "Create Citizen animation model", "accessibility_new" ) );
+		_citizenSetupButton.Enabled = false;
+		_citizenSetupButton.Clicked = () => _ = CreateCitizenAnimationModelAsync();
+
 		col2.AddStretchCell();
 
 		// -- column 3: numeric tunables ------------------------------------------------------
@@ -389,6 +394,7 @@ public sealed class RetargetWindow : Widget
 			}
 
 			_targetError = error ?? "Target rejected.";
+			RefreshCitizenSetupButton();
 			SetStatus( _targetError, Theme.Red );
 			return;
 		}
@@ -420,6 +426,44 @@ public sealed class RetargetWindow : Widget
 	/// rebuilds the rig from the compiled model (the engine-authoritative skeleton).</summary>
 	Task _fbxPreviewTask;
 
+	async Task CreateCitizenAnimationModelAsync()
+	{
+		if ( _converting || _augmentMode ) return;
+		var target = _target;
+		_converting = true;
+		RefreshStatus();
+		SetStatus( "Setting up all Citizen animations and the animation graph…", Theme.Blue );
+		try
+		{
+			var result = await CitizenAnimationModels.CreateAsync( target, NormalizedOutputFolder(), NormalizedOutputName() );
+			await EditorPipeline.SwitchToMainThread();
+			SetStatus( result.Compiled ? $"Citizen animation model ready: {result.VmdlAsset?.Path}"
+				: result.Errors.FirstOrDefault() ?? "The Citizen animation model did not compile.",
+				result.Compiled ? Theme.Green : Theme.Red );
+			MainAssetBrowser.Instance?.Local?.UpdateAssetList();
+		}
+		catch ( Exception e )
+		{
+			await EditorPipeline.SwitchToMainThread();
+			SetStatus( e.Message, Theme.Red );
+		}
+		finally
+		{
+			_converting = false;
+			RefreshCitizenSetupButton();
+			_convertButton.Enabled = _entries.Any( e => e.Scene is not null );
+		}
+	}
+
+	void RefreshCitizenSetupButton()
+	{
+		if ( !_citizenSetupButton.IsValid() ) return;
+		var detected = CitizenAnimationModels.TryDetect( _target, out _, out var reason );
+		_citizenSetupButton.Enabled = detected && !_converting && !_augmentMode && _targetError is null;
+		_citizenSetupButton.ToolTip = _augmentMode ? "Choose New animation vmdl to create a Citizen-ready custom model."
+			: reason + (detected ? " Includes all stock animations, the animgraph, IK and helper constraints. No animation files required." : "");
+	}
+
 	async Task CompileFbxTargetPreviewAsync( TargetPickers.ResolvedTarget resolved )
 	{
 		SetStatus( $"Target: {resolved.Description}   ·   compiling its preview model…", Theme.Blue );
@@ -427,6 +471,7 @@ public sealed class RetargetWindow : Widget
 		await EditorPipeline.SwitchToMainThread();
 		if ( !ReferenceEquals( _target, resolved ) )
 			return; // user picked something else meanwhile
+		RefreshCitizenSetupButton();
 		if ( ok )
 			RefreshStatus();
 		else
@@ -1485,6 +1530,7 @@ public sealed class RetargetWindow : Widget
 
 	void RefreshStatus()
 	{
+		RefreshCitizenSetupButton();
 		if ( _convertButton.IsValid() )
 			_convertButton.Enabled = !_converting && _entries.Any( e => e.Scene is not null );
 

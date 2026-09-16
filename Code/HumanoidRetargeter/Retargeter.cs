@@ -177,6 +177,8 @@ public static class Retargeter
             try
             {
                 var removedSequences = new List<string>();
+                if (mappedPinky && options.AugmentVmdlText.Contains(CitizenAnimationSetup.ConstraintFolder, StringComparison.Ordinal))
+                    result.Warnings.Add("Citizen stock animations require CopyPinky: pinkies will continue following ring fingers, including in added clips. Use a separate model for independent pinky animation.");
                 result.AugmentedVmdl = VmdlAugmenter.Augment(
                     options.AugmentVmdlText, entries, out _,
                     new AugmentOptions
