@@ -445,7 +445,8 @@ public sealed class RetargetWindow : Widget
 		SetStatus( "Setting up all Citizen animations and the animation graph…", Theme.Blue );
 		try
 		{
-			var result = await CitizenAnimationModels.CreateAsync( target, NormalizedOutputFolder(), NormalizedOutputName(), _copyAnimGraph );
+			var result = await CitizenAnimationModels.CreateAsync( target, NormalizedOutputFolder(), NormalizedOutputName(), _copyAnimGraph,
+				message => SetStatus( message, Theme.Blue ) );
 			await EditorPipeline.SwitchToMainThread();
 			SetStatus( result.Compiled ? $"Citizen animation model ready: {result.VmdlAsset?.Path}"
 				: result.Errors.FirstOrDefault() ?? "The Citizen animation model did not compile.",
@@ -470,6 +471,7 @@ public sealed class RetargetWindow : Widget
 		if ( !_citizenSetupButton.IsValid() ) return;
 		var detected = CitizenAnimationModels.TryDetect( _target, out _, out var reason );
 		_citizenSetupButton.Enabled = detected && !_converting && !_augmentMode && _targetError is null;
+		_citizenSetupButton.SetStyles( _citizenSetupButton.Enabled ? $"color: {Theme.Green.Hex};" : "" );
 		_citizenSetupButton.ToolTip = _augmentMode ? "Choose New animation vmdl to create a Citizen-ready custom model."
 			: reason + (detected ? " Includes all stock animations, the animgraph, IK and helper constraints. No animation files required." : "");
 	}

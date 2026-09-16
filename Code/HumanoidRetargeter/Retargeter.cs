@@ -645,9 +645,7 @@ public static class Retargeter
         // Embedded-mesh vmdls and compiled Z-up targets compile root channels 90° about the declared
         // up axis away from the mesh bind; child channels are unaffected. Compensate the
         // serialized copy only so compiled playback matches the solved preview.
-        var dmxFrames = target.CompensateDmxRootYaw || !string.IsNullOrEmpty(target.MeshFilePath) || target.UpAxis == TargetUpAxis.ZUpEngine
-            ? CompensateEmbeddedMeshRootYaw(frames, target.Rig, target.UpAxis)
-            : frames;
+        var dmxFrames = PrepareDmxFrames(frames, target);
         var dmx = DmxWriter.Write(
             target.Rig.Skeleton, new Clip(clipName, fps, looping, dmxFrames), new DmxWriteOptions
             {
@@ -1219,6 +1217,10 @@ public static class Retargeter
     /// re-serialize mutated frames with the same compensation the pipeline applies).</summary>
     public static List<XForm[]> TestHook_CompensateEmbeddedMeshRootYaw(
         IReadOnlyList<XForm[]> frames, RetargetTargetSpec target)
+        => PrepareDmxFrames(frames, target);
+
+    /// <summary>Returns an export copy with the compiler's root-axis conversion compensated.</summary>
+    public static List<XForm[]> PrepareDmxFrames(IReadOnlyList<XForm[]> frames, RetargetTargetSpec target)
         => target.CompensateDmxRootYaw || !string.IsNullOrEmpty(target.MeshFilePath) || target.UpAxis == TargetUpAxis.ZUpEngine
             ? CompensateEmbeddedMeshRootYaw(frames, target.Rig, target.UpAxis)
             : frames.ToList();

@@ -28,6 +28,8 @@ internal static class StockAnimationReplacement
 			resolved = TargetPickers.FromModelAsset( AssetSystem.FindByPath( resolved.PreviewModelPath ), out _ );
 		if ( !CitizenAnimationModels.TryDetect( resolved, out var referencePath, out var reason ) )
 			throw new InvalidOperationException( reason );
+		if ( original is null && CitizenAnimationModels.RequiresRetargeting( resolved, referencePath ) )
+			throw new InvalidOperationException( "Create the Citizen animation model first so its complete stock library is retargeted to this fitted armature." );
 		var vmdl = original ?? CitizenAnimationModels.BuildModelText( target, referencePath, folder );
 		CitizenAnimationSetup.ValidateSourceScale( vmdl );
 		var graphPath = StockAnimationGraph.GraphPath( folder, name );

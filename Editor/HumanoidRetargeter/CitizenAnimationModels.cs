@@ -2,6 +2,7 @@
 
 using System;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using Editor;
 using HumanoidRetargeter.Target;
@@ -33,12 +34,15 @@ internal static class CitizenAnimationModels
 			{
 				var reference = Model.Load( path );
 				if ( reference is null || reference.IsError ) continue;
-				var error = CitizenAnimationSetup.CompatibilityError( skeleton, TargetPickers.SkeletonFromModel( reference ) );
+				var referenceSkeleton = TargetPickers.SkeletonFromModel( reference );
+				var error = CitizenAnimationSetup.HierarchyError( skeleton, referenceSkeleton );
 				if ( error is not null ) { errors.Add( $"{Path.GetFileNameWithoutExtension( path )}: {error}" ); continue; }
 				var asset = AssetSystem.FindByPath( path );
 				if ( asset is null || !File.Exists( asset.AbsolutePath ) ) continue;
 				referencePath = path;
 				reason = path == RetargetTargetSpec.SboxCitizenPath ? "Classic Citizen armature detected." : "Human Citizen armature detected.";
+				if ( CitizenAnimationSetup.CompatibilityError( skeleton, referenceSkeleton ) is not null )
+					reason += " Fitted bind pose: stock animations will be retargeted when you click Create.";
 				return true;
 			}
 			reason = errors.Count > 0 ? string.Join( "\n", errors ) : "The shipped Citizen model sources are unavailable.";
@@ -48,7 +52,7 @@ internal static class CitizenAnimationModels
 	}
 
 	internal static async Task<EditorPipeline.WriteResult> CreateAsync(
-		TargetPickers.ResolvedTarget target, string outputFolder, string outputName, bool copyAnimGraph = false )
+		TargetPickers.ResolvedTarget target, string outputFolder, string outputName, bool copyAnimGraph = false, Action<string> progress = null )
 	{
 		await EditorPipeline.SwitchToMainThread();
 		if ( !TryDetect( target, out var referencePath, out var reason ) )
@@ -56,25 +60,46 @@ internal static class CitizenAnimationModels
 		var destination = ProjectFile( outputFolder + "/" + outputName + ".vmdl" );
 		if ( File.Exists( destination ) )
 			throw new InvalidOperationException( "That output VMDL already exists. Choose a new name; existing models are not overwritten by this action." );
-		var vmdl = BuildModelText( target, referencePath, outputFolder );
+		var fitted = RequiresRetargeting( target, referencePath );
+		var vmdl = BuildModelText( target, referencePath, outputFolder, fitted );
+		var additionalFiles = new System.Collections.Generic.List<string>();
 		string graphFile = null;
+		string graph = null;
+		var graphPath = StockAnimationGraph.GraphPath( outputFolder, outputName );
 		if ( copyAnimGraph )
 		{
-			var graphPath = StockAnimationGraph.GraphPath( outputFolder, outputName );
 			graphFile = ProjectFile( graphPath );
 			if ( File.Exists( graphFile ) )
 				throw new InvalidOperationException( "The copied animgraph already exists. Choose a new output name to preserve your edits." );
-			var graph = StockAnimationGraph.CopyForModel( ReadGraph( vmdl ), outputFolder + "/" + outputName + ".vmdl" );
+			graph = StockAnimationGraph.CopyForModel( ReadGraph( vmdl ), outputFolder + "/" + outputName + ".vmdl" );
+		}
+		// All collision checks precede the more expensive fitted conversion.
+		if ( fitted )
+			(vmdl, additionalFiles) = await FittedCitizenAnimations.ConvertAsync( target, referencePath, vmdl,
+				outputFolder + "/" + outputName + "_citizen_sources", progress );
+		if ( graphFile is not null )
+		{
 			Directory.CreateDirectory( Path.GetDirectoryName( graphFile ) );
 			File.WriteAllText( graphFile, graph );
+			additionalFiles.Add( graphFile );
 			vmdl = StockAnimationGraph.Attach( vmdl, graphPath );
 		}
+		progress?.Invoke( "Compiling the Citizen animation model and graph…" );
 		var batch = new RetargetBatchResult { StandaloneVmdl = vmdl };
 		var result = await EditorPipeline.WriteAndCompileAsync( batch, outputFolder,
 			standaloneVmdlName: outputName, compileTimeoutSeconds: EditorPipeline.MeshCompileTimeoutSeconds,
-			allowAnimationSetupOnly: true, additionalAssetPaths: graphFile is null ? null : new[] { graphFile } );
+			allowAnimationSetupOnly: true, additionalAssetPaths: additionalFiles );
 		await EditorPipeline.SwitchToMainThread();
 		VerifyGraph( result, StockAnimationGraph.GraphName( vmdl ) );
+		if ( result.Compiled )
+		{
+			var missing = Model.Load( referencePath ).AnimationNames.Except( Model.Load( result.VmdlAsset.Path ).AnimationNames ).ToArray();
+			if ( missing.Length > 0 )
+			{
+				result.Compiled = false;
+				result.Errors.Add( "The compiled model is missing stock sequences: " + string.Join( ", ", missing ) );
+			}
+		}
 		return result;
 	}
 
@@ -87,7 +112,11 @@ internal static class CitizenAnimationModels
 		result.Errors.Add( "The model compiled, but its animation graph did not load correctly: " + expectedPath );
 	}
 
-	internal static string BuildModelText( TargetPickers.ResolvedTarget target, string referencePath, string outputFolder )
+	internal static bool RequiresRetargeting( TargetPickers.ResolvedTarget target, string referencePath )
+		=> CitizenAnimationSetup.CompatibilityError( TargetPickers.SkeletonFromModel( Model.Load( target.PreviewModelPath ) ),
+			TargetPickers.SkeletonFromModel( Model.Load( referencePath ) ) ) is not null;
+
+	internal static string BuildModelText( TargetPickers.ResolvedTarget target, string referencePath, string outputFolder, bool fitted = false )
 	{
 		var shipped = File.ReadAllText( AssetSystem.FindByPath( referencePath ).AbsolutePath );
 		string custom;
@@ -104,7 +133,7 @@ internal static class CitizenAnimationModels
 			custom = File.ReadAllText( target.CustomVmdlPath );
 		else
 			custom = shipped;
-		return CitizenAnimationSetup.Apply( custom, shipped );
+		return CitizenAnimationSetup.Apply( custom, shipped, preserveFittedSettings: fitted );
 	}
 
 	internal static string ReadGraph( string vmdl )

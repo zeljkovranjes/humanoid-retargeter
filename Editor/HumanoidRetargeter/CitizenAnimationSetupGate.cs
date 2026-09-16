@@ -22,6 +22,7 @@ internal static class CitizenAnimationSetupGate
 		if ( CitizenAnimationModels.TryDetect( TargetPickers.SboxDefault(), out _, out _ ) )
 			throw new Exception( "Built-in targets must not enable the custom-model setup button." );
 		AssertButtonState( TargetPickers.SboxDefault(), false );
+		await FittedCitizenAnimationGate.RunAsync();
 		foreach ( var path in new[] { RetargetTargetSpec.SboxCitizenPath, RetargetTargetSpec.SboxHumanMalePath } )
 		{
 			var sourceAsset = AssetSystem.FindByPath( path );

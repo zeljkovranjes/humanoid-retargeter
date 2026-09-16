@@ -20,6 +20,13 @@ public static class CitizenAnimationSetup
 
     /// <summary>Both skeletons must be compiled, in engine space. Names alone are not sufficient.</summary>
     public static string? CompatibilityError(SkeletonModel custom, SkeletonModel reference)
+        => CheckSkeleton(custom, reference, checkBind: true);
+
+    /// <summary>Complete fitted armatures can be retargeted, but cannot directly reuse stock channels.</summary>
+    public static string? HierarchyError(SkeletonModel custom, SkeletonModel reference)
+        => CheckSkeleton(custom, reference, checkBind: false);
+
+    private static string? CheckSkeleton(SkeletonModel custom, SkeletonModel reference, bool checkBind)
     {
         foreach (var bone in reference.Bones)
         {
@@ -39,14 +46,16 @@ public static class CitizenAnimationSetup
             var distance = System.Numerics.Vector3.Distance(actual.RestLocal.Pos, bone.RestLocal.Pos);
             var angle = MathQ.AngleBetween(actual.RestLocal.Rot, bone.RestLocal.Rot);
             // Small FBX/compiler rounding differences are acceptable, altered proportions are not.
-            if (!float.IsFinite(distance) || !float.IsFinite(angle) || distance > 0.05f || angle > 0.035f)
+            if (!float.IsFinite(distance) || !float.IsFinite(angle))
+                return $"Bone '{bone.Name}' has an invalid bind transform.";
+            if (checkBind && (distance > 0.05f || angle > 0.035f))
                 return $"Bone '{bone.Name}' has a different bind pose or scale; stock animations require retargeting.";
         }
         return null;
     }
 
     /// <summary>Attaches the complete stock setup to a standalone custom model. Conflicts fail closed.</summary>
-    public static string Apply(string customVmdl, string shippedVmdl)
+    public static string Apply(string customVmdl, string shippedVmdl, bool preserveFittedSettings = false)
     {
         var document = Kv3.Parse(customVmdl);
         var root = (KvObject)((KvObject)document.Root)["rootNode"];
@@ -67,6 +76,20 @@ public static class CitizenAnimationSetup
             var source = shippedChildren.Items.OfType<KvObject>().SingleOrDefault(n => n.GetString("_class") == category);
             if (source is null) continue;
             var existing = children.Items.OfType<KvObject>().SingleOrDefault(n => n.GetString("_class") == category);
+            // The rigger already fitted these offsets/constraints to the custom mesh.
+            // Only animation sources are replaced, and existing clips still fail closed.
+            if (preserveFittedSettings && category != "AnimationList" && existing is not null
+                && existing.GetOrNull("children") is KvArray fitted && fitted.Items.Count > 0)
+            {
+                if (category == "AnimConstraintList" && !fitted.Items.OfType<KvObject>().Any(n => n.GetString("name") == ConstraintFolder))
+                {
+                    var wrapped = new KvArray();
+                    wrapped.Items.Add(new KvObject { ["_class"] = new KvString("Folder"),
+                        ["name"] = new KvString(ConstraintFolder), ["children"] = fitted });
+                    existing["children"] = wrapped;
+                }
+                continue;
+            }
             var matchesStock = existing is not null && KvValue.DeepEquals(existing, source);
             if (category == "AnimConstraintList" && source.GetOrNull("children") is KvArray stockConstraints
                 && stockConstraints.Items.OfType<KvObject>().Any(n => n.GetString("name") == "CopyPinky"))

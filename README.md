@@ -22,6 +22,8 @@ Keep only one copy of the library installed.
 
 For a custom model with a matching Citizen or Human Citizen armature, **Create Citizen animation model** includes all stock animations and sets up the matching animgraph, IK and helper constraints. No animation files are needed. The button stays disabled until the compiled skeleton passes compatibility checks. Choose an unused output name; this action never overwrites an existing VMDL. Human Citizen keeps `CopyPinky` enabled for the stock animations, so pinkies follow ring fingers, including in subsequently added clips.
 
+Complete fitted Citizen armatures also enable the green button. Clicking it retargets the stock animation sources to the custom bind pose, keeping the fitted rig settings and original sequence processing. Converted sources are saved under `<model name>_citizen_sources` in your output folder; exact stock armatures still use the faster direct-copy path.
+
 **Copy editable Citizen animgraph** saves the actual graph to `graphs/<model name>.vanmgrph` inside your output folder and connects it to the model. Turn it off to keep using the shipped graph.
 
 The complete stock animation definitions are retained, including nested blends, additive subtraction, events, timing and prefab dependencies—not just clip names. The setup also carries attachments, IK, pose parameters, bone masks, helper constraints and animation game data. Your custom mesh, materials and collision setup are preserved.
