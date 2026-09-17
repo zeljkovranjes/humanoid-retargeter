@@ -29,3 +29,11 @@ Never set that opt-in variable for a user's active project. Check the result's `
 ## Skin-weight regression
 
 `MeshSkinningTests.cs` verifies recovered mesh influences reference the original named joints and bind transforms. To also check the native compiler's output, set `HR_SMART_PORT_SKIN_TARGET` to the original target `.vmdl_c` and `HR_SMART_PORT_SKIN_RESULT` to its freshly compiled Smart Port `.vmdl_c`, then run the parser tests above. This compares vertex positions and named skin weights, allowing compiler vertex reordering/deduplication. Bone-length checks alone cannot detect weights attached to the wrong bones.
+
+## Keep target animations and extend its graph
+
+The Smart Port checkbox preserves the target's existing setup as the default and adds source clips, not the source graph's logic. It supports editable/recoverable animation graphs with a connected root output; it does not require a Citizen graph. Imported sequence/mask names and the new parameter name are collision-safe. The original models and graph are not overwritten.
+
+The output's `<name>_smart_port/clips.txt` lists clip IDs. Set `renderer.Set("hr_smartport_clip", id)` to select one, or `0` to return to the original graph. The guide gives the actual parameter name if that name was already used. Non-looping clips hold their final frame until reset to `0`; reset before replaying the same clip. Local additive clips layer over the existing output. Hidden/world-space clips remain in ModelDoc for manual graph editing.
+
+`SmartPortExtensionTests.cs` covers arbitrary graph preservation, default routing, ID/name collisions, additive layers, events and masks. `Engine/SmartPortExtendEngineTest.cs` uses the same isolated project/fixtures as the different-armature test, plus the target's existing graph and its dependencies. Enable only `HR_SMART_PORT_EXTEND_TEST_PROJECT`. It creates a new extended model, checks both animation libraries, walks/runs in play mode, selects an imported pose, returns to the original graph and tests a zero-additive layer. Results are written to `smart-port-extend-result.json`.

@@ -13,7 +13,8 @@ public sealed class SmartPortDialog : Dialog
 {
 	readonly Button _sourcePick, _targetPick, _port;
 	readonly LineEdit _folder, _name;
-	readonly Label _status;
+	readonly Label _status, _description;
+	readonly Checkbox _extend;
 	readonly CancellationTokenSource _cancel = new();
 	Asset _source, _target;
 	bool _busy, _destroyed;
@@ -28,13 +29,14 @@ public sealed class SmartPortDialog : Dialog
 		Layout.Margin = 20;
 		Layout.Spacing = 12;
 		Layout.Add( new Label.Subtitle( "Bring an animation setup to another character" ) );
-		Layout.Add( new Label( this ) { WordWrap = true, Text =
-			"Source supplies animations, events, rig settings and the actual animgraph. Target supplies its mesh, materials and collision. "
-			+ "Matching armatures copy directly. Other recognized humanoids are retargeted automatically, retaining the graph's helper bones." } );
+		_description = Layout.Add( new Label( this ) { WordWrap = true } );
 		_sourcePick = Layout.Add( new Button( "Source: choose animation model…", "directions_run" ) );
 		_targetPick = Layout.Add( new Button( "Target: choose your character…", "accessibility_new" ) );
 		_sourcePick.Clicked = () => Pick( true );
 		_targetPick.Clicked = () => Pick( false );
+		_extend = Layout.Add( new Checkbox( "Keep target animations and extend its graph" ) );
+		_extend.ToolTip = "Keep the target's existing animations and graph as the default. Add source clips through a new graph selector; do not merge the source graph's logic. Originals are never overwritten.";
+		_extend.Clicked = Refresh;
 		Layout.Add( new Label( this ) { Text = "Output folder (inside Assets):" } );
 		_folder = Layout.Add( new LineEdit( this ) { Text = "models/smart_port" } );
 		Layout.Add( new Label( this ) { Text = "New model name:" } );
@@ -72,8 +74,11 @@ public sealed class SmartPortDialog : Dialog
 
 	void Refresh()
 	{
+		_description.Text = _extend.Value
+			? "Target keeps its existing animations, graph logic and character setup. Source adds retargeted clips through a new graph selector; its graph logic is not merged. A new model and editable graph are created, leaving both originals untouched."
+			: "Source supplies animations, events, rig settings and the actual animgraph. Target supplies its mesh, materials and collision. Matching armatures copy directly; other recognized humanoids are retargeted automatically.";
 		string reason;
-		try { reason = SmartPortModels.Check( _source, _target ); }
+		try { reason = _extend.Value ? SmartPortModels.CheckExtended( _source, _target ) : SmartPortModels.Check( _source, _target ); }
 		catch ( Exception e ) { reason = e.Message; }
 		_port.Enabled = !_busy && reason is null;
 		_port.SetStyles( reason is null ? "background-color: #287d46;" : "" );
@@ -85,12 +90,15 @@ public sealed class SmartPortDialog : Dialog
 		if ( _busy ) return;
 		_busy = true;
 		_status.ToolTip = "";
-		_port.Enabled = _sourcePick.Enabled = _targetPick.Enabled = _folder.Enabled = _name.Enabled = false;
+		_port.Enabled = _sourcePick.Enabled = _targetPick.Enabled = _folder.Enabled = _name.Enabled = _extend.Enabled = false;
 		try
 		{
-			var result = await SmartPortModels.CreateAsync( _source, _target, _folder.Text, _name.Text,
-				message => { if ( !_destroyed ) _status.Text = message; }, _cancel.Token );
+			Action<string> progress = message => { if ( !_destroyed ) _status.Text = message; };
+			var result = _extend.Value
+				? await SmartPortModels.CreateExtendedAsync( _source, _target, _folder.Text, _name.Text, progress, _cancel.Token )
+				: await SmartPortModels.CreateAsync( _source, _target, _folder.Text, _name.Text, progress, _cancel.Token );
 			if ( !_destroyed ) _status.Text = result.Compiled ? "Created and verified: " + result.VmdlAsset.Path
+				+ (_extend.Value ? "\nExisting animations remain the default. Clip controls are listed in the output's _smart_port/clips.txt." : "")
 				: "Port did not pass verification:\n" + string.Join( "\n", result.Errors );
 		}
 		catch ( OperationCanceledException ) { }
@@ -108,7 +116,7 @@ public sealed class SmartPortDialog : Dialog
 			_busy = false;
 			if ( !_destroyed )
 			{
-				_sourcePick.Enabled = _targetPick.Enabled = _folder.Enabled = _name.Enabled = true;
+				_sourcePick.Enabled = _targetPick.Enabled = _folder.Enabled = _name.Enabled = _extend.Enabled = true;
 				var status = _status.Text;
 				Refresh();
 				_status.Text = status;

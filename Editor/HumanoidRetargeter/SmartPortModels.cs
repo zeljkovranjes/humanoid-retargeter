@@ -14,13 +14,21 @@ namespace HumanoidRetargeter.Editor;
 internal static class SmartPortModels
 {
 	internal static string Check( Asset source, Asset target )
+		=> CheckCore( source, target, false );
+
+	internal static string CheckExtended( Asset source, Asset target )
+		=> CheckCore( source, target, true );
+
+	static string CheckCore( Asset source, Asset target, bool extend )
 	{
 		if ( source is null || target is null ) return "Choose an animation source and a target character.";
 		var reference = Model.Load( source.Path );
 		var custom = Model.Load( target.Path );
 		if ( reference is null || reference.IsError || custom is null || custom.IsError ) return "Both models must load successfully.";
 		if ( reference.AnimationCount == 0 ) return "The source has no animations.";
-		if ( reference.AnimGraph is null || reference.AnimGraph.IsError ) return "The source has no working animation graph.";
+		var graphOwner = extend ? custom : reference;
+		if ( graphOwner.AnimGraph is null || graphOwner.AnimGraph.IsError )
+			return extend ? "The target needs a working animation graph to extend." : "The source has no working animation graph.";
 		if ( TargetPickers.FromModelAsset( target, out var error ) is null ) return error;
 		if ( ArmatureError( custom, reference ) is null ) return null;
 		try { _ = new SmartPortRig( TargetPickers.SkeletonFromModel( reference ), TargetPickers.SkeletonFromModel( custom ) ); }
@@ -43,11 +51,19 @@ internal static class SmartPortModels
 		return null;
 	}
 
-	internal static async Task<EditorPipeline.WriteResult> CreateAsync( Asset source, Asset target, string folder, string name,
+	internal static Task<EditorPipeline.WriteResult> CreateAsync( Asset source, Asset target, string folder, string name,
 		Action<string> progress = null, CancellationToken token = default )
+		=> CreateCoreAsync( source, target, folder, name, progress, token, false );
+
+	internal static Task<EditorPipeline.WriteResult> CreateExtendedAsync( Asset source, Asset target, string folder, string name,
+		Action<string> progress = null, CancellationToken token = default )
+		=> CreateCoreAsync( source, target, folder, name, progress, token, true );
+
+	static async Task<EditorPipeline.WriteResult> CreateCoreAsync( Asset source, Asset target, string folder, string name,
+		Action<string> progress, CancellationToken token, bool extend )
 	{
 		await EditorPipeline.SwitchToMainThread();
-		var error = Check( source, target );
+		var error = CheckCore( source, target, extend );
 		if ( error is not null ) throw new InvalidOperationException( error );
 		if ( string.IsNullOrWhiteSpace( name ) || name.IndexOfAny( Path.GetInvalidFileNameChars() ) >= 0 || name.Contains( '/' ) || name.Contains( '\\' ) || name is "." or ".." )
 			throw new InvalidOperationException( "Use a plain filename for the new model." );
@@ -67,10 +83,17 @@ internal static class SmartPortModels
 		var custom = Model.Load( target.Path );
 		var rig = ArmatureError( custom, reference ) is null ? null
 			: new SmartPortRig( TargetPickers.SkeletonFromModel( reference ), TargetPickers.SkeletonFromModel( custom ) );
-		var graphAsset = AssetSystem.FindByPath( reference.AnimGraph.Name );
-		if ( graphAsset is null ) throw new InvalidOperationException( "Source animgraph asset could not be resolved." );
+		var graphAsset = AssetSystem.FindByPath( (extend ? custom : reference).AnimGraph.Name );
+		if ( graphAsset is null ) throw new InvalidOperationException( "Animgraph asset could not be resolved." );
 		var graphText = ReadSource( graphAsset );
-		var recoverModels = rig is not null || sourceText is null || targetText is null;
+		SmartPortClip[] clips = null;
+		if ( extend )
+		{
+			var compiled = source.GetCompiledFile( true );
+			var probeRig = rig ?? new SmartPortRig( TargetPickers.SkeletonFromModel( reference ), TargetPickers.SkeletonFromModel( custom ) );
+			clips = await Task.Run( () => SmartPortAnimationExport.ReadClips( compiled, probeRig ), token );
+		}
+		var recoverModels = extend || rig is not null || sourceText is null || targetText is null;
 		if ( !recoverModels )
 		{
 			// Different source units/modifiers need compiled-space recovery, even when the
@@ -90,7 +113,21 @@ internal static class SmartPortModels
 		if ( graphText is null ) graphText = await SmartPortDecompiler.RecoverAsync( graphAsset, dataFolder + "/graph_source", token );
 		var vmdl = rig is null ? SmartPortSetup.Apply( targetText, sourceText, graphPath )
 			: SmartPortSetup.ApplyRetargeted( targetText, sourceText, graphPath, rig );
-		if ( rig is not null ) graphText = SmartPortSetup.Rebase( graphText, rig.BoneNames );
+		var expectedAnimations = reference.AnimationNames.ToArray();
+		if ( extend )
+		{
+			vmdl = SmartPortExtension.MergeModel( targetText, vmdl, graphPath, out var names );
+			var playable = clips.Where( c => !c.Hidden ).Select( c => c with { Name = names[c.Name] } ).ToArray();
+			graphText = SmartPortExtension.ExtendGraph( graphText, modelPath, playable, out var parameter );
+			expectedAnimations = custom.AnimationNames.Concat( names.Values ).ToArray();
+			var guide = "Smart Port added clips\n\nThe original graph is the default (0). Select a clip with:\n"
+				+ $"renderer.Set(\"{parameter}\", 1);\nReturn to the original graph with renderer.Set(\"{parameter}\", 0);\n"
+				+ "Non-looping clips hold their final frame until you select 0. Set 0 before replaying the same clip.\n"
+				+ "Additive clips layer over the original graph. Hidden/world-space clips are retained in the model for manual graph editing.\n\n"
+				+ string.Join( "\n", playable.Select( (c, i) => $"{i + 1}: {c.Name} ({(c.Additive ? "additive, " : "")}{(c.Looping ? "loop" : "one-shot")})" ) );
+			await File.WriteAllTextAsync( Path.Combine( dataRoot, "clips.txt" ), guide, token );
+		}
+		else if ( rig is not null ) graphText = SmartPortSetup.Rebase( graphText, rig.BoneNames );
 		graphText = StockAnimationGraph.CopyForModel( graphText, modelPath );
 		var graphFile = CitizenAnimationModels.ProjectFile( graphPath );
 		Directory.CreateDirectory( Path.GetDirectoryName( graphFile ) );
@@ -105,7 +142,7 @@ internal static class SmartPortModels
 		if ( result.Compiled )
 		{
 			var output = Model.Load( result.VmdlAsset.Path );
-			var missing = reference.AnimationNames.Except( output.AnimationNames ).ToArray();
+			var missing = expectedAnimations.Except( output.AnimationNames ).ToArray();
 			if ( missing.Length > 0 ) result.Errors.Add( "Recovery omitted sequences: " + string.Join( ", ", missing ) );
 			var changed = ArmatureError( output, Model.Load( target.Path ) );
 			if ( changed is not null ) result.Errors.Add( "Compiled target armature changed: " + changed );

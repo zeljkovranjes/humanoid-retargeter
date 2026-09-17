@@ -31,9 +31,7 @@ internal sealed class SmartPortAnimationExport
     {
         var indices = rig.Source.Bones.Select(b => Array.FindIndex(model.Skeleton.Bones, s => s.Name == b.Name)).ToArray();
         if (indices.Any(i => i < 0)) throw new InvalidOperationException("Compiled source skeleton changed during Smart Port.");
-        var probe = new Frame(model.Skeleton, model.FlexControllers) { FrameIndex = 0 };
-        animation.DecodeFrame(probe);
-        var delta = animation.Delta || rig.IsDeltaPose(indices.Select(i => new XForm(probe.Bones[i].Position, probe.Bones[i].Angle)).ToArray());
+        var delta = IsAdditive(model, animation, rig, indices);
         return ModelExtract.ToDmxAnim(model.Skeleton, model.FlexControllers, animation, skeleton, frame =>
         {
             var input = indices.Select(i => new XForm(frame.Bones[i].Position, frame.Bones[i].Angle)).ToArray();
@@ -47,5 +45,22 @@ internal sealed class SmartPortAnimationExport
             }
             return output;
         }, rig.MotionScale);
+    }
+
+    internal static SmartPortClip[] ReadClips(string compiledPath, SmartPortRig rig)
+    {
+        using var resource = new Resource();
+        resource.Read(compiledPath);
+        var model = (Model)resource.DataBlock!;
+        var indices = rig.Source.Bones.Select(b => Array.FindIndex(model.Skeleton.Bones, s => s.Name == b.Name)).ToArray();
+        return model.GetEmbeddedAnimations().Select(a => new SmartPortClip(a.Name, a.IsLooping,
+            IsAdditive(model, a, rig, indices), a.Hidden || a.Worldspace)).ToArray();
+    }
+
+    static bool IsAdditive(Model model, Animation animation, SmartPortRig rig, int[] indices)
+    {
+        var probe = new Frame(model.Skeleton, model.FlexControllers) { FrameIndex = 0 };
+        animation.DecodeFrame(probe);
+        return animation.Delta || rig.IsDeltaPose(indices.Select(i => new XForm(probe.Bones[i].Position, probe.Bones[i].Angle)).ToArray());
     }
 }
