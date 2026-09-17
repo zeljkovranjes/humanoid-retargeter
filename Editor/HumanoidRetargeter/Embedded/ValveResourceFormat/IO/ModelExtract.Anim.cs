@@ -50,6 +50,10 @@ partial class ModelExtract
     /// Converts an animation to DMX format using skeleton and flex controllers.
     /// </summary>
     public static byte[] ToDmxAnim(Skeleton skeleton, FlexController[] flexControllers, Animation anim)
+        => ToDmxAnim(skeleton, flexControllers, anim, skeleton, null, 1f);
+
+    internal static byte[] ToDmxAnim(Skeleton source, FlexController[] flexControllers, Animation anim,
+        Skeleton skeleton, Func<Frame, Frame>? transfer, float motionScale)
     {
         using var dmx = new HumanoidRetargeterDmx.HumanoidRetargeterDmx("model", 22);
 
@@ -68,15 +72,15 @@ partial class ModelExtract
             var frames = new Frame[anim.FrameCount];
             for (var i = 0; i < anim.FrameCount; i++)
             {
-                var frame = new Frame(skeleton, flexControllers)
+                var frame = new Frame(source, flexControllers)
                 {
                     FrameIndex = i
                 };
                 anim.DecodeFrame(frame);
-                frames[i] = frame;
+                frames[i] = transfer == null ? frame : transfer(frame);
             }
 
-            ProcessRootMotionChannel(anim, dmeSkeleton, clip);
+            ProcessRootMotionChannel(anim, dmeSkeleton, clip, motionScale);
             ProcessBoneChannels(skeleton, anim, transforms, clip, frames);
             ProcessFlexChannels(flexControllers, anim, clip, frames);
         }
@@ -183,7 +187,7 @@ partial class ModelExtract
         flexLayer.LayerValues[frame.FrameIndex] = flexValue;
     }
 
-    private static void ProcessRootMotionChannel(Animation anim, DmeModel skeleton, DmeChannelsClip clip)
+    private static void ProcessRootMotionChannel(Animation anim, DmeModel skeleton, DmeChannelsClip clip, float motionScale)
     {
         if (!anim.HasMovementData())
         {
@@ -204,7 +208,7 @@ partial class ModelExtract
 
             var movement = anim.GetMovementOffsetData(time);
 
-            rootPositionLayer.LayerValues[i] = movement.Position;
+            rootPositionLayer.LayerValues[i] = movement.Position * motionScale;
             rootPositionLayer.Times.Add(timespan);
 
             var degrees = movement.Angle * 0.0174532925f; //Deg to rad

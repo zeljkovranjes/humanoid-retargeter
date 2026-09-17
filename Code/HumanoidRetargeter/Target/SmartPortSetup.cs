@@ -64,6 +64,62 @@ public static class SmartPortSetup
         return Kv3.Serialize(document);
     }
 
+    /// <summary>Combines recovered engine-space models after their animation channels have been retargeted.</summary>
+    public static string ApplyRetargeted(string targetVmdl, string sourceVmdl, string graphPath, SmartPortRig rig)
+    {
+        var targetDoc = Kv3.Parse(targetVmdl);
+        var target = Children(Root(targetDoc));
+        var sourceDoc = Kv3.Parse(Rebase(sourceVmdl, rig.BoneNames));
+        var source = Children(Root(sourceDoc));
+        KvObject? Category(KvArray nodes, string type) => nodes.Items.OfType<KvObject>().SingleOrDefault(n => n.GetString("_class") == type);
+        IEnumerable<KvObject> Descendants(KvObject node)
+        {
+            yield return node;
+            if (node.GetOrNull("children") is KvArray children)
+                foreach (var child in children.Items.OfType<KvObject>())
+                    foreach (var item in Descendants(child)) yield return item;
+        }
+        var skeleton = Category(target, "Skeleton") ?? throw new InvalidOperationException("Recovered target has no skeleton.");
+        var bones = Descendants(skeleton).Where(n => n.GetString("_class") == "Bone").ToDictionary(n => n.GetString("name")!);
+        var originalNames = bones.Keys.ToHashSet(StringComparer.Ordinal);
+        var sourceSkeleton = Category(source, "Skeleton") ?? throw new InvalidOperationException("Recovered source has no skeleton.");
+        var sourceBones = Descendants(sourceSkeleton).Where(n => n.GetString("_class") == "Bone").ToDictionary(n => n.GetString("name")!);
+        foreach (var bone in rig.Target.Bones)
+        {
+            if (bones.ContainsKey(bone.Name)) continue;
+            var node = sourceBones[bone.Name];
+            node["children"] = new KvArray();
+            var origin = new KvArray();
+            foreach (var coordinate in new[] { bone.RestLocal.Pos.X, bone.RestLocal.Pos.Y, bone.RestLocal.Pos.Z }) origin.Items.Add(new KvDouble(coordinate));
+            node["origin"] = origin;
+            var parent = bone.ParentIndex < 0 ? skeleton : bones[rig.Target[bone.ParentIndex].Name];
+            if (parent.GetOrNull("children") is not KvArray) parent["children"] = new KvArray();
+            ((KvArray)parent["children"]).Items.Add(node);
+            bones.Add(bone.Name, node);
+        }
+        // Target skin helpers keep their fitted constraints. Source graph-only helpers retain theirs.
+        var constraints = Category(source, "AnimConstraintList");
+        if (constraints?.GetOrNull("children") is KvArray entries)
+            entries.Items.RemoveAll(n => n is KvObject node && Descendants(node).Any(child =>
+                originalNames.Contains(child.GetString("constrained_bone") ?? "") ||
+                child.GetString("_class") == "AnimConstraintSlave" && originalNames.Contains(child.GetString("parent_bone") ?? "")));
+        foreach (var type in new[] { "AnimConstraintList", "AttachmentList" })
+        {
+            var fitted = Category(target, type);
+            if (fitted?.GetOrNull("children") is not KvArray fittedItems) continue;
+            var existing = Category(source, type);
+            if (existing is null) { source.Items.Add(fitted); continue; }
+            var items = (KvArray)existing["children"];
+            if (type == "AttachmentList")
+            {
+                var fittedNames = fittedItems.Items.OfType<KvObject>().Select(n => n.GetString("name")).ToHashSet();
+                items.Items.RemoveAll(n => n is KvObject node && fittedNames.Contains(node.GetString("name")));
+            }
+            items.Items.AddRange(fittedItems.Items);
+        }
+        return Apply(Kv3.Serialize(targetDoc), Kv3.Serialize(sourceDoc), graphPath);
+    }
+
     /// <summary>Rebases only files actually recovered, leaving installed resource dependencies intact.</summary>
     public static string Rebase(string text, IReadOnlyDictionary<string, string> files)
     {

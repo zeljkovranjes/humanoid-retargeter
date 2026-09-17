@@ -90,6 +90,12 @@ namespace HumanoidRetargeterVrf.ResourceTypes.ModelAnimation
         {
         }
 
+        internal static Skeleton FromBones(Bone[] bones) => new Skeleton
+        {
+            Bones = bones,
+            Roots = bones.Where(b => b.Parent == null).ToArray()
+        };
+
         /// <summary>
         /// Construct the Armature object from mesh skeleton KV data.
         /// </summary>

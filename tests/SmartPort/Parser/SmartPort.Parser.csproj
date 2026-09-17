@@ -13,6 +13,7 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.1" />
     <Compile Include="../../../Editor/HumanoidRetargeter/Embedded/**/*.cs" />
     <Compile Include="../../../Editor/HumanoidRetargeter/CompiledAssetRecovery.cs" />
+    <Compile Include="../../../Editor/HumanoidRetargeter/SmartPortAnimationExport.cs" />
     <Compile Include="../../../Code/HumanoidRetargeter/**/*.cs" />
   </ItemGroup>
 </Project>

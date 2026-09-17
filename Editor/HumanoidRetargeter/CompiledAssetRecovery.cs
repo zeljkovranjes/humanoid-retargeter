@@ -17,7 +17,7 @@ internal static class CompiledAssetRecovery
 		is ".vmdl" or ".vmesh" or ".vmat" or ".vphys" or ".vagrp" or ".vanim" or ".vanmgrph";
 
 	internal static string Recover( string input, string assetPath, string root, string assetFolder,
-		IReadOnlyDictionary<string, string> paths, CancellationToken token )
+		IReadOnlyDictionary<string, string> paths, CancellationToken token, SmartPortRig? rig = null )
 	{
 		token.ThrowIfCancellationRequested();
 		using var resource = new Resource { FileName = assetPath };
@@ -27,7 +27,8 @@ internal static class CompiledAssetRecovery
 		if ( resource.DataBlock is not HumanoidRetargeterVrf.ResourceTypes.Model )
 			throw new InvalidDataException( "Smart Port recovery requires a model or animgraph." );
 		using var loader = new Loader( paths, token );
-		using var content = new ModelExtract( resource, loader ).ToContentFile();
+		var exporter = rig is null ? null : new SmartPortAnimationExport( rig );
+		using var content = new ModelExtract( resource, loader ).ToContentFile( exporter is null ? null : exporter.Write );
 		var text = Encoding.UTF8.GetString( content.Data );
 		var rebase = new Dictionary<string, string>( StringComparer.OrdinalIgnoreCase );
 		var modelDirectory = Path.GetDirectoryName( content.FileName )?.Replace( '\\', '/' ) ?? "";

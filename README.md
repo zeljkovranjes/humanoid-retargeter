@@ -20,22 +20,6 @@ Keep only one copy of the library installed.
 5. Choose an output folder and filename, or select an existing VMDL.
 6. Click **Convert All** and use the compiled sequences in your model or animgraph.
 
-For a custom model with a matching Citizen or Human Citizen armature, **Create Citizen animation model** includes all stock animations and sets up the matching animgraph, IK and helper constraints. No animation files are needed. The button stays disabled until the compiled skeleton passes compatibility checks. Choose an unused output name; this action never overwrites an existing VMDL. Human Citizen keeps `CopyPinky` enabled for the stock animations, so pinkies follow ring fingers, including in subsequently added clips.
-
-Complete fitted Citizen armatures also enable the green button. Clicking it retargets the stock animation sources to the custom bind pose, keeping the fitted rig settings and original sequence processing. Converted sources are saved under `<model name>_citizen_sources` in your output folder; exact stock armatures still use the faster direct-copy path.
-
-Models whose geometry starts below the floor are raised to ground level in the new Citizen animation model. This moves the mesh, skeleton and animations together; your original model files stay untouched.
-
-**Smart Port…** opens a separate source/target picker for local or cloud models. Matching bone names, parents and bind transforms enable a direct port: the new model keeps the target's geometry and materials, takes the source animation setup, and connects a project-owned copy of the actual animgraph. Outputs live together under `<model name>_smart_port`; existing files are not overwritten. Compiled recovery is built into the library—no external executable or download. Recovered authoring data has limits (including morph/cloth data); review the result in game. Different bind poses still need retargeting.
-
-**Copy editable Citizen animgraph** saves the actual graph to `graphs/<model name>.vanmgrph` inside your output folder and connects it to the model. Turn it off to keep using the shipped graph.
-
-The complete stock animation definitions are retained, including nested blends, additive subtraction, events, timing and prefab dependencies—not just clip names. The setup also carries attachments, IK, pose parameters, bone masks, helper constraints and animation game data. Your custom mesh, materials and collision setup are preserved.
-
-Use a clip's **Replace stock…** button to replace a supported idle, directional walk/run or jump slot. This works with any supported animation source, not just Mixamo. Replacements always use a project-owned graph copy; shipped assets stay untouched. Existing graph edits and other slots are preserved, with `.bak` backups. Review the slot's warning: fast locomotion variants, additive idle layers and airborne/landing states are separate, and blend timing may need adjustment.
-
-Locomotion directions are suggested from clip names or clear straight-line travel relative to the character's facing. Ambiguous and in-place clips without direction names need a manual choice. Footstep events detect settled contacts after foot lifts, including in-place motion. Additive variants let you choose a zero-based reference frame in the sampled output; choose a suitable neutral pose and check the result in your graph.
-
 Custom models need a rig and skin weights. Automatic mapping is not perfect; check the
 preview before exporting. Facial and morph animations are not transferred. Use FBX 7.x,
 and keep external model textures and glTF buffers alongside their model.

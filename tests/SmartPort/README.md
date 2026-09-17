@@ -19,3 +19,9 @@ The scratch project needs the installed compiled Frank fixture and an editable `
 The hook invokes the real Smart Port workflow, verifies compilation/sequence coverage/graph/bind transforms, enters editor **play mode**, drives graph locomotion parameters and verifies moving finite limb poses plus footstep events. It writes `smart-port-result.json` and exits its own editor. It does not call `SceneModel.Update` manually. This exercises animation playback, not a full game-specific character controller or multiplayer movement.
 
 Never set that opt-in variable for a user's active project. Check the result's `started` timestamp; stale files from earlier runs do not establish a passing result.
+
+## Different-armature regression
+
+`Engine/SmartPortRetargetEngineTest.cs` exercises Frank → a fitted Human Citizen bunny, not a copy of the source rig. Add the user's compiled `animations/retargeted/retargeted_bunny.vmdl_c` and its materials to the isolated project. Enable only `HR_SMART_PORT_RETARGET_TEST_PROJECT` for that run. The hook writes `smart-port-retarget-result.json`, checks all original target bind transforms, all source sequences, the actual graph, footstep events and walking/running. Hand, finger and limb segment lengths must remain within 0.15 engine units of their original bind lengths while playing.
+
+`SmartPortRigTests.cs` covers renamed bones, different spine layouts/proportions, retained graph helpers, unchanged skin bones, additive detection and zero additive transforms. Parser regressions also cover compiled ModelDoc additive channels whose legacy delta flag is false, and parent-constraint destination recovery. Existing direct-port tests remain unchanged.

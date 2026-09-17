@@ -22,7 +22,10 @@ internal static class SmartPortModels
 		if ( reference.AnimationCount == 0 ) return "The source has no animations.";
 		if ( reference.AnimGraph is null || reference.AnimGraph.IsError ) return "The source has no working animation graph.";
 		if ( TargetPickers.FromModelAsset( target, out var error ) is null ) return error;
-		return ArmatureError( custom, reference );
+		if ( ArmatureError( custom, reference ) is null ) return null;
+		try { _ = new SmartPortRig( TargetPickers.SkeletonFromModel( reference ), TargetPickers.SkeletonFromModel( custom ) ); }
+		catch ( ArgumentException e ) { return e.Message; }
+		return null;
 	}
 
 	static string ArmatureError( Model target, Model source )
@@ -61,10 +64,13 @@ internal static class SmartPortModels
 		var sourceText = ReadSource( source );
 		var targetText = ReadSource( target );
 		var reference = Model.Load( source.Path );
+		var custom = Model.Load( target.Path );
+		var rig = ArmatureError( custom, reference ) is null ? null
+			: new SmartPortRig( TargetPickers.SkeletonFromModel( reference ), TargetPickers.SkeletonFromModel( custom ) );
 		var graphAsset = AssetSystem.FindByPath( reference.AnimGraph.Name );
 		if ( graphAsset is null ) throw new InvalidOperationException( "Source animgraph asset could not be resolved." );
 		var graphText = ReadSource( graphAsset );
-		var recoverModels = sourceText is null || targetText is null;
+		var recoverModels = rig is not null || sourceText is null || targetText is null;
 		if ( !recoverModels )
 		{
 			// Different source units/modifiers need compiled-space recovery, even when the
@@ -77,12 +83,14 @@ internal static class SmartPortModels
 		if ( recoverModels )
 		{
 			progress?.Invoke( "Recovering source ModelDoc and animations…" );
-			sourceText = await SmartPortDecompiler.RecoverAsync( source, dataFolder + "/source", token );
+			sourceText = await SmartPortDecompiler.RecoverAsync( source, dataFolder + "/source", token, rig );
 			progress?.Invoke( "Recovering the target mesh and armature…" );
 			targetText = await SmartPortDecompiler.RecoverAsync( target, dataFolder + "/target", token );
 		}
 		if ( graphText is null ) graphText = await SmartPortDecompiler.RecoverAsync( graphAsset, dataFolder + "/graph_source", token );
-		var vmdl = SmartPortSetup.Apply( targetText, sourceText, graphPath );
+		var vmdl = rig is null ? SmartPortSetup.Apply( targetText, sourceText, graphPath )
+			: SmartPortSetup.ApplyRetargeted( targetText, sourceText, graphPath, rig );
+		if ( rig is not null ) graphText = SmartPortSetup.Rebase( graphText, rig.BoneNames );
 		graphText = StockAnimationGraph.CopyForModel( graphText, modelPath );
 		var graphFile = CitizenAnimationModels.ProjectFile( graphPath );
 		Directory.CreateDirectory( Path.GetDirectoryName( graphFile ) );

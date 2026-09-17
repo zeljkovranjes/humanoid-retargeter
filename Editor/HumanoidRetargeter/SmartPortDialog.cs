@@ -30,7 +30,7 @@ public sealed class SmartPortDialog : Dialog
 		Layout.Add( new Label.Subtitle( "Bring an animation setup to another character" ) );
 		Layout.Add( new Label( this ) { WordWrap = true, Text =
 			"Source supplies animations, events, rig settings and the actual animgraph. Target supplies its mesh, materials and collision. "
-			+ "Direct port requires matching bone names, parents and bind transforms; different proportions need retargeting." } );
+			+ "Matching armatures copy directly. Other recognized humanoids are retargeted automatically, retaining the graph's helper bones." } );
 		_sourcePick = Layout.Add( new Button( "Source: choose animation model…", "directions_run" ) );
 		_targetPick = Layout.Add( new Button( "Target: choose your character…", "accessibility_new" ) );
 		_sourcePick.Clicked = () => Pick( true );

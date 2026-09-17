@@ -122,6 +122,8 @@ partial class ModelExtract
             children = targets;
 
             var constrainedBoneData = boneConstraint.GetArray("m_slaves")[0];
+            var slave = ProcessBoneConstraintSlave(constrainedBoneData);
+            if (slave != null) node.AddProperty("constrained_bone", slave.GetStringProperty("parent_bone"));
             AddBoneConstraintProperty<double>(constrainedBoneData, node, "m_flWeight", "weight");
             AddBoneConstraintProperty<global::System.Numerics.Vector3>(constrainedBoneData, node, "m_vBasePosition", "translation_offset");
 

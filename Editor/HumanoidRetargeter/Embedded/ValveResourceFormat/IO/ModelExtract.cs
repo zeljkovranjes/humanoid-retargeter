@@ -98,7 +98,7 @@ public partial class ModelExtract
     /// <summary>
     /// Converts the model to a content file with associated meshes and animations.
     /// </summary>
-    public ContentFile ToContentFile()
+    public ContentFile ToContentFile(Func<Model, ResourceTypes.ModelAnimation.Animation, byte[]> animationWriter = null)
     {
         var vmdl = new ContentFile
         {
@@ -140,7 +140,7 @@ public partial class ModelExtract
         {
             vmdl.AddSubFile(
                 Path.GetFileName(anim.FileName),
-                () => ToDmxAnim(model, anim.Anim)
+                () => animationWriter == null ? ToDmxAnim(model, anim.Anim) : animationWriter(model, anim.Anim)
             );
         }
 
