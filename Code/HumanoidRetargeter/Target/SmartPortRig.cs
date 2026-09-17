@@ -22,6 +22,7 @@ public sealed class SmartPortRig
     readonly Dictionary<string, string> names = new(StringComparer.Ordinal);
     readonly RuntimePoseRetargeter solver;
     readonly int[] sourceIndices;
+    readonly int[] sourceParents;
     readonly HashSet<int> roleBones;
     readonly XForm[] reference;
     readonly int[] limbEnds;
@@ -72,6 +73,14 @@ public sealed class SmartPortRig
         solver = new RuntimePoseRetargeter(source, sourceMap, TargetRig.FromSkeleton(Target, mapped));
         sourceIndices = Enumerable.Repeat(-1, Target.Count).ToArray();
         foreach (var bone in source.Bones) sourceIndices[Target.IndexOf(names[bone.Name])] = bone.Index;
+        sourceParents = sourceIndices.Select(i => i < 0 ? -1 : source[i].ParentIndex).ToArray();
+        foreach (var bone in Target.Bones)
+        {
+            if (bone.ParentIndex < 0 || sourceIndices[bone.ParentIndex] < 0) continue;
+            var parent = sourceIndices[bone.ParentIndex];
+            for (var ancestor = sourceParents[bone.Index]; ancestor >= 0; ancestor = source[ancestor].ParentIndex)
+                if (ancestor == parent) { sourceParents[bone.Index] = parent; break; }
+        }
         reference = TransferAbsolute(source.Bones.Select(b => b.RestLocal).ToArray());
     }
 
@@ -119,12 +128,21 @@ public sealed class SmartPortRig
             if (roleBones.Contains(i)) continue;
             var s = sourceIndices[i];
             if (s < 0) { result[i] = Target[i].RestLocal; continue; }
-            var sp = Source[s].ParentIndex;
+            var sp = sourceParents[i];
             var tp = Target[i].ParentIndex;
+            var local = pose[s];
+            var rest = Source[s].RestLocal;
+            // A matching helper can have fewer ancestors on the target. Fold in the
+            // skipped source drivers (e.g. an animated weapon pivot above a grip).
+            for (var ancestor = Source[s].ParentIndex; ancestor != sp; ancestor = Source[ancestor].ParentIndex)
+            {
+                local = XForm.Compose(pose[ancestor], local);
+                rest = XForm.Compose(Source[ancestor].RestLocal, rest);
+            }
             var basis = sp < 0 || tp < 0 ? Quaternion.Identity
                 : Quaternion.Normalize(Quaternion.Conjugate(Target.RestWorld[tp].Rot) * Source.RestWorld[sp].Rot);
-            var delta = Quaternion.Normalize(pose[s].Rot * Quaternion.Conjugate(Source[s].RestLocal.Rot));
-            result[i] = new XForm(Target[i].RestLocal.Pos + NVector3.Transform(pose[s].Pos - Source[s].RestLocal.Pos, basis) * MotionScale,
+            var delta = Quaternion.Normalize(local.Rot * Quaternion.Conjugate(rest.Rot));
+            result[i] = new XForm(Target[i].RestLocal.Pos + NVector3.Transform(local.Pos - rest.Pos, basis) * MotionScale,
                 Quaternion.Normalize(basis * delta * Quaternion.Conjugate(basis) * Target[i].RestLocal.Rot));
         }
         return result;

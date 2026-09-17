@@ -30,6 +30,12 @@ Never set that opt-in variable for a user's active project. Check the result's `
 
 `MeshSkinningTests.cs` verifies recovered mesh influences reference the original named joints and bind transforms. To also check the native compiler's output, set `HR_SMART_PORT_SKIN_TARGET` to the original target `.vmdl_c` and `HR_SMART_PORT_SKIN_RESULT` to its freshly compiled Smart Port `.vmdl_c`, then run the parser tests above. This compares vertex positions and named skin weights, allowing compiler vertex reordering/deduplication. Bone-length checks alone cannot detect weights attached to the wrong bones.
 
+## Weapon attachment and graph layout regressions
+
+`Engine/SmartPortWeaponEngineTest.cs` ports Frank onto the installed Human Citizen male in the isolated scratch project. Enable only `HR_SMART_PORT_WEAPON_TEST_PROJECT`. It compiles the real port, enters play mode, and compares rifle attachment directions with procedural aiming on/off and up/down/level aim inputs (maximum error: 3 degrees). It writes `weapon-result.json` and exits its own editor. This checks attachment transforms, not a particular game's weapon model or mounting offsets.
+
+`SmartPortHelperChainTests.cs` covers skipped animated parent bones for absolute and additive clips. `AttachmentAlignmentTests.cs` checks source attachment axes, unchanged fitted positions/bind transforms, and recovered graph layout. `SmartPortGraphLayoutTests.cs` checks that existing node positions/groups survive copying and that added extension nodes have distinct positions outside the original layout.
+
 ## Keep target animations and extend its graph
 
 The Smart Port checkbox preserves the target's existing setup as the default and adds source clips, not the source graph's logic. It supports editable/recoverable animation graphs with a connected root output; it does not require a Citizen graph. Imported sequence/mask names and the new parameter name are collision-safe. The original models and graph are not overwritten.

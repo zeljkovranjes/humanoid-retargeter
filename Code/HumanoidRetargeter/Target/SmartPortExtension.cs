@@ -101,10 +101,19 @@ public static class SmartPortExtension
         var options = Array(new KvString("Existing animations"));
         var children = Array(original);
         var tags = Array(Id(uint.MaxValue));
+        var positions = nodes.Items.OfType<KvObject>().Select(n => n.GetOrNull("value")).OfType<KvObject>()
+            .Select(n => n.GetOrNull("m_vecPosition")).OfType<KvArray>().Where(p => p.Items.Count >= 2).ToArray();
+        static double Coordinate(KvValue v) => v is KvDouble d ? d.Value : v is KvLong l ? l.Value : 0;
+        var startX = positions.Select(p => Coordinate(p.Items[0])).DefaultIfEmpty(0).Max() + 500;
+        var startY = positions.Select(p => Coordinate(p.Items[1])).DefaultIfEmpty(0).Min();
+        var added = 0;
         long Add(KvObject node)
         {
             var id = Allocate();
             node["m_nNodeID"] = Id(id);
+            // Leave the user's layout intact; new nodes get their own area instead of stacking at (0, 0).
+            node["m_vecPosition"] = Array(new KvDouble(startX + added % 4 * 500), new KvDouble(startY + added / 4 * 300));
+            added++;
             nodes.Items.Add(new KvObject { ["key"] = Id(id), ["value"] = node });
             return id;
         }

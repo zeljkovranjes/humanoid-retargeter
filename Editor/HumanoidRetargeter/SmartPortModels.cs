@@ -111,6 +111,7 @@ internal static class SmartPortModels
 			targetText = await SmartPortDecompiler.RecoverAsync( target, dataFolder + "/target", token );
 		}
 		if ( graphText is null ) graphText = await SmartPortDecompiler.RecoverAsync( graphAsset, dataFolder + "/graph_source", token );
+		if ( rig is not null && !extend ) targetText = SmartPortAttachments.Align( targetText, sourceText, rig );
 		var vmdl = rig is null ? SmartPortSetup.Apply( targetText, sourceText, graphPath )
 			: SmartPortSetup.ApplyRetargeted( targetText, sourceText, graphPath, rig );
 		var expectedAnimations = reference.AnimationNames.ToArray();
