@@ -1,0 +1,87 @@
+#nullable enable
+using System;
+using System.Collections.Generic;
+using System.Linq;
+namespace HumanoidRetargeterKeyValue
+{
+    /// <summary>
+    /// Represents the type of a given <see cref="KVObject"/>.
+    /// </summary>
+    public enum KVValueType
+    {
+        /// <summary>
+        /// This <see cref="KVObject"/> is represented by a <see langword="null"/>.
+        /// </summary>
+        Null,
+
+        /// <summary>
+        /// This <see cref="KVObject"/> represents a collection of named key-value pairs (like a dictionary or table).
+        /// </summary>
+        Collection,
+
+        /// <summary>
+        /// This <see cref="KVObject"/> represents an ordered array of unnamed child <see cref="KVObject"/>s.
+        /// </summary>
+        Array,
+
+        /// <summary>
+        /// This <see cref="KVObject"/> represents a binary blob (raw byte data).
+        /// </summary>
+        BinaryBlob,
+
+        /// <summary>
+        /// This <see cref="KVObject"/> is represented by a <see cref="bool"/>.
+        /// </summary>
+        Boolean,
+
+        /// <summary>
+        /// This <see cref="KVObject"/> is represented by a <see cref="string"/>.
+        /// </summary>
+        String,
+
+        /// <summary>
+        /// This <see cref="KVObject"/> is represented by a <see cref="short"/>.
+        /// </summary>
+        Int16,
+
+        /// <summary>
+        /// This <see cref="KVObject"/> is represented by a <see cref="int"/>.
+        /// </summary>
+        Int32,
+
+        /// <summary>
+        /// This <see cref="KVObject"/> is represented by a <see cref="long"/>.
+        /// </summary>
+        Int64,
+
+        /// <summary>
+        /// This <see cref="KVObject"/> is represented by a <see cref="ushort"/>.
+        /// </summary>
+        UInt16,
+
+        /// <summary>
+        /// This <see cref="KVObject"/> is represented by a <see cref="uint"/>.
+        /// </summary>
+        UInt32,
+
+        /// <summary>
+        /// This <see cref="KVObject"/> is represented by a <see cref="ulong"/>.
+        /// </summary>
+        UInt64,
+
+        /// <summary>
+        /// This <see cref="KVObject"/> is represented by a <see cref="float"/>.
+        /// </summary>
+        FloatingPoint,
+
+        /// <summary>
+        /// This <see cref="KVObject"/> is represented by a <see cref="double"/>.
+        /// </summary>
+        FloatingPoint64,
+
+        /// <summary>
+        /// This <see cref="KVObject"/> is represented by a <see cref="int"/>, but represents a pointer.
+        /// </summary>
+        Pointer,
+    }
+}

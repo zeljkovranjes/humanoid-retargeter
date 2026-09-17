@@ -26,6 +26,8 @@ Complete fitted Citizen armatures also enable the green button. Clicking it reta
 
 Models whose geometry starts below the floor are raised to ground level in the new Citizen animation model. This moves the mesh, skeleton and animations together; your original model files stay untouched.
 
+**Smart Port…** opens a separate source/target picker for local or cloud models. Matching bone names, parents and bind transforms enable a direct port: the new model keeps the target's geometry and materials, takes the source animation setup, and connects a project-owned copy of the actual animgraph. Outputs live together under `<model name>_smart_port`; existing files are not overwritten. Compiled recovery is built into the library—no external executable or download. Recovered authoring data has limits (including morph/cloth data); review the result in game. Different bind poses still need retargeting.
+
 **Copy editable Citizen animgraph** saves the actual graph to `graphs/<model name>.vanmgrph` inside your output folder and connects it to the model. Turn it off to keep using the shipped graph.
 
 The complete stock animation definitions are retained, including nested blends, additive subtraction, events, timing and prefab dependencies—not just clip names. The setup also carries attachments, IK, pose parameters, bone masks, helper constraints and animation game data. Your custom mesh, materials and collision setup are preserved.

@@ -259,6 +259,9 @@ public sealed class RetargetWindow : Widget
 		_citizenSetupButton = col2.Add( new Button( "Create Citizen animation model", "accessibility_new" ) );
 		_citizenSetupButton.Enabled = false;
 		_citizenSetupButton.Clicked = () => _ = CreateCitizenAnimationModelAsync();
+		var smartPort = col2.Add( new Button( "Smart Port…", "swap_horiz" ) );
+		smartPort.ToolTip = "Copy a local or cloud model's animation setup and animgraph onto a compatible custom character.";
+		smartPort.Clicked = () => new SmartPortDialog( this ).Show();
 
 		col2.AddStretchCell();
 

@@ -1,0 +1,133 @@
+#nullable enable
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using HumanoidRetargeterVrf.Utils;
+using System.IO;
+using System.Text;
+using HumanoidRetargeterVrf.Blocks.ResourceEditInfoStructs;
+using HumanoidRetargeterVrf.Serialization.KeyValues;
+
+namespace HumanoidRetargeterVrf.Blocks
+{
+    /// <summary>
+    /// "REDI" block. ResourceEditInfoBlock_t.
+    /// </summary>
+    public class ResourceEditInfo : RawBinary
+    {
+        // Serialize legacy REDI info by copying raw data from the original resource because we have no plans to support NTRO serialization
+        /// <inheritdoc/>
+        public override BlockType Type => BlockType.REDI;
+
+        /// <summary>
+        /// Gets the list of input dependencies.
+        /// </summary>
+        public List<InputDependency> InputDependencies { get; } = [];
+
+        /// <summary>
+        /// Gets the list of additional input dependencies.
+        /// </summary>
+        public List<InputDependency> AdditionalInputDependencies { get; } = [];
+
+        /// <summary>
+        /// Gets the list of argument dependencies.
+        /// </summary>
+        public List<ArgumentDependency> ArgumentDependencies { get; } = [];
+
+        /// <summary>
+        /// Gets the list of special dependencies.
+        /// </summary>
+        public List<SpecialDependency> SpecialDependencies { get; } = [];
+
+        /// <summary>
+        /// Gets the list of additional related files.
+        /// </summary>
+        public List<AdditionalRelatedFile> AdditionalRelatedFiles { get; } = [];
+
+        /// <summary>
+        /// Gets the list of child resources.
+        /// </summary>
+        public List<string> ChildResourceList { get; } = [];
+
+        /// <summary>
+        /// Gets the searchable user data.
+        /// </summary>
+        public KVObject SearchableUserData { get; } = new("m_SearchableUserData"); // Maybe these should be split..
+
+        /// <inheritdoc/>
+        public override void Read(BinaryReader reader)
+        {
+            var subBlock = 0;
+
+            int AdvanceGetCount()
+            {
+                reader.BaseStream.Position = Offset + (subBlock * 8);
+
+                var offset = reader.ReadUInt32();
+                var count = reader.ReadUInt32();
+
+                reader.BaseStream.Position = Offset + (subBlock * 8) + offset;
+                subBlock++;
+                return (int)count;
+            }
+
+            void ReadItems<T>(List<T> list, Func<BinaryReader, T> constructor)
+            {
+                var count = AdvanceGetCount();
+                list.EnsureCapacity(count);
+
+                for (var i = 0; i < count; i++)
+                {
+                    var item = constructor.Invoke(reader);
+                    list.Add(item);
+                }
+            }
+
+            void ReadKeyValues<T>(KVObject kvObject, Func<BinaryReader, T> valueReader)
+            {
+                var count = AdvanceGetCount();
+                kvObject.Properties.EnsureCapacity(kvObject.Properties.Count + count);
+
+                for (var i = 0; i < count; i++)
+                {
+                    var key = reader.ReadOffsetString(Encoding.UTF8);
+                    var value = valueReader.Invoke(reader);
+
+                    // Note: we may override existing keys
+                    kvObject.Properties[key] = new KVValue(value);
+                }
+            }
+
+            ReadItems(InputDependencies, static (reader) => new InputDependency(reader));
+            ReadItems(AdditionalInputDependencies, static (reader) => new InputDependency(reader));
+            ReadItems(ArgumentDependencies, static (reader) => new ArgumentDependency(reader));
+            ReadItems(SpecialDependencies, static (reader) => new SpecialDependency(reader));
+
+            var customDependencies = AdvanceGetCount();
+            if (customDependencies > 0)
+            {
+                throw new NotImplementedException("CustomDependencies in REDI are not handled.\n" +
+                    "Please report this on https://github.com/HumanoidRetargeterVrf/HumanoidRetargeterVrf and provide the file that caused this exception.");
+            }
+
+            ReadItems(AdditionalRelatedFiles, static (reader) => new AdditionalRelatedFile(reader));
+            ReadItems(ChildResourceList, static (reader) =>
+            {
+                var id = reader.ReadUInt64();
+                var name = reader.ReadOffsetString(Encoding.UTF8);
+                var unknown = reader.ReadInt32();
+                return name; // Ignoring 'id' to match RED2
+            });
+
+            ReadKeyValues(SearchableUserData, static (reader) => (long)reader.ReadInt32());
+            ReadKeyValues(SearchableUserData, static (reader) => (double)reader.ReadSingle());
+            ReadKeyValues(SearchableUserData, static (reader) => reader.ReadOffsetString(Encoding.UTF8));
+        }
+
+        /// <inheritdoc/>
+        public override void WriteText(IndentedTextWriter writer)
+        {
+            throw new NotSupportedException("Diagnostic REDI serialization is not included in model recovery.");
+        }
+    }
+}

@@ -305,7 +305,23 @@ public static class Kv3
         if (double.IsNaN(value) || double.IsInfinity(value))
             throw new FormatException($"Cannot serialize non-finite double {value} to KV3.");
         var s = value.ToString("R", CultureInfo.InvariantCulture);
-        return s.IndexOfAny(new[] { '.', 'e', 'E' }) >= 0 ? s : s + ".0";
+        // ModelDoc's text reader can treat an exponent as a separate token (1E-05
+        // becomes 1). Expand the round-trip digits, without rounding tiny offsets away.
+        var exponentAt = s.IndexOf('E');
+        if (exponentAt >= 0)
+        {
+            var negative = s[0] == '-';
+            var mantissa = s[(negative ? 1 : 0)..exponentAt];
+            var dot = mantissa.IndexOf('.');
+            var point = (dot < 0 ? mantissa.Length : dot)
+                + int.Parse(s[(exponentAt + 1)..], CultureInfo.InvariantCulture);
+            var digits = mantissa.Replace(".", "");
+            s = point <= 0 ? "0." + new string('0', -point) + digits
+                : point >= digits.Length ? digits + new string('0', point - digits.Length)
+                : digits.Insert(point, ".");
+            if (negative) s = "-" + s;
+        }
+        return s.Contains('.') ? s : s + ".0";
     }
 
     private static string QuoteString(string value)

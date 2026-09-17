@@ -1,0 +1,30 @@
+#nullable enable
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using HumanoidRetargeterVrf.Utils;
+using System.Runtime.InteropServices;
+
+namespace HumanoidRetargeterVrf.ResourceTypes.ModelAnimation.SegmentDecoders
+{
+    /// <summary>
+    /// Decodes full-precision float animation data.
+    /// </summary>
+    public class CCompressedFullFloat : AnimationSegmentDecoder
+    {
+        /// <inheritdoc/>
+        /// <remarks>
+        /// Reads full-precision float data directly from the data buffer.
+        /// </remarks>
+        public override void Read(int frameIndex, Frame outFrame)
+        {
+            var offset = frameIndex * ElementCount;
+            var floatData = MemoryMarshal.Cast<byte, float>(Data);
+
+            for (var i = 0; i < RemapTable.Length; i++)
+            {
+                outFrame.SetAttribute(RemapTable[i], ChannelAttribute, floatData[offset + WantedElements[i]]);
+            }
+        }
+    }
+}
