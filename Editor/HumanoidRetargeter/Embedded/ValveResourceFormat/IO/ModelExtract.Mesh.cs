@@ -209,9 +209,22 @@ partial class ModelExtract
     {
         var materialReferences = resource?.ExternalReferences?.ResourceRefInfoList.Where(static r => r.Name[^4..] == "vmat");
         foreach (var material in materialReferences ?? [])
+            MaterialInputSignatures[material.Name] = ReadMaterialInputSignature(fileLoader, material.Name);
+    }
+
+    internal static Material.VsInputSignature ReadMaterialInputSignature(IFileLoader loader, string path)
+    {
+        try
         {
-            using var materialResource = fileLoader.LoadFileCompiled(material.Name);
-            MaterialInputSignatures[material.Name] = (materialResource?.DataBlock as Material)?.InputSignature ?? Material.VsInputSignature.Empty;
+            using var materialResource = loader.LoadFileCompiled(path);
+            return (materialResource?.DataBlock as Material)?.InputSignature ?? Material.VsInputSignature.Empty;
+        }
+        catch (FileNotFoundException)
+        {
+            // Shader input metadata is optional; the vertex buffer already declares its streams.
+            // Keep the original material reference, including on meshes and material groups.
+            Console.WriteLine($"Smart Port: material metadata unavailable for '{path}'; using vertex-buffer semantics. Material reference preserved.");
+            return Material.VsInputSignature.Empty;
         }
     }
 

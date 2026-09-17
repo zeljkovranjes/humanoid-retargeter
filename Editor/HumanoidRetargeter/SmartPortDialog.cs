@@ -84,6 +84,7 @@ public sealed class SmartPortDialog : Dialog
 	{
 		if ( _busy ) return;
 		_busy = true;
+		_status.ToolTip = "";
 		_port.Enabled = _sourcePick.Enabled = _targetPick.Enabled = _folder.Enabled = _name.Enabled = false;
 		try
 		{
@@ -93,7 +94,15 @@ public sealed class SmartPortDialog : Dialog
 				: "Port did not pass verification:\n" + string.Join( "\n", result.Errors );
 		}
 		catch ( OperationCanceledException ) { }
-		catch ( Exception e ) { if ( !_destroyed ) _status.Text = e.Message; }
+		catch ( Exception e )
+		{
+			Log.Warning( $"[humanoid-retargeter] Smart Port failed: {e}" );
+			if ( !_destroyed )
+			{
+				_status.Text = "Smart Port did not finish.\n" + e.Message;
+				_status.ToolTip = e.Message;
+			}
+		}
 		finally
 		{
 			_busy = false;

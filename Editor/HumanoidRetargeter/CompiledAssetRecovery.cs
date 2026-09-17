@@ -68,7 +68,7 @@ internal static class CompiledAssetRecovery
 			file = file.Replace( '\\', '/' );
 			if ( file.EndsWith( "_c", StringComparison.OrdinalIgnoreCase ) ) file = file[..^2];
 			if ( !paths.TryGetValue( file, out var physical ) || string.IsNullOrEmpty( physical ) || !File.Exists( physical ) )
-				throw new FileNotFoundException( "Install the missing Smart Port dependency: " + file );
+				throw new FileNotFoundException( "Required Smart Port dependency is unavailable: " + file, file );
 			var resource = new Resource { FileName = file };
 			opened.Add( resource );
 			resource.Read( physical );
