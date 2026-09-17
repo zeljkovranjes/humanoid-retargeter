@@ -102,6 +102,9 @@ partial class ModelExtract
         /// Remap table for the mesh bone indices.
         /// </summary>
         public int[] BoneRemapTable { get; init; }
+
+        /// <summary>Named joints keep skin weights stable when ModelDoc changes skeleton order.</summary>
+        public ResourceTypes.ModelAnimation.Skeleton Skeleton { get; init; }
     }
 
     /// <summary>
@@ -482,7 +485,12 @@ partial class ModelExtract
         var indexBuffers = mbuf.IndexBuffers.Select(ib => new Lazy<int[]>(() => ReadIndices(ib))).ToArray();
 
         var datamodel = new HumanoidRetargeterDmx.HumanoidRetargeterDmx("model", 22);
-        var dmeModel = new DmeModel() { Name = name };
+        var dmeModel = options.Skeleton == null ? new DmeModel() : BuildDmeDagSkeleton(options.Skeleton, out _);
+        dmeModel.Name = name;
+        // Joint zero is the DMX model root; compiled mesh indices address skeleton bones.
+        var boneRemap = options.Skeleton == null ? options.BoneRemapTable
+            : (options.BoneRemapTable ?? Enumerable.Range(0, options.Skeleton.Bones.Length).ToArray())
+                .Select(index => index + 1).ToArray();
         var dmeVertexBuffers = new Dictionary<(int, int), (DmeDag Dag, DmeVertexData VertexData)>(mbuf.VertexBuffers.Count);
 
         var materialInputSignature = Material.VsInputSignature.Empty;
@@ -558,14 +566,22 @@ partial class ModelExtract
 
         foreach (var (vertexBufferIndices, dmeObjects) in dmeVertexBuffers)
         {
-            FillHumanoidRetargeterDmxVertexData(mbuf.VertexBuffers[vertexBufferIndices.Item1], dmeObjects.VertexData, materialInputSignature, boneWeightCount, options.BoneRemapTable);
+            FillHumanoidRetargeterDmxVertexData(mbuf.VertexBuffers[vertexBufferIndices.Item1], dmeObjects.VertexData, materialInputSignature, boneWeightCount, boneRemap);
 
             if (vertexBufferIndices.Item2 != -1)
             {
-                FillHumanoidRetargeterDmxVertexData(mbuf.VertexBuffers[vertexBufferIndices.Item2], dmeObjects.VertexData, materialInputSignature, boneWeightCount, options.BoneRemapTable);
+                FillHumanoidRetargeterDmxVertexData(mbuf.VertexBuffers[vertexBufferIndices.Item2], dmeObjects.VertexData, materialInputSignature, boneWeightCount, boneRemap);
             }
         }
 
+        if (options.Skeleton != null)
+        {
+            var bind = new DmeTransformsList { Name = "bind" };
+            foreach (var joint in dmeModel.JointList)
+                bind.Transforms.Add(joint == dmeModel ? dmeModel.Transform : ((DmeDag)joint).Transform);
+            dmeModel.BaseStates.Clear();
+            dmeModel.BaseStates.Add(bind);
+        }
         TieElementRoot(datamodel, dmeModel);
         return datamodel;
     }
