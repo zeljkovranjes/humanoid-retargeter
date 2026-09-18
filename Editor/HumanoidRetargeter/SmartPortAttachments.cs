@@ -5,6 +5,8 @@ using System.Numerics;
 using HumanoidRetargeter.Maths;
 using HumanoidRetargeter.Target;
 using HumanoidRetargeterVrf.IO;
+using HumanoidRetargeterVrf;
+using HumanoidRetargeterVrf.ResourceTypes;
 using NVector3 = System.Numerics.Vector3;
 
 namespace HumanoidRetargeter.Editor;
@@ -12,6 +14,17 @@ namespace HumanoidRetargeter.Editor;
 /// <summary>Keeps fitted socket positions, but adopts the source graph's attachment axes.</summary>
 internal static class SmartPortAttachments
 {
+    internal static string[] BoneNames(string compiledModel)
+    {
+        using var resource = new Resource();
+        resource.Read(compiledModel);
+        var model = (Model)resource.DataBlock!;
+        _ = model.GetEmbeddedMeshes().ToArray(); // Embedded meshes can own attachment metadata.
+        var bones = model.Skeleton.Bones.ToDictionary(b => b.Name, b => b.Name, StringComparer.OrdinalIgnoreCase);
+        return model.Attachments.Values.SelectMany(a => a).Select(a => a.Name)
+            .Where(bones.ContainsKey).Select(n => bones[n]).Distinct().ToArray();
+    }
+
     internal static string Align(string targetText, string sourceText, SmartPortRig rig)
     {
         var target = Kv3.Parse(targetText);

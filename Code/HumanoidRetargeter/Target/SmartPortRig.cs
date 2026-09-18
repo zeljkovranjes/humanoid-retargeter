@@ -7,6 +7,7 @@ using HumanoidRetargeter.Mapping;
 using HumanoidRetargeter.Maths;
 using HumanoidRetargeter.Skeleton;
 using HumanoidRetargeter.Solve;
+using HumanoidRetargeter.Cleanup;
 using SkeletonModel = HumanoidRetargeter.Skeleton.Skeleton;
 using NVector3 = System.Numerics.Vector3;
 
@@ -27,9 +28,12 @@ public sealed class SmartPortRig
     readonly XForm[] reference;
     readonly int[] limbEnds;
     readonly HashSet<int> copiedHelpers;
+    readonly HashSet<int> handSockets = new();
+    readonly Dictionary<int, (int TargetHand, int Upper, int Lower, NVector3 SourcePalm, NVector3 TargetPalm)> palms = new();
     readonly List<(int SourceGoal, int SourceEnd, int TargetGoal, int TargetEnd, bool CrossHand)> ikGoals = new();
 
-    public SmartPortRig(SkeletonModel source, SkeletonModel target, IReadOnlyDictionary<string, string>? ikTargets = null)
+    public SmartPortRig(SkeletonModel source, SkeletonModel target, IReadOnlyDictionary<string, string>? ikTargets = null,
+        IReadOnlyCollection<string>? attachmentBones = null)
     {
         Source = source;
         foreach (var bone in source.Bones.Concat(target.Bones))
@@ -76,6 +80,38 @@ public sealed class SmartPortRig
         solver = new RuntimePoseRetargeter(source, sourceMap, TargetRig.FromSkeleton(Target, mapped));
         sourceIndices = Enumerable.Repeat(-1, Target.Count).ToArray();
         foreach (var bone in source.Bones) sourceIndices[Target.IndexOf(names[bone.Name])] = bone.Index;
+        if (attachmentBones is not null)
+        foreach (var side in new[] { "L", "R" })
+        {
+            var handRole = Enum.Parse<BoneRole>("Hand" + side);
+            var sh = sourceMap.RoleToBone[handRole];
+            var th = mapped.RoleToBone[handRole];
+            int SocketRoot(int index)
+            {
+                while (index >= 0)
+                {
+                    // An existing fitted socket (or intermediate helper) is authoritative.
+                    if (!copiedHelpers.Contains(Target.IndexOf(names[source[index].Name]))) return -1;
+                    if (source[index].ParentIndex == sh) return index;
+                    index = source[index].ParentIndex;
+                }
+                return -1;
+            }
+            var sockets = attachmentBones.Select(source.IndexOf).Select(SocketRoot).Where(i => i >= 0)
+                .Select(i => Target.IndexOf(names[source[i].Name])).ToArray();
+            if (sockets.Length == 0) continue;
+            var knuckles = new[] { "IndexProx", "MiddleProx", "RingProx" }.Select(n => Enum.Parse<BoneRole>(n + side))
+                .Where(r => sourceMap.RoleToBone.ContainsKey(r) && mapped.RoleToBone.ContainsKey(r)).ToArray();
+            if (knuckles.Length < 2) continue; // Insufficient hand geometry: keep the existing transfer.
+            var sp = knuckles.Select(r => source.RestWorld[sourceMap.RoleToBone[r]].Pos)
+                .Aggregate(NVector3.Zero, (a, b) => a + b) / knuckles.Length;
+            var tp = knuckles.Select(r => Target.RestWorld[mapped.RoleToBone[r]].Pos)
+                .Aggregate(NVector3.Zero, (a, b) => a + b) / knuckles.Length;
+            palms.Add(sh, (th, mapped.RoleToBone[Enum.Parse<BoneRole>("UpperArm" + side)],
+                mapped.RoleToBone[Enum.Parse<BoneRole>("LowerArm" + side)],
+                source.RestWorld[sh].Inverse().TransformPoint(sp), Target.RestWorld[th].Inverse().TransformPoint(tp)));
+            handSockets.UnionWith(sockets);
+        }
         sourceParents = sourceIndices.Select(i => i < 0 ? -1 : source[i].ParentIndex).ToArray();
         foreach (var bone in Target.Bones)
         {
@@ -166,6 +202,7 @@ public sealed class SmartPortRig
         if (fitGoals && (ikGoals.Count > 0 || copiedHelpers.Count > 0))
         {
             var sourceWorld = World(Source, pose);
+            FitGripReach(result, sourceWorld);
             var targetWorld = new XForm[Target.Count];
             foreach (var bone in Target.Bones)
             {
@@ -179,6 +216,7 @@ public sealed class SmartPortRig
                     var frame = sourceWorld[s];
                     frame.Pos = parent < 0 ? frame.Pos * MotionScale : targetWorld[parent].Pos
                         + (frame.Pos - sourceWorld[Source[s].ParentIndex].Pos) * MotionScale;
+                    if (handSockets.Contains(bone.Index)) frame.Pos += PalmShift(Source[s].ParentIndex, sourceWorld, targetWorld);
                     result[bone.Index] = parent < 0 ? frame : XForm.ToLocal(targetWorld[parent], frame);
                 }
                 targetWorld[bone.Index] = parent < 0 ? result[bone.Index] : XForm.Compose(targetWorld[parent], result[bone.Index]);
@@ -192,7 +230,8 @@ public sealed class SmartPortRig
                 var goal = XForm.Compose(targetWorld[targetEnd], offset);
                 // A newly copied support-hand goal is anchored to the other hand.
                 // Keep that grip separation; fitting it back to the free arm loses contact.
-                if (crossHand) goal.Pos = targetWorld[targetGoal].Pos;
+                if (crossHand) goal.Pos = targetWorld[targetGoal].Pos
+                    + PalmShift(Source[sourceGoal].ParentIndex, sourceWorld, targetWorld) - PalmShift(sourceEnd, sourceWorld, targetWorld);
                 var parent = Target[targetGoal].ParentIndex;
                 result[targetGoal] = parent < 0 ? goal : XForm.ToLocal(targetWorld[parent], goal);
             }
@@ -206,5 +245,59 @@ public sealed class SmartPortRig
         foreach (var bone in skeleton.Bones)
             world[bone.Index] = bone.ParentIndex < 0 ? pose[bone.Index] : XForm.Compose(world[bone.ParentIndex], pose[bone.Index]);
         return world;
+    }
+
+    // Preserve the source socket's relation to the knuckles, not just to the wrist.
+    // Only newly copied attachment bones are fitted; existing target sockets stay authoritative.
+    NVector3 PalmShift(int sourceHand, XForm[] sourceWorld, XForm[] targetWorld)
+        => palms.TryGetValue(sourceHand, out var palm)
+            ? targetWorld[palm.TargetHand].TransformVector(palm.TargetPalm)
+                - sourceWorld[sourceHand].TransformVector(palm.SourcePalm) * MotionScale
+            : NVector3.Zero;
+
+    void FitGripReach(XForm[] pose, XForm[] sourceWorld)
+    {
+        if (palms.Count != 2) return;
+        var contact = ikGoals.FirstOrDefault(g => g.CrossHand
+            && NVector3.Distance(sourceWorld[g.SourceGoal].Pos, sourceWorld[g.SourceEnd].Pos) < .01f);
+        if (!contact.CrossHand) return;
+        var anchor = Source[contact.SourceGoal].ParentIndex;
+        var hands = new[] { palms[anchor], palms[contact.SourceEnd] };
+        var world = World(Target, pose);
+        var anchored = world[hands[0].TargetHand].Pos;
+        var goals = new[] { anchored, anchored + (sourceWorld[contact.SourceGoal].Pos - sourceWorld[anchor].Pos) * MotionScale
+            + PalmShift(anchor, sourceWorld, world) - PalmShift(contact.SourceEnd, sourceWorld, world) };
+        var radii = hands.Select(h => (NVector3.Distance(world[h.Upper].Pos, world[h.Lower].Pos)
+            + NVector3.Distance(world[h.Lower].Pos, world[h.TargetHand].Pos)) * .98f).ToArray();
+        if (NVector3.Distance(goals[1], world[hands[1].Upper].Pos) <= radii[1]) return;
+        // Keep the source support arm's bend reserve for graph blends and recoil.
+        // Merely fitting an almost straight arm leaves no room for locomotion layers.
+        var sourceUpper = sourceIndices[hands[1].Upper];
+        var sourceLower = sourceIndices[hands[1].Lower];
+        var sourceReach = NVector3.Distance(sourceWorld[sourceUpper].Pos, sourceWorld[sourceLower].Pos)
+            + NVector3.Distance(sourceWorld[sourceLower].Pos, sourceWorld[contact.SourceEnd].Pos);
+        if (sourceReach < .0001f) return;
+        var extension = NVector3.Distance(sourceWorld[sourceUpper].Pos, sourceWorld[contact.SourceEnd].Pos) / sourceReach;
+        radii[1] *= MathF.Min(1, extension / .98f);
+        // Move the shared grip into both arms' reach. Leave a small elbow margin,
+        // like the existing IK solver, and never stretch or change local translations.
+        var shift = NVector3.Zero;
+        for (var step = 0; step < 8; step++)
+        for (var i = 0; i < hands.Length; i++)
+        {
+            var offset = goals[i] + shift - world[hands[i].Upper].Pos;
+            var distance = offset.Length();
+            if (distance > radii[i]) shift -= offset * (1 - radii[i] / distance);
+        }
+        // Some source spans cannot fit this body at all. Do not distort its arms.
+        if (hands.Where((h, i) => NVector3.Distance(goals[i] + shift, world[h.Upper].Pos) > radii[i] + .001f).Any()) return;
+        for (var i = 0; i < hands.Length; i++)
+        {
+            var h = hands[i];
+            world = World(Target, pose);
+            var ik = TwoBoneIk.Solve(world[h.Upper].Pos, world[h.Lower].Pos, world[h.TargetHand].Pos, goals[i] + shift, soften: 0);
+            EffectorIk.ApplyWorldDeltas(pose, Target, h.Upper, h.Lower, h.TargetHand,
+                ik.UpperWorldDelta, ik.LowerWorldDelta, world);
+        }
     }
 }

@@ -87,7 +87,8 @@ internal static class SmartPortModels
 		var graphText = ReadSource( graphAsset );
 		if ( graphText is null ) graphText = await SmartPortDecompiler.RecoverAsync( graphAsset, dataFolder + "/graph_source", token );
 		var rig = needsRetargeting ? new SmartPortRig( TargetPickers.SkeletonFromModel( reference ), TargetPickers.SkeletonFromModel( custom ),
-			!extend ? SmartPortIkTargets.Read( source.GetCompiledFile( true ), graphText ) : null ) : null;
+			!extend ? SmartPortIkTargets.Read( source.GetCompiledFile( true ), graphText ) : null,
+			!extend ? SmartPortAttachments.BoneNames( source.GetCompiledFile( true ) ) : null ) : null;
 		SmartPortClip[] clips = null;
 		if ( extend )
 		{
