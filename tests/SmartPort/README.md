@@ -36,6 +36,10 @@ Never set that opt-in variable for a user's active project. Check the result's `
 
 `SmartPortHelperChainTests.cs` covers skipped animated parent bones for absolute and additive clips. `AttachmentAlignmentTests.cs` checks source attachment axes, unchanged fitted positions/bind transforms, and recovered graph layout. `SmartPortGraphLayoutTests.cs` checks that existing node positions/groups survive copying and that added extension nodes have distinct positions outside the original layout.
 
+`IkRecoveryTests.cs` verifies that recovery retains the complete compiled `ikdata` block, including chains, solver settings and joint constraints. The graph's IK nodes need this data to keep the support hand on a weapon during locomotion.
+
+`Engine/SmartPortGripEngineTest.cs` checks both hands relative to the weapon throughout idle, forward running and eight walking directions. In the isolated project, enable only `HR_SMART_PORT_GRIP_TEST_PROJECT` and set `HR_SMART_PORT_GRIP_MODEL` to a fresh port's asset path (for example the `model` value from `weapon-result.json`). It also verifies leg motion so a frozen pose cannot pass. Maximum hand drift from the standing grip is 0.15 engine units; results are written to `grip-test-result.json`.
+
 ## Keep target animations and extend its graph
 
 The Smart Port checkbox preserves the target's existing setup as the default and adds source clips, not the source graph's logic. It supports editable/recoverable animation graphs with a connected root output; it does not require a Citizen graph. Imported sequence/mask names and the new parameter name are collision-safe. The original models and graph are not overwritten.

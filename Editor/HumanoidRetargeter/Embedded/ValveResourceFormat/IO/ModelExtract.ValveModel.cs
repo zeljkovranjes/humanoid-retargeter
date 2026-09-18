@@ -846,6 +846,7 @@ partial class ModelExtract
                 "gastank_markup",
                 "hand_conform_data",
                 "handpose_data",
+                "ikdata", // Animgraph IK nodes reference these chains; preserve solver settings and joint constraints.
                 "physgun_interactions",
                 "weapon_metadata",
                 "glove_viewmodel_reference",
