@@ -26,7 +26,8 @@ public sealed class SmartPortRig
     readonly HashSet<int> roleBones;
     readonly XForm[] reference;
     readonly int[] limbEnds;
-    readonly List<(int SourceGoal, int SourceEnd, int TargetGoal, int TargetEnd)> ikGoals = new();
+    readonly HashSet<int> copiedHelpers;
+    readonly List<(int SourceGoal, int SourceEnd, int TargetGoal, int TargetEnd, bool CrossHand)> ikGoals = new();
 
     public SmartPortRig(SkeletonModel source, SkeletonModel target, IReadOnlyDictionary<string, string>? ikTargets = null)
     {
@@ -68,6 +69,7 @@ public sealed class SmartPortRig
                 new XForm(bone.RestLocal.Pos * MotionScale, bone.RestLocal.Rot)));
         }
         Target = SkeletonModel.Create(definitions);
+        copiedHelpers = Target.Bones.Where(b => target.IndexOf(b.Name) < 0).Select(b => b.Index).ToHashSet();
         var mapped = new MappingResult(targetMap.ProfileName, targetMap.Source);
         foreach (var (role, index) in targetMap.RoleToBone) mapped.RoleToBone.Add(role, Target.IndexOf(target[index].Name));
         roleBones = mapped.RoleToBone.Values.ToHashSet();
@@ -90,7 +92,10 @@ public sealed class SmartPortRig
                 if (sourceGoal < 0 || sourceEnd < 0) throw new ArgumentException("IK goal or effector is missing from the source skeleton.");
                 var targetGoal = Target.IndexOf(names[goal]);
                 if (roleBones.Contains(targetGoal)) continue; // An actual skin joint can also be used as an IK target.
-                ikGoals.Add((sourceGoal, sourceEnd, targetGoal, Target.IndexOf(names[end])));
+                var hands = new[] { sourceMap.RoleToBone[BoneRole.HandL], sourceMap.RoleToBone[BoneRole.HandR] };
+                var parent = Source[sourceGoal].ParentIndex;
+                ikGoals.Add((sourceGoal, sourceEnd, targetGoal, Target.IndexOf(names[end]),
+                    copiedHelpers.Contains(targetGoal) && parent != sourceEnd && hands.Contains(parent) && hands.Contains(sourceEnd)));
             }
         reference = TransferAbsolute(source.Bones.Select(b => b.RestLocal).ToArray(), false);
     }
@@ -158,17 +163,36 @@ public sealed class SmartPortRig
             result[i] = new XForm(Target[i].RestLocal.Pos + NVector3.Transform(local.Pos - rest.Pos, basis) * MotionScale,
                 Quaternion.Normalize(basis * delta * Quaternion.Conjugate(basis) * Target[i].RestLocal.Rot));
         }
-        if (fitGoals && ikGoals.Count > 0)
+        if (fitGoals && (ikGoals.Count > 0 || copiedHelpers.Count > 0))
         {
             var sourceWorld = World(Source, pose);
-            var targetWorld = World(Target, result);
-            foreach (var (sourceGoal, sourceEnd, targetGoal, targetEnd) in ikGoals)
+            var targetWorld = new XForm[Target.Count];
+            foreach (var bone in Target.Bones)
+            {
+                var parent = bone.ParentIndex;
+                if (copiedHelpers.Contains(bone.Index))
+                {
+                    // Newly copied graph frames have no fitted skin bind to preserve.
+                    // Keep their animated model-space axes and offset from the mapped
+                    // parent; source local axes can be unrelated to a custom hand's axes.
+                    var s = sourceIndices[bone.Index];
+                    var frame = sourceWorld[s];
+                    frame.Pos = parent < 0 ? frame.Pos * MotionScale : targetWorld[parent].Pos
+                        + (frame.Pos - sourceWorld[Source[s].ParentIndex].Pos) * MotionScale;
+                    result[bone.Index] = parent < 0 ? frame : XForm.ToLocal(targetWorld[parent], frame);
+                }
+                targetWorld[bone.Index] = parent < 0 ? result[bone.Index] : XForm.Compose(targetWorld[parent], result[bone.Index]);
+            }
+            foreach (var (sourceGoal, sourceEnd, targetGoal, targetEnd, crossHand) in ikGoals)
             {
                 // Goals are effector frames, not skin joints: retaining their target bind
                 // offsets can lock a hand in mid-air when the rigs have different rest poses.
                 var offset = XForm.ToLocal(sourceWorld[sourceEnd], sourceWorld[sourceGoal]);
                 offset.Pos *= MotionScale;
                 var goal = XForm.Compose(targetWorld[targetEnd], offset);
+                // A newly copied support-hand goal is anchored to the other hand.
+                // Keep that grip separation; fitting it back to the free arm loses contact.
+                if (crossHand) goal.Pos = targetWorld[targetGoal].Pos;
                 var parent = Target[targetGoal].ParentIndex;
                 result[targetGoal] = parent < 0 ? goal : XForm.ToLocal(targetWorld[parent], goal);
             }

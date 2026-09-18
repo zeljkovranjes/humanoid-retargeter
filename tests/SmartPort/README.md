@@ -46,6 +46,14 @@ Never set that opt-in variable for a user's active project. Check the result's `
 
 `SmartPortAdditiveIkTests.cs` checks that additive arm motion does not invent IK goal translations, while preserving authored goal translation and rotation. `Engine/SmartPortFiringEngineTest.cs` triggers repeated attacks for rifle, SMG and shotgun at idle, walk and run. Enable only `HR_SMART_PORT_FIRING_PROJECT`, with the same `HR_SMART_PORT_GRIP_MODEL`. It requires visible recoil and limits support-hand drift in weapon space to 0.15 units, writing `firing-result.json` and comparison screenshots. The broken additive conversion moves the hand over 4 units during rifle fire and must fail.
 
+`SmartPortCopiedHelperTests.cs` covers newly added graph helpers on different parent axes, preserved target binds and zero additive deltas. `Engine/SmartPortCopiedSocketEngineTest.cs` ports stock Citizen onto the custom Catgirl fixture, which has no stock weapon attachments. Put its compiled bind-preview model/material dependencies at `humanoid_retargeter_smoke/customfbx/catgirl_2_preview_bind_9e13ad1f.vmdl` in the isolated project and enable only `HR_SMART_PORT_COPIED_SOCKET_PROJECT`. The hook exercises Citizen's rifle hold type (2, not Frank's 6), compares full socket orientation including roll with aiming on/off and up/down/level inputs, and writes `copied-socket-result.json`. It must not change the target's body proportions or substitute a second set of arms.
+
+`SmartPortMissingFingerTests.cs` checks that a four-finger source drives a five-finger target's extra pinky from its ring finger, without replacing authored pinky animation or producing nonzero additive rest deltas.
+
+`SmartPortCopiedGripTests.cs` covers newly copied cross-hand IK goals on different arm proportions: their separation from the anchoring hand must survive the effector-fitting pass.
+
+`Engine/SmartPortGunVisualTest.cs` captures a custom Citizen port with an actual M4A1 attached directly to `hold_R`, with identity placement and unchanged gun/body scale. Enable only `HR_SMART_PORT_GUN_VISUAL_PROJECT`, set `HR_SMART_PORT_GRIP_MODEL` to the custom port and supply `models/weapons/sbox_assault_m4a1/w_m4a1.vmdl` with its material/texture dependencies. It writes source/custom idle, walk, run and firing screenshots plus `gun-visual-result.json`. This is visual evidence, not a substitute for the numerical grip/recoil assertions or a claim that every custom hand fits that gun.
+
 ## Keep target animations and extend its graph
 
 The Smart Port checkbox preserves the target's existing setup as the default and adds source clips, not the source graph's logic. It supports editable/recoverable animation graphs with a connected root output; it does not require a Citizen graph. Imported sequence/mask names and the new parameter name are collision-safe. The original models and graph are not overwritten.

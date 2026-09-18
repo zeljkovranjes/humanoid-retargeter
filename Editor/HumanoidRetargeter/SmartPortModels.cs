@@ -112,9 +112,10 @@ internal static class SmartPortModels
 			progress?.Invoke( "Recovering the target mesh and armature…" );
 			targetText = await SmartPortDecompiler.RecoverAsync( target, dataFolder + "/target", token );
 		}
-		if ( rig is not null && !extend ) targetText = SmartPortAttachments.Align( targetText, sourceText, rig );
 		var vmdl = rig is null ? SmartPortSetup.Apply( targetText, sourceText, graphPath )
 			: SmartPortSetup.ApplyRetargeted( targetText, sourceText, graphPath, rig );
+		// Calibrate the merged list so newly copied sockets get the same correction as fitted ones.
+		if ( rig is not null && !extend ) vmdl = SmartPortAttachments.Align( vmdl, sourceText, rig );
 		var expectedAnimations = reference.AnimationNames.ToArray();
 		if ( extend )
 		{

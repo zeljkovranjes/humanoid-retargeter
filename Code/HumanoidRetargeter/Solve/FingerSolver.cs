@@ -154,8 +154,13 @@ internal sealed class FingerSolver
             var metaRole = chainRoles[1];
             var proxRole = chainRoles[2];
             var segments = chainRoles.Skip(1).ToArray();
-
-            var srcRoles = segments
+            // Four-finger sources have no pinky animation. Use the ring chain's
+            // curl/splay for that extra target digit, never replacing authored pinkies.
+            var sourceSegments = segments;
+            if ((proxRole == BoneRole.PinkyProxL || proxRole == BoneRole.PinkyProxR)
+                && !segments.Any(sourceMap.RoleToBone.ContainsKey))
+                sourceSegments = segments.Select(r => Enum.Parse<BoneRole>(r.ToString().Replace("Pinky", "Ring"))).ToArray();
+            var srcRoles = sourceSegments
                 .Where(r => sourceMap.RoleToBone.ContainsKey(r) && srcCanon.Has(r))
                 .ToArray();
             var tgtRoles = segments
@@ -172,7 +177,7 @@ internal sealed class FingerSolver
                 continue;
             }
 
-            var srcPhalanges = srcRoles.Where(r => r != metaRole).ToArray();
+            var srcPhalanges = srcRoles.Where(r => r != sourceSegments[0]).ToArray();
             var tgtPhalanges = tgtRoles.Where(r => r != metaRole).ToArray();
             var recipientRoles = tgtPhalanges.Length > 0 ? tgtPhalanges : tgtRoles;
             if (srcPhalanges.Length == 1)
@@ -203,7 +208,7 @@ internal sealed class FingerSolver
                     C = c,
                     CInv = Quaternion.Conjugate(c),
                     RestRot = srcNormRest[sourceMap.RoleToBone[r]].Rot,
-                    TakesSplay = r == metaRole || r == proxRole,
+                    TakesSplay = r == sourceSegments[0] || r == sourceSegments[1],
                 };
             }).ToArray();
 
