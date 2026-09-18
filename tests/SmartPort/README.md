@@ -44,6 +44,8 @@ Never set that opt-in variable for a user's active project. Check the result's `
 
 `Engine/SmartPortGripPoseEngineTest.cs` complements the drift check: a stable hand in the wrong place must not pass. Enable only `HR_SMART_PORT_GRIP_POSE_PROJECT`, with the same `HR_SMART_PORT_GRIP_MODEL`. It compares both hands in weapon-attachment space against Frank for rifle, SMG and shotgun poses at idle, walk and run. The comparable Human Citizen fixture allows 3 units for fitted hand/socket proportions; the incorrect bind-offset export differs by about 24 units and must fail. It writes `grip-pose-result.json` and rifle screenshots for visual inspection. These checks do not establish exact contact with a game's particular weapon mesh or mounting offsets.
 
+`SmartPortAdditiveIkTests.cs` checks that additive arm motion does not invent IK goal translations, while preserving authored goal translation and rotation. `Engine/SmartPortFiringEngineTest.cs` triggers repeated attacks for rifle, SMG and shotgun at idle, walk and run. Enable only `HR_SMART_PORT_FIRING_PROJECT`, with the same `HR_SMART_PORT_GRIP_MODEL`. It requires visible recoil and limits support-hand drift in weapon space to 0.15 units, writing `firing-result.json` and comparison screenshots. The broken additive conversion moves the hand over 4 units during rifle fire and must fail.
+
 ## Keep target animations and extend its graph
 
 The Smart Port checkbox preserves the target's existing setup as the default and adds source clips, not the source graph's logic. It supports editable/recoverable animation graphs with a connected root output; it does not require a Citizen graph. Imported sequence/mask names and the new parameter name are collision-safe. The original models and graph are not overwritten.

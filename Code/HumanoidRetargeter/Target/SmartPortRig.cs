@@ -92,7 +92,7 @@ public sealed class SmartPortRig
                 if (roleBones.Contains(targetGoal)) continue; // An actual skin joint can also be used as an IK target.
                 ikGoals.Add((sourceGoal, sourceEnd, targetGoal, Target.IndexOf(names[end])));
             }
-        reference = TransferAbsolute(source.Bones.Select(b => b.RestLocal).ToArray());
+        reference = TransferAbsolute(source.Bones.Select(b => b.RestLocal).ToArray(), false);
     }
 
     /// <summary>Modern compiled additive sequences may omit the legacy delta flag.
@@ -123,14 +123,16 @@ public sealed class SmartPortRig
         for (var i = 0; i < pose.Length; i++)
             absolute[i] = new XForm(Source[i].RestLocal.Pos + pose[i].Pos,
                 Quaternion.Normalize(Source[i].RestLocal.Rot * pose[i].Rot));
-        var result = TransferAbsolute(absolute);
+        // Additive goal channels act on an already fitted grip. Re-solving them
+        // against the bind pose invents goal translations during arm-only recoil.
+        var result = TransferAbsolute(absolute, false);
         for (var i = 0; i < result.Length; i++)
             result[i] = new XForm(result[i].Pos - reference[i].Pos,
                 Quaternion.Normalize(Quaternion.Conjugate(reference[i].Rot) * result[i].Rot));
         return result;
     }
 
-    XForm[] TransferAbsolute(XForm[] pose)
+    XForm[] TransferAbsolute(XForm[] pose, bool fitGoals = true)
     {
         var result = new XForm[Target.Count];
         solver.Retarget(pose, result);
@@ -156,7 +158,7 @@ public sealed class SmartPortRig
             result[i] = new XForm(Target[i].RestLocal.Pos + NVector3.Transform(local.Pos - rest.Pos, basis) * MotionScale,
                 Quaternion.Normalize(basis * delta * Quaternion.Conjugate(basis) * Target[i].RestLocal.Rot));
         }
-        if (ikGoals.Count > 0)
+        if (fitGoals && ikGoals.Count > 0)
         {
             var sourceWorld = World(Source, pose);
             var targetWorld = World(Target, result);
