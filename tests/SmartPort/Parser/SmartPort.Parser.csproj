@@ -15,6 +15,7 @@
     <Compile Include="../../../Editor/HumanoidRetargeter/CompiledAssetRecovery.cs" />
     <Compile Include="../../../Editor/HumanoidRetargeter/SmartPortAnimationExport.cs" />
     <Compile Include="../../../Editor/HumanoidRetargeter/SmartPortAttachments.cs" />
+    <Compile Include="../../../Editor/HumanoidRetargeter/SmartPortIkTargets.cs" />
     <Compile Include="../../../Code/HumanoidRetargeter/**/*.cs" />
   </ItemGroup>
 </Project>

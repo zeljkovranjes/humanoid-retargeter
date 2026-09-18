@@ -26,8 +26,9 @@ public sealed class SmartPortRig
     readonly HashSet<int> roleBones;
     readonly XForm[] reference;
     readonly int[] limbEnds;
+    readonly List<(int SourceGoal, int SourceEnd, int TargetGoal, int TargetEnd)> ikGoals = new();
 
-    public SmartPortRig(SkeletonModel source, SkeletonModel target)
+    public SmartPortRig(SkeletonModel source, SkeletonModel target, IReadOnlyDictionary<string, string>? ikTargets = null)
     {
         Source = source;
         foreach (var bone in source.Bones.Concat(target.Bones))
@@ -81,6 +82,16 @@ public sealed class SmartPortRig
             for (var ancestor = sourceParents[bone.Index]; ancestor >= 0; ancestor = source[ancestor].ParentIndex)
                 if (ancestor == parent) { sourceParents[bone.Index] = parent; break; }
         }
+        if (ikTargets is not null)
+            foreach (var (goal, end) in ikTargets)
+            {
+                var sourceGoal = source.IndexOf(goal);
+                var sourceEnd = source.IndexOf(end);
+                if (sourceGoal < 0 || sourceEnd < 0) throw new ArgumentException("IK goal or effector is missing from the source skeleton.");
+                var targetGoal = Target.IndexOf(names[goal]);
+                if (roleBones.Contains(targetGoal)) continue; // An actual skin joint can also be used as an IK target.
+                ikGoals.Add((sourceGoal, sourceEnd, targetGoal, Target.IndexOf(names[end])));
+            }
         reference = TransferAbsolute(source.Bones.Select(b => b.RestLocal).ToArray());
     }
 
@@ -145,6 +156,29 @@ public sealed class SmartPortRig
             result[i] = new XForm(Target[i].RestLocal.Pos + NVector3.Transform(local.Pos - rest.Pos, basis) * MotionScale,
                 Quaternion.Normalize(basis * delta * Quaternion.Conjugate(basis) * Target[i].RestLocal.Rot));
         }
+        if (ikGoals.Count > 0)
+        {
+            var sourceWorld = World(Source, pose);
+            var targetWorld = World(Target, result);
+            foreach (var (sourceGoal, sourceEnd, targetGoal, targetEnd) in ikGoals)
+            {
+                // Goals are effector frames, not skin joints: retaining their target bind
+                // offsets can lock a hand in mid-air when the rigs have different rest poses.
+                var offset = XForm.ToLocal(sourceWorld[sourceEnd], sourceWorld[sourceGoal]);
+                offset.Pos *= MotionScale;
+                var goal = XForm.Compose(targetWorld[targetEnd], offset);
+                var parent = Target[targetGoal].ParentIndex;
+                result[targetGoal] = parent < 0 ? goal : XForm.ToLocal(targetWorld[parent], goal);
+            }
+        }
         return result;
+    }
+
+    static XForm[] World(SkeletonModel skeleton, XForm[] pose)
+    {
+        var world = new XForm[skeleton.Count];
+        foreach (var bone in skeleton.Bones)
+            world[bone.Index] = bone.ParentIndex < 0 ? pose[bone.Index] : XForm.Compose(world[bone.ParentIndex], pose[bone.Index]);
+        return world;
     }
 }

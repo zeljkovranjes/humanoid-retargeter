@@ -40,6 +40,10 @@ Never set that opt-in variable for a user's active project. Check the result's `
 
 `Engine/SmartPortGripEngineTest.cs` checks both hands relative to the weapon throughout idle, forward running and eight walking directions. In the isolated project, enable only `HR_SMART_PORT_GRIP_TEST_PROJECT` and set `HR_SMART_PORT_GRIP_MODEL` to a fresh port's asset path (for example the `model` value from `weapon-result.json`). It also verifies leg motion so a frozen pose cannot pass. Maximum hand drift from the standing grip is 0.15 engine units; results are written to `grip-test-result.json`.
 
+`SmartPortIkGoalTests.cs` checks that bone-driven IK goals retain their offset and orientation relative to the retargeted effector, rather than inheriting unrelated target bind offsets. It also checks unchanged skin binds and zero additive deltas. `IkTargetMappingTests.cs` resolves those relationships from compiled IK chains and graph nodes, without model-specific bone naming rules.
+
+`Engine/SmartPortGripPoseEngineTest.cs` complements the drift check: a stable hand in the wrong place must not pass. Enable only `HR_SMART_PORT_GRIP_POSE_PROJECT`, with the same `HR_SMART_PORT_GRIP_MODEL`. It compares both hands in weapon-attachment space against Frank for rifle, SMG and shotgun poses at idle, walk and run. The comparable Human Citizen fixture allows 3 units for fitted hand/socket proportions; the incorrect bind-offset export differs by about 24 units and must fail. It writes `grip-pose-result.json` and rifle screenshots for visual inspection. These checks do not establish exact contact with a game's particular weapon mesh or mounting offsets.
+
 ## Keep target animations and extend its graph
 
 The Smart Port checkbox preserves the target's existing setup as the default and adds source clips, not the source graph's logic. It supports editable/recoverable animation graphs with a connected root output; it does not require a Citizen graph. Imported sequence/mask names and the new parameter name are collision-safe. The original models and graph are not overwritten.

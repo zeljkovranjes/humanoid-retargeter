@@ -81,11 +81,13 @@ internal static class SmartPortModels
 		var targetText = ReadSource( target );
 		var reference = Model.Load( source.Path );
 		var custom = Model.Load( target.Path );
-		var rig = ArmatureError( custom, reference ) is null ? null
-			: new SmartPortRig( TargetPickers.SkeletonFromModel( reference ), TargetPickers.SkeletonFromModel( custom ) );
+		var needsRetargeting = ArmatureError( custom, reference ) is not null;
 		var graphAsset = AssetSystem.FindByPath( (extend ? custom : reference).AnimGraph.Name );
 		if ( graphAsset is null ) throw new InvalidOperationException( "Animgraph asset could not be resolved." );
 		var graphText = ReadSource( graphAsset );
+		if ( graphText is null ) graphText = await SmartPortDecompiler.RecoverAsync( graphAsset, dataFolder + "/graph_source", token );
+		var rig = needsRetargeting ? new SmartPortRig( TargetPickers.SkeletonFromModel( reference ), TargetPickers.SkeletonFromModel( custom ),
+			!extend ? SmartPortIkTargets.Read( source.GetCompiledFile( true ), graphText ) : null ) : null;
 		SmartPortClip[] clips = null;
 		if ( extend )
 		{
@@ -110,7 +112,6 @@ internal static class SmartPortModels
 			progress?.Invoke( "Recovering the target mesh and armature…" );
 			targetText = await SmartPortDecompiler.RecoverAsync( target, dataFolder + "/target", token );
 		}
-		if ( graphText is null ) graphText = await SmartPortDecompiler.RecoverAsync( graphAsset, dataFolder + "/graph_source", token );
 		if ( rig is not null && !extend ) targetText = SmartPortAttachments.Align( targetText, sourceText, rig );
 		var vmdl = rig is null ? SmartPortSetup.Apply( targetText, sourceText, graphPath )
 			: SmartPortSetup.ApplyRetargeted( targetText, sourceText, graphPath, rig );
