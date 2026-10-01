@@ -44,7 +44,9 @@ internal static class StockAnimationReplacement
 		if ( batch.Clips.Count != 1 || !batch.Clips[0].Success || batch.Errors.Count > 0 )
 			throw new InvalidOperationException( string.Join( "\n", batch.Errors.Concat( batch.Clips.Where( c => !c.Success ).Select( c => c.Error ) ) ) );
 		var clip = batch.Clips[0];
-		graph = StockAnimationGraph.Replace( graph, slot, clip.ClipName, modelPath, out _ );
+		var replacement = StockAnimationGraph.Replace( graph, slot, clip.ClipName, modelPath,
+			CitizenAnimationModels.ReadGraphSource, StockAnimationGraph.SubgraphFolder( folder, name ) );
+		graph = replacement.Graph;
 		vmdl = VmdlAugmenter.Augment( vmdl, new[] { new AnimEntry
 		{
 			Name = clip.ClipName, SourceFilename = string.IsNullOrEmpty( folder ) ? clip.DmxFileName : folder + "/" + clip.DmxFileName,
@@ -60,13 +62,21 @@ internal static class StockAnimationReplacement
 			throw new InvalidOperationException( "The output changed during conversion. Retry to preserve those edits." );
 		Directory.CreateDirectory( Path.GetDirectoryName( graphFile ) );
 		if ( previousGraph is not null ) File.Copy( graphFile, graphFile + ".bak", overwrite: true );
+		// Subgraph copies first: the graph only compiles against the subgraphs it now names.
+		var subgraphFiles = replacement.Subgraphs.ToDictionary( s => CitizenAnimationModels.ProjectFile( s.Key ), s => s.Value );
+		var previousSubgraphs = subgraphFiles.Keys.ToDictionary( f => f, f => File.Exists( f ) ? File.ReadAllText( f ) : null );
+		foreach ( var (file, text) in subgraphFiles )
+		{
+			Directory.CreateDirectory( Path.GetDirectoryName( file ) );
+			File.WriteAllText( file, text );
+		}
 		File.WriteAllText( graphFile, graph );
 		var compiled = false;
 		try
 		{
 			var result = await EditorPipeline.WriteAndCompileAsync( batch, folder,
 				augmentVmdlPath: original is null ? null : modelFile, standaloneVmdlName: name,
-				additionalAssetPaths: new[] { graphFile } );
+				additionalAssetPaths: subgraphFiles.Keys.Append( graphFile ).ToArray() );
 			await EditorPipeline.SwitchToMainThread();
 			CitizenAnimationModels.VerifyGraph( result, graphPath );
 			compiled = result.Compiled;
@@ -79,6 +89,8 @@ internal static class StockAnimationReplacement
 				// Keep diagnostic new files, but restore pre-existing user sources on failure.
 				if ( original is not null ) File.WriteAllText( modelFile, original );
 				if ( previousGraph is not null ) File.WriteAllText( graphFile, previousGraph );
+				foreach ( var (file, text) in previousSubgraphs )
+					if ( text is not null ) File.WriteAllText( file, text );
 			}
 		}
 	}

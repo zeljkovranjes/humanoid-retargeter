@@ -27,14 +27,15 @@ public class AnimationWorkflowTests
     [Fact]
     public void ReplacingAgainOnlyChangesSelectedSlotsReferences()
     {
+        // walk_n owns every forward walk ring (Walk_N, WalkFast_N, Walk2X_N).
         var slot = StockAnimationGraph.Slots.Single(s => s.Id == "walk_n");
         var first = StockAnimationGraph.Replace(Graph, slot, slot.ReplacementPrefix + "one", "custom.vmdl", out var count);
-        Assert.Equal(1, count);
+        Assert.Equal(2, count);
         var second = StockAnimationGraph.Replace(first, slot, slot.ReplacementPrefix + "two", "custom.vmdl", out count);
-        Assert.Equal(1, count);
+        Assert.Equal(2, count);
         Assert.DoesNotContain(slot.ReplacementPrefix + "one", second);
+        Assert.DoesNotContain("WalkFast_N", second);
         Assert.Contains("Walk_S", second);
-        Assert.Contains("WalkFast_N", second);
         Assert.Contains("Run_N_m", second);
         Assert.Contains("1.25", second);
         Assert.True(KvValue.DeepEquals(((KvObject)Kv3.Parse(Graph).Root)["connections"], ((KvObject)Kv3.Parse(second).Root)["connections"]));
@@ -47,6 +48,80 @@ public class AnimationWorkflowTests
         var result = StockAnimationGraph.Replace(Graph, slot, slot.ReplacementPrefix + "test", "custom.vmdl", out var count);
         Assert.Equal(1, count);
         Assert.DoesNotContain("Run_N_m", result);
+    }
+
+    [Fact]
+    public void ForwardRunTakesOverTheSprintRing()
+    {
+        // The default PlayerController runs at 320, past the sprint ring (~300): a run slot
+        // that left Sprint_N in place never showed its clip in game.
+        const string blend = VmdlWriter.Kv3Header + "{ _class = \"CAnimationGraph\" items = [ "
+            + "{ m_sequenceName = \"WalkFast_N\" }, { m_sequenceName = \"Run_N\" }, { m_sequenceName = \"Sprint_N\" }, "
+            + "{ m_sequenceName = \"Run_N_m\" }, { m_sequenceName = \"Sprint_N_m\" }, { m_sequenceName = \"Sprint_NE\" }, "
+            + "{ m_sequenceName = \"Run2X_E\" } ] }";
+        var slot = StockAnimationGraph.Slots.Single(s => s.Id == "run_n");
+        var result = StockAnimationGraph.Replace(blend, slot, slot.ReplacementPrefix + "drunk", "custom.vmdl", out var count);
+        Assert.Equal(4, count);
+        Assert.DoesNotContain("\"Sprint_N\"", result);
+        Assert.DoesNotContain("Sprint_N_m", result);
+        Assert.Contains("WalkFast_N", result);
+        Assert.Contains("Sprint_NE", result);
+        Assert.Contains("Run2X_E", result);
+    }
+
+    const string Entry = VmdlWriter.Kv3Header + "{ _class = \"CAnimationGraph\" m_previewModels = [\"stock.vmdl\"] nodes = [ "
+        + "{ _class = \"CSubGraphAnimNode\" m_subGraphFilename = \"models/citizen/subgraphs/citizen_core.vsubgrph\" } ] }";
+    const string Core = VmdlWriter.Kv3Header + "{ _class = \"CAnimationSubGraph\" nodes = [ "
+        + "{ m_subGraphFilename = \"models/citizen/subgraphs/citizen_locomotion.vsubgrph\" }, "
+        + "{ m_subGraphFilename = \"models\\\\citizen\\\\subgraphs\\\\citizen_face.vsubgrph\" } ] }";
+    const string Locomotion = VmdlWriter.Kv3Header + "{ _class = \"CAnimationSubGraph\" nodes = [ "
+        + "{ m_sequenceName = \"Run_N\" }, { m_sequenceName = \"Sprint_N\" }, { m_sequenceName = \"Walk2X_N\" } ] }";
+    const string Face = VmdlWriter.Kv3Header + "{ _class = \"CAnimationSubGraph\" nodes = [ { m_sequenceName = \"Smile\" } ] }";
+
+    [Fact]
+    public void ReplacementFollowsSubgraphsIntoProjectOwnedCopies()
+    {
+        var files = new Dictionary<string, string>
+        {
+            ["models/citizen/subgraphs/citizen_core.vsubgrph"] = Core,
+            ["models/citizen/subgraphs/citizen_locomotion.vsubgrph"] = Locomotion,
+            ["models/citizen/subgraphs/citizen_face.vsubgrph"] = Face,
+        };
+        var folder = StockAnimationGraph.SubgraphFolder("anims", "drunk");
+        Assert.Equal("anims/graphs/drunk_subgraphs", folder);
+        var run = StockAnimationGraph.Slots.Single(s => s.Id == "run_n");
+        var first = StockAnimationGraph.Replace(Entry, run, run.ReplacementPrefix + "a", "anims/drunk.vmdl",
+            path => files.TryGetValue(path, out var text) ? text : null, folder);
+
+        Assert.Equal(2, first.References);
+        Assert.Contains(folder + "/citizen_core.vsubgrph", first.Graph);
+        Assert.Equal(new[] { folder + "/citizen_core.vsubgrph", folder + "/citizen_locomotion.vsubgrph" },
+            first.Subgraphs.Keys.OrderBy(k => k));
+        var core = first.Subgraphs[folder + "/citizen_core.vsubgrph"];
+        Assert.Contains(folder + "/citizen_locomotion.vsubgrph", core);
+        Assert.Contains("citizen_face.vsubgrph", core); // untouched branches keep the shipped subgraph
+        Assert.DoesNotContain("Sprint_N", first.Subgraphs[folder + "/citizen_locomotion.vsubgrph"]);
+        Assert.Contains("Walk2X_N", first.Subgraphs[folder + "/citizen_locomotion.vsubgrph"]);
+
+        // A second slot reads the project copies back and keeps the first replacement.
+        foreach (var (path, text) in first.Subgraphs) files[path] = text;
+        var walk = StockAnimationGraph.Slots.Single(s => s.Id == "walk_n");
+        var second = StockAnimationGraph.Replace(first.Graph, walk, walk.ReplacementPrefix + "b", "anims/drunk.vmdl",
+            path => files.TryGetValue(path, out var text) ? text : null, folder);
+        var locomotion = second.Subgraphs[folder + "/citizen_locomotion.vsubgrph"];
+        Assert.Contains(run.ReplacementPrefix + "a", locomotion);
+        Assert.Contains(walk.ReplacementPrefix + "b", locomotion);
+        Assert.Equal(Locomotion, files["models/citizen/subgraphs/citizen_locomotion.vsubgrph"]);
+    }
+
+    [Fact]
+    public void SubgraphCycleDoesNotRecurseForever()
+    {
+        var loop = VmdlWriter.Kv3Header + "{ _class = \"CAnimationSubGraph\" nodes = [ { m_subGraphFilename = \"a.vsubgrph\" }, { m_sequenceName = \"Run_N\" } ] }";
+        var entry = VmdlWriter.Kv3Header + "{ _class = \"CAnimationGraph\" nodes = [ { m_subGraphFilename = \"a.vsubgrph\" } ] }";
+        var run = StockAnimationGraph.Slots.Single(s => s.Id == "run_n");
+        var result = StockAnimationGraph.Replace(entry, run, "x", "m.vmdl", _ => loop, "owned");
+        Assert.Equal(1, result.References);
     }
 
     [Fact]

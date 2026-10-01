@@ -37,7 +37,7 @@ internal static class StockAnimationReplacementGate
 		}
 		var entry = SourceFileEntry.Load( Environment.GetEnvironmentVariable( "HR_UI_FIXTURE_STEPS" ), Project.Current.GetAssetsPath() );
 		if ( entry.Scene is null ) throw new Exception( entry.StatusDetail );
-		foreach ( var slotId in new[] { "walk_n", "walk_s" } )
+		foreach ( var slotId in new[] { "run_n", "walk_s" } )
 		{
 			var slot = StockAnimationGraph.Slots.Single( s => s.Id == slotId );
 			var request = new RetargetRequest
@@ -76,29 +76,56 @@ internal static class StockAnimationReplacementGate
 			}
 			finally { probe.Delete(); probeWorld.Delete(); }
 		}
-		var text = File.ReadAllText( graphFile );
-		if ( !text.Contains( "hr_replace_walk_n_gate" ) || !text.Contains( "hr_replace_walk_s_gate" ) )
+		// The stock graph keeps its animation in subgraphs: the replacements live in the
+		// project-owned copies the graph now points at.
+		var subgraphs = CitizenAnimationModels.ProjectFile( StockAnimationGraph.SubgraphFolder( folder, copiedName ) );
+		var text = File.ReadAllText( graphFile ) + string.Concat( Directory.Exists( subgraphs )
+			? Directory.GetFiles( subgraphs, "*.vsubgrph" ).Select( File.ReadAllText ) : Array.Empty<string>() );
+		if ( !text.Contains( "hr_replace_run_n_gate" ) || !text.Contains( "hr_replace_walk_s_gate" ) )
 			throw new Exception( "Replacing a second slot lost the first replacement." );
 		if ( !File.Exists( graphFile + ".bak" ) ) throw new Exception( "Editable graph backup is missing." );
+
+		// The replaced run must actually PLAY at the default PlayerController run speed (320),
+		// which sits past the sprint ring: the graph-driven pose must differ from the stock
+		// model's under the same parameters.
 		var world = new SceneWorld();
 		var scene = new SceneModel( world, model, Transform.Zero ) { UseAnimGraph = true };
+		var reference = new SceneModel( world, stock, Transform.Zero ) { UseAnimGraph = true };
 		try
 		{
-			scene.SetAnimParameter( "b_grounded", true );
-			scene.SetAnimParameter( "move_x", 100f );
-			scene.SetAnimParameter( "move_speed", 100f );
-			scene.SetAnimParameter( "move_groundspeed", 100f );
-			scene.SetAnimParameter( "wish_x", 100f );
-			scene.SetAnimParameter( "wish_speed", 100f );
-			for ( var i = 0; i < 60; i++ ) scene.Update( 1f / 30 );
+			var maxDelta = 0f;
+			foreach ( var probe in new[] { scene, reference } )
+			{
+				probe.SetAnimParameter( "b_grounded", true );
+				probe.SetAnimParameter( "move_x", 320f );
+				probe.SetAnimParameter( "move_speed", 320f );
+				probe.SetAnimParameter( "move_groundspeed", 320f );
+				probe.SetAnimParameter( "wish_x", 320f );
+				probe.SetAnimParameter( "wish_speed", 320f );
+			}
+			for ( var i = 0; i < 90; i++ )
+			{
+				scene.Update( 1f / 30 );
+				reference.Update( 1f / 30 );
+				if ( i < 30 ) continue;
+				foreach ( var foot in new[] { "foot_L", "foot_R", "ankle_L", "ankle_R" } )
+				{
+					if ( model.Bones.GetBone( foot ) is null ) continue;
+					maxDelta = MathF.Max( maxDelta, (scene.GetBoneWorldTransform( foot ).Position
+						- reference.GetBoneWorldTransform( foot ).Position).Length );
+				}
+			}
 			foreach ( var bone in model.Bones.AllBones )
 			{
 				var p = scene.GetBoneWorldTransform( bone.Index ).Position;
 				if ( !float.IsFinite( p.x ) || !float.IsFinite( p.y ) || !float.IsFinite( p.z ) || p.Length > 200 )
 					throw new Exception( "Invalid replacement graph pose: " + bone.Name );
 			}
+			Log.Info( $"[hr-ui-smoke] replaced forward run at speed 320: feet differ from stock by up to {maxDelta:0.0} units" );
+			if ( maxDelta < 4f )
+				throw new Exception( $"The replaced forward run does not play at run speed 320 (feet within {maxDelta:0.0} units of the stock pose)." );
 		}
-		finally { scene.Delete(); world.Delete(); }
+		finally { scene.Delete(); reference.Delete(); world.Delete(); }
 		Log.Info( $"[hr-ui-smoke] Editable graph and two stock replacements {name}: complete." );
 	}
 }
