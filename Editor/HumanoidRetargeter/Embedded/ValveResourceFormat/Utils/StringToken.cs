@@ -30,6 +30,15 @@ namespace HumanoidRetargeterVrf.Utils
 #endif
 
         /// <summary>
+        /// The generator written into exported files: <see cref="VRF_GENERATOR"/>, without the build version inside a
+        /// deterministic id scope (<see cref="HumanoidRetargeterDmx.ElementIds.Deterministic"/>), so the same export
+        /// gives the same bytes whichever build of this library wrote it.
+        /// </summary>
+        public static string Generator => HumanoidRetargeterDmx.ElementIds.IsDeterministic
+            ? "Source 2 Viewer - https://valveresourceformat.github.io"
+            : VRF_GENERATOR;
+
+        /// <summary>
         /// MurmurHash2 seed value.
         /// </summary>
         public const uint MURMUR2SEED = 0x31415926; // It's pi!

@@ -5,7 +5,6 @@ using System.Linq;
 using HumanoidRetargeterVrf.Utils;
 using System.Diagnostics;
 using System.IO;
-using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using HumanoidRetargeterDmx;
@@ -834,7 +833,7 @@ partial class ModelExtract
             ["model"] = dmeModel,
             ["exportTags"] = new Element(dmx, "exportTags", null, "DmeExportTags")
             {
-                ["source"] = $"Generated with {StringToken.VRF_GENERATOR}",
+                ["source"] = $"Generated with {StringToken.Generator}",
             }
         };
     }

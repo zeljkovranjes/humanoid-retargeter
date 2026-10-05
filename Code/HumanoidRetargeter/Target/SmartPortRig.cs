@@ -34,8 +34,10 @@ public sealed class SmartPortRig
     readonly Dictionary<int, Palm> palms = new();
     readonly List<(int SourceGoal, int SourceEnd, int TargetGoal, int TargetEnd, bool CrossHand, bool Rigid)> ikGoals = new();
 
+    /// <param name="targetRoles">Target bones for roles the mapper cannot find (e.g. a rig whose head is replaced by
+    /// another part); each overrides whatever the bone or role was mapped to.</param>
     public SmartPortRig(SkeletonModel source, SkeletonModel target, IReadOnlyDictionary<string, string>? ikTargets = null,
-        IReadOnlyCollection<string>? attachmentBones = null)
+        IReadOnlyCollection<string>? attachmentBones = null, IReadOnlyDictionary<BoneRole, string>? targetRoles = null)
     {
         Source = source;
         foreach (var bone in source.Bones.Concat(target.Bones))
@@ -43,6 +45,14 @@ public sealed class SmartPortRig
                 || bone.RestLocal.Rot.LengthSquared() < .0001f) throw new ArgumentException("Invalid bind transform: " + bone.Name);
         var sourceMap = Map(source);
         var targetMap = Map(target);
+        foreach (var (role, name) in targetRoles ?? new Dictionary<BoneRole, string>())
+        {
+            var index = target.IndexOf(name);
+            if (index < 0) throw new ArgumentException($"Role {role} names a bone the target does not have: {name}");
+            foreach (var other in targetMap.RoleToBone.Where(p => p.Value == index).Select(p => p.Key).ToArray())
+                targetMap.RoleToBone.Remove(other);
+            targetMap.RoleToBone[role] = index;
+        }
         var required = new[] { BoneRole.Hips, BoneRole.Head, BoneRole.UpperArmL, BoneRole.UpperArmR,
             BoneRole.LowerArmL, BoneRole.LowerArmR, BoneRole.HandL, BoneRole.HandR,
             BoneRole.UpperLegL, BoneRole.UpperLegR, BoneRole.LowerLegL, BoneRole.LowerLegR, BoneRole.FootL, BoneRole.FootR };

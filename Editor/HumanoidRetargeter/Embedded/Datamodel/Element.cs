@@ -2,9 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System;
 using System.Collections;
-using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Reflection;
@@ -44,7 +42,7 @@ namespace HumanoidRetargeterDmx
             else
             {
                 if (!owner.AllowRandomIDs) throw new InvalidOperationException("Random IDs are not allowed in this HumanoidRetargeterDmx.");
-                ID = Guid.NewGuid();
+                ID = ElementIds.Next();
             }
             Owner = owner;
         }
@@ -72,7 +70,7 @@ namespace HumanoidRetargeterDmx
         public Element()
             : base(null)
         {
-            ID = Guid.NewGuid();
+            ID = ElementIds.Next();
 
             // For subclasses get the actual classname
             if (GetType() != typeof(Element))

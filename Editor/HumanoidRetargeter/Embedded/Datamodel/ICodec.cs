@@ -2,12 +2,9 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System;
-using System.Linq;
 using System.IO;
 using System.Numerics;
 using System.Reflection;
-using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 
 namespace HumanoidRetargeterDmx.Codecs

@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Linq;
 using static HumanoidRetargeterZstd.UnsafeHelper;
 using System.Runtime.CompilerServices;
-using System;
 using System.Runtime.InteropServices;
 
 namespace HumanoidRetargeterZstd.Unsafe

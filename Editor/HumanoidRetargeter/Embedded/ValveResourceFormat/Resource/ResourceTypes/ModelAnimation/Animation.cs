@@ -3,7 +3,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using HumanoidRetargeterVrf.Utils;
-using System.Linq;
 using System.Runtime.InteropServices;
 using HumanoidRetargeterVrf.ResourceTypes.ModelAnimation.SegmentDecoders;
 using HumanoidRetargeterVrf.ResourceTypes.ModelFlex;
