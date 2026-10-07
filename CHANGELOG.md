@@ -1,6 +1,8 @@
 # Changelog
 
 ## 2026-10-06
+### Fixed
+- Characters bound in a T-pose (most Blender characters, including ones rigged with Humanoid Rigger) no longer play stock Citizen animations with the arms held about 50° too high. "Create Citizen animation model" now points every limb where the Citizen's limb points, so arms, shoulders and biceps no longer stretch.
 ### Breaking
 - Runtime namespaces moved under `HumanoidRetargeter.Core`. Code that calls the library directly needs its `using` lines updated:
   - `HumanoidRetargeter` (`Retargeter`, `RetargetRequest`, `RetargetResult`, `RetargetBatchResult`, `RetargetTargetSpec`, `ClipResult`, `ResolvedSource`, `InspectResult`, `MappingReportInfo`, `BatchOptions`, `SolverKind`, `TargetUpAxis`, `CoreInfo`) -> `HumanoidRetargeter.Core`

@@ -34,3 +34,9 @@ Journal for this library. Keep it current: decisions, engine gotchas, what faile
 ## Log
 
 - 2026-10-06: brought under the workspace standard (layout, namespaces, docs); no behaviour change, all tests pass
+- 2026-10-06: user report "body deforms in Citizen animations, fine in Mixamo" (Humanoid Rigger, Human Citizen Male
+  Complete, then Create Citizen animation model). Reproduced with humanMesh6.fbx in the rigger's owned editor:
+  every clip, bindPose included, kept the arms ~50 degrees off the stock pose. Cause: FittedCitizenPose mapped rest to
+  rest, so a T-pose bind kept its offset from the Citizen A-pose in every frame. Fix: each bone is first swung onto the
+  stock rest direction (roll kept); limb directions now match stock within 0-2 degrees. Mixamo works because it
+  matches directions, not bind deltas.

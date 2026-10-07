@@ -74,6 +74,35 @@ public class FittedCitizenTests
         Assert.Equal(2.2f, output[1].Pos.X, 5);
     }
 
+    [Fact]
+    public void TPoseBoundArmFollowsTheStockArmDirection()
+    {
+        // Blender characters are usually bound in a T-pose while the Citizen binds in an A-pose.
+        // The fitted arm must point where the stock arm points, not keep the T-pose offset.
+        static SkeletonModel Arm(float downDegrees) => SkeletonModel.Create(new[]
+        {
+            new BoneDefinition("pelvis", null, new XForm(new Vector3(0, 0, 10), Quaternion.Identity)),
+            new BoneDefinition("arm_upper_L", "pelvis", new XForm(new Vector3(0, 2, 5),
+                Quaternion.CreateFromAxisAngle(Vector3.UnitY, downDegrees * MathF.PI / 180f))),
+            new BoneDefinition("arm_lower_L", "arm_upper_L", new XForm(new Vector3(3, 0, 0), Quaternion.Identity)),
+        });
+        var source = Arm(50);
+        var target = Arm(0);
+        foreach (var bend in new[] { 0f, .6f })
+        {
+            var frame = source.Bones.Select(b => b.RestLocal).ToArray();
+            frame[1].Rot = Quaternion.Normalize(Quaternion.CreateFromAxisAngle(Vector3.UnitZ, bend) * frame[1].Rot);
+            var output = new FittedCitizenPose(source, target).Transfer(frame);
+            Vector3 Direction(SkeletonModel rig, XForm[] pose)
+            {
+                var upper = XForm.Compose(pose[0], pose[1]);
+                return Vector3.Normalize(XForm.Compose(upper, pose[2]).Pos - upper.Pos);
+            }
+            Assert.True(Vector3.Dot(Direction(source, frame), Direction(target, output)) > .9999f,
+                $"bend {bend}: fitted arm points {Direction(target, output)}, stock arm {Direction(source, frame)}");
+        }
+    }
+
     private static string Document(string children, string extra = "")
         => VmdlWriter.Kv3Header + "{ rootNode = { children = [ " + children + " ] " + extra + " } }";
 
