@@ -1,8 +1,8 @@
-using HumanoidRetargeter.Target;
-using HumanoidRetargeterVrf;
-using HumanoidRetargeterVrf.IO;
-using HumanoidRetargeterVrf.ResourceTypes;
-using HumanoidRetargeterVrf.Serialization.KeyValues;
+using HumanoidRetargeter.Core.Target;
+using HumanoidRetargeter.EditorTools.Embedded.ValveResourceFormat;
+using HumanoidRetargeter.EditorTools.Embedded.ValveResourceFormat.IO;
+using HumanoidRetargeter.EditorTools.Embedded.ValveResourceFormat.ResourceTypes;
+using HumanoidRetargeter.EditorTools.Embedded.ValveResourceFormat.Serialization.KeyValues;
 using Xunit;
 
 namespace SmartPort.Parser.Tests;

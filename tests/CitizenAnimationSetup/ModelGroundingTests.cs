@@ -1,6 +1,6 @@
 using System.Numerics;
-using HumanoidRetargeter.Maths;
-using HumanoidRetargeter.Target;
+using HumanoidRetargeter.Core.Maths;
+using HumanoidRetargeter.Core.Target;
 using Xunit;
 
 namespace HumanoidRetargeter.Tests.Target;

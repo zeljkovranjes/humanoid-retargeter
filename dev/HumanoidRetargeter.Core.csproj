@@ -1,0 +1,32 @@
+<Project>
+
+  <!-- Code/HumanoidRetargeter/Core compiled as a plain .NET library. It proves Core has no s&box dependency
+       and lets the tests run in seconds without the engine. Not shipped.
+       Its own obj folder: HumanoidRetargeter.Dev.csproj sits in the same directory, and two projects
+       sharing obj/project.assets.json overwrite each other's restore. -->
+  <PropertyGroup>
+    <BaseIntermediateOutputPath>obj\core\</BaseIntermediateOutputPath>
+  </PropertyGroup>
+
+  <Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" />
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <AssemblyName>HumanoidRetargeter.Core</AssemblyName>
+    <RootNamespace>HumanoidRetargeter</RootNamespace>
+    <NoWarn>1591</NoWarn>
+    <OutputPath>bin\core\$(Configuration)\</OutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Code\HumanoidRetargeter\Assembly.cs" />
+    <Compile Include="..\Code\HumanoidRetargeter\Core\**\*.cs" />
+  </ItemGroup>
+
+  <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
+
+</Project>

@@ -1,11 +1,12 @@
 using System.Numerics;
 using System.Text;
-using HumanoidRetargeter.Cleanup;
-using HumanoidRetargeter.Formats.Bvh;
-using HumanoidRetargeter.Formats.Fbx;
-using HumanoidRetargeter.Skeleton;
-using HumanoidRetargeter.Target;
+using HumanoidRetargeter.Core.Cleanup;
+using HumanoidRetargeter.Core.Formats.Bvh;
+using HumanoidRetargeter.Core.Formats.Fbx;
+using HumanoidRetargeter.Core.Skeleton;
+using HumanoidRetargeter.Core.Target;
 using Xunit;
+using HumanoidRetargeter.Core;
 
 namespace HumanoidRetargeter.Tests.Solve;
 
@@ -20,7 +21,7 @@ public class PosedLocomotionTests
     {
         var target = Target(upAxis);
         var frames = Convert(Fixture(upAxis, restTravel: restTravel), target, RootMotionMode.InPlace);
-        var hips = target.Rig.BoneForRole(HumanoidRetargeter.Mapping.BoneRole.Hips)!.Value;
+        var hips = target.Rig.BoneForRole(HumanoidRetargeter.Core.Mapping.BoneRole.Hips)!.Value;
         var center = frames.Aggregate(Vector3.Zero, (sum, frame) => sum + new Pose(frame).ToWorld(target.Rig.Skeleton)[hips].Pos) / frames.Count;
         var delta = center - target.Rig.Skeleton.RestWorld[hips].Pos;
         if (upAxis == 1) delta.Y = 0; else delta.Z = 0;
@@ -62,7 +63,7 @@ public class PosedLocomotionTests
     {
         var target = Target(upAxis);
         var result = Convert(Fixture(upAxis, torsoLean: 70), target, RootMotionMode.InPlace);
-        var hip = target.Rig.BoneForRole(HumanoidRetargeter.Mapping.BoneRole.Hips)!.Value;
+        var hip = target.Rig.BoneForRole(HumanoidRetargeter.Core.Mapping.BoneRole.Hips)!.Value;
         var heights = result.Select(frame => Vertical(new Pose(frame).ToWorld(target.Rig.Skeleton)[hip].Pos, upAxis)).ToArray();
         Assert.True(heights.Max() - heights.Min() < .05f,
             $"Horizontal travel changed pelvis height by {heights.Max() - heights.Min()}.");
@@ -92,7 +93,7 @@ public class PosedLocomotionTests
     {
         var target = Target(1);
         var result = Convert(Fixture(1, liftedRest: 35, travel: 0), target, RootMotionMode.Off);
-        var toe = target.Rig.BoneForRole(HumanoidRetargeter.Mapping.BoneRole.ToeR)!.Value;
+        var toe = target.Rig.BoneForRole(HumanoidRetargeter.Core.Mapping.BoneRole.ToeR)!.Value;
         var floor = target.Rig.Skeleton.RestWorld[toe].Pos.Y;
         foreach (var frame in result)
             Assert.True(new Pose(frame).ToWorld(target.Rig.Skeleton)[toe].Pos.Y >= floor - .1f,
@@ -112,7 +113,7 @@ public class PosedLocomotionTests
         };
     }
 
-    static List<HumanoidRetargeter.Maths.XForm[]> Convert(byte[] bytes, RetargetTargetSpec target, RootMotionMode mode)
+    static List<HumanoidRetargeter.Core.Maths.XForm[]> Convert(byte[] bytes, RetargetTargetSpec target, RootMotionMode mode)
     {
         var result = Retargeter.Convert(new RetargetRequest
         {

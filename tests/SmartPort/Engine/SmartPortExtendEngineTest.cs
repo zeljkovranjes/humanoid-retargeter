@@ -40,7 +40,7 @@ public static class SmartPortExtendEngineTest
             var source = AssetSystem.FindByPath("models/player/human/frank_mp.vmdl") ?? throw new Exception("Missing compiled fixture");
             var target = AssetSystem.FindByPath("animations/retargeted/retargeted_bunny.vmdl") ?? throw new Exception("Missing target fixture");
             if (Model.Load(target.Path).IsError) throw new Exception("Target failed to load");
-            var type = AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType("HumanoidRetargeter.Editor.SmartPortModels")).FirstOrDefault(t => t != null)
+            var type = AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType("HumanoidRetargeter.EditorTools.SmartPortModels")).FirstOrDefault(t => t != null)
                 ?? throw new Exception("SmartPortModels was not compiled into the editor library");
             var method = type.GetMethod("CreateExtendedAsync", BindingFlags.Static | BindingFlags.NonPublic);
             Action<string> progress = message => { results["stage"] = message; Save(); };

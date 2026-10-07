@@ -1,8 +1,8 @@
 using System.Reflection;
 using System.Text;
-using HumanoidRetargeter.Editor;
-using HumanoidRetargeterVrf;
-using HumanoidRetargeterVrf.IO;
+using HumanoidRetargeter.EditorTools;
+using HumanoidRetargeter.EditorTools.Embedded.ValveResourceFormat;
+using HumanoidRetargeter.EditorTools.Embedded.ValveResourceFormat.IO;
 using Xunit;
 
 namespace SmartPort.Parser.Tests;

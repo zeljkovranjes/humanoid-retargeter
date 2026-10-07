@@ -1,5 +1,5 @@
-using HumanoidRetargeter.Editor;
-using HumanoidRetargeter.Target;
+using HumanoidRetargeter.EditorTools;
+using HumanoidRetargeter.Core.Target;
 using Xunit;
 
 namespace SmartPort.Parser.Tests;

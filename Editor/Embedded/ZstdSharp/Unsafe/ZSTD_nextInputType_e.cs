@@ -1,0 +1,15 @@
+#nullable enable
+using System;
+using System.Collections.Generic;
+using System.Linq;
+namespace HumanoidRetargeter.EditorTools.Embedded.ZstdSharp.Unsafe;
+
+    public enum ZSTD_nextInputType_e
+    {
+        ZSTDnit_frameHeader,
+        ZSTDnit_blockHeader,
+        ZSTDnit_block,
+        ZSTDnit_lastBlock,
+        ZSTDnit_checksum,
+        ZSTDnit_skippableFrame
+    }

@@ -1,6 +1,7 @@
 using System.Text;
-using HumanoidRetargeter.Target;
+using HumanoidRetargeter.Core.Target;
 using Xunit;
+using HumanoidRetargeter.Core;
 
 namespace HumanoidRetargeter.Tests.Target;
 

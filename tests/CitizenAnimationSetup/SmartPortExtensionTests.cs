@@ -1,4 +1,4 @@
-using HumanoidRetargeter.Target;
+using HumanoidRetargeter.Core.Target;
 using Xunit;
 
 namespace HumanoidRetargeter.Tests.Target;
