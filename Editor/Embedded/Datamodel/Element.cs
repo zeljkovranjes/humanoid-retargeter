@@ -42,7 +42,7 @@ namespace HumanoidRetargeter.EditorTools.Embedded.Datamodel;
             else
             {
                 if (!owner.AllowRandomIDs) throw new InvalidOperationException("Random IDs are not allowed in this Datamodel.");
-                ID = Guid.NewGuid();
+                ID = ElementIds.Next();
             }
             Owner = owner;
         }
@@ -70,7 +70,7 @@ namespace HumanoidRetargeter.EditorTools.Embedded.Datamodel;
         public Element()
             : base(null)
         {
-            ID = Guid.NewGuid();
+            ID = ElementIds.Next();
 
             // For subclasses get the actual classname
             if (GetType() != typeof(Element))

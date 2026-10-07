@@ -15,6 +15,7 @@ namespace HumanoidRetargeter.Core;
 /// request runs its OWN profile detection, so a single batch may mix Mixamo + ActorCore +
 /// BVH sources — unless <see cref="MappingOverride"/> supplies a mapping explicitly.
 /// </summary>
+[Alias( "HumanoidRetargeter.RetargetRequest" )]
 public sealed class RetargetRequest
 {
     /// <summary>Solver choice for this request's clips. <see cref="SolverKind.DeepLearning"/>

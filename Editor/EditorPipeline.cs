@@ -30,6 +30,7 @@ namespace HumanoidRetargeter.EditorTools;
 /// tools use, e.g. AssetBrowser). Touching engine objects from a pool thread is a native
 /// crash, not a managed exception - it must be prevented structurally.
 /// </remarks>
+[Alias( "HumanoidRetargeter.Editor.EditorPipeline" )]
 public static class EditorPipeline
 {
 	// ============================================================== threading

@@ -25,6 +25,7 @@ namespace HumanoidRetargeter.EditorTools;
 /// mapping stays per FILE (one skeleton per file). Every file carries its own mapping -
 /// a single batch may mix Mixamo, ActorCore and BVH sources.
 /// </summary>
+[Alias( "HumanoidRetargeter.Editor.RetargetWindow" )]
 public sealed class RetargetWindow : Widget
 {
 	/// <summary>The window title and its View menu entry.</summary>

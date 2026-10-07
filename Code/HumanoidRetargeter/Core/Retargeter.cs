@@ -69,6 +69,7 @@ using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global
 /// Extract request either way. <see cref="RootMotionMode.InPlace"/> always operates on the
 /// hips channels directly and needs no dedicated root.</para>
 /// </remarks>
+[Alias( "HumanoidRetargeter.Retargeter" )]
 public static class Retargeter
 {
 	/// <summary>

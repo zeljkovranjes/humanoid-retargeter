@@ -11,6 +11,7 @@ using HumanoidRetargeter.Core.Target;
 namespace HumanoidRetargeter.Core;
 
 /// <summary>Options for <see cref="Retargeter.ConvertBatch"/> output assembly.</summary>
+[Alias( "HumanoidRetargeter.BatchOptions" )]
 public sealed class BatchOptions
 {
     /// <summary>

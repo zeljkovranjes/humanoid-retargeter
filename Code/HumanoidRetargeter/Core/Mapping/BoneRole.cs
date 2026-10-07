@@ -14,6 +14,7 @@ namespace HumanoidRetargeter.Core.Mapping;
 /// none — its thumb chain starts at the proximal phalanx). Finger roles follow the pattern
 /// finger × segment (Meta = metacarpal, Prox/Mid/Dist = phalanges) × side.
 /// </remarks>
+[Alias( "HumanoidRetargeter.Mapping.BoneRole" )]
 public enum BoneRole
 {
     /// <summary>Pelvis / hips — the skeleton's translating root role.</summary>

@@ -21,6 +21,7 @@ namespace HumanoidRetargeter.Core.Solve;
 /// the expensive mapping/rig-analysis boundary; <see cref="TryRetarget"/> performs no
 /// hierarchy scan, mapping rebuild, file IO, or successful-path heap allocation.
 /// </remarks>
+[Alias( "HumanoidRetargeter.Solve.RuntimePoseRetargeter" )]
 public sealed class RuntimePoseRetargeter
 {
     private readonly GeometricSolver.Plan _plan;

@@ -40,3 +40,7 @@ Journal for this library. Keep it current: decisions, engine gotchas, what faile
   rest, so a T-pose bind kept its offset from the Citizen A-pose in every frame. Fix: each bone is first swung onto the
   stock rest direction (roll kept); limb directions now match stock within 0-2 degrees. Mixamo works because it
   matches directions, not bind deltas.
+- 2026-10-06: merged origin/main (e8f7f1b headless Smart Port, roles, attachment influences, graph helpers; 4ed723f
+  stock locomotion on every speed ring and through subgraphs) into the new layout: their files were run through the
+  same move/rename/split script as the restructure and 3-way merged; every added line is present. More [Alias]es:
+  types other packages bind by name (mocap, weapon-importer, rigger, Source 1 Migrator via SmartPortHeadless).

@@ -5,6 +5,7 @@ using System.Collections.Generic;
 namespace HumanoidRetargeter.Core.Mapping;
 
 /// <summary>How a mapping was produced; determines UI flow and preset-learning behavior.</summary>
+[Alias( "HumanoidRetargeter.Mapping.MappingSource" )]
 public enum MappingSource
 {
     /// <summary>A shipped preset profile matched (mixamo, actorcore_cc, ...).</summary>

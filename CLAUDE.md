@@ -15,9 +15,9 @@ Only what the code can't tell you: design decisions, engine gotchas found here, 
   Sandbox references at all. Everything that touches the engine (file IO, asset compile, preview, UI) is in `Editor/`.
 - s&box declares `Vector3` in the global namespace: Core files use the namespace-scoped alias
   `using Vector3 = System.Numerics.Vector3;` after the namespace line (see `Code/HumanoidRetargeter/Assembly.cs`).
-- Other libraries bind Core types by name (sbox-humanoid-fitter: `Skeleton`, `BoneDefinition`, `XForm`, `AutoMapper`,
-  `MappingResult`). They carry `[Alias]` with their pre-2026-10-06 names; `Core/AliasAttribute.cs` is a stand-in
-  compiled only outside s&box (`#if !SANDBOX`). Renaming any of these breaks the fitter.
+- Other packages bind types by name (fitter, mocap, weapon-importer, rigger tools, Source 1 Migrator via
+  `SmartPortHeadless.PortJson`). Every such type carries `[Alias]` with its pre-2026-10-06 name; `Core/AliasAttribute.cs` is a stand-in
+  compiled only outside s&box (`#if !SANDBOX`). Renaming any of these breaks those packages; Editor files that use `[Alias]` and also compile in the SmartPort parser tests need `using HumanoidRetargeter.Core;`.
 - `dev/HumanoidRetargeter.Dev.csproj` (net8.0) is referenced by `tests/HumanoidRetargeter.Tests`, the `dev/tools`
   probes and sbox-humanoid-fitter's tests (`..\..\..\humanoid-retargeter\dev\HumanoidRetargeter.Dev.csproj`): keep its path.
 - Shipped data (target rigs, profiles, DL weights) is in `Assets/data/humanoid_retargeter/` (moved from

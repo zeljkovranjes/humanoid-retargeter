@@ -92,7 +92,6 @@ public sealed class PreviewWidget : SceneRenderingWidget
 	// leaks connector streaks (the line shader ignores vertex alpha). A chain - spine,
 	// each limb, each finger - IS a connected polyline, so this is the supported usage.
 	readonly List<SceneLineObject> _skeletonChainObjects = new();
-	int[][] _skeletonChains;
 	bool _skeletonOnly;
 	Vector3 _skeletonCenter = Vector3.Up * 32f;
 	float _skeletonRadius = 40f;
@@ -1386,9 +1385,9 @@ public sealed class PreviewWidget : SceneRenderingWidget
 		}
 	}
 
-	protected override void OnWheel( WheelEvent e )
+	protected override void OnMouseWheel( WheelEvent e )
 	{
-		base.OnWheel( e );
+		base.OnMouseWheel( e );
 		_zoom = Math.Clamp( _zoom * (e.Delta > 0 ? 0.9f : 1.1f), 0.25f, 4f );
 		e.Accept();
 	}

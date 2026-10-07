@@ -21,6 +21,7 @@ using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global
 /// targets are built from any <see cref="SkeletonModel"/> via <see cref="FromSkeleton"/>.
 /// This type does no file IO — callers pass JSON text.
 /// </summary>
+[Alias( "HumanoidRetargeter.Target.TargetRig" )]
 public sealed class TargetRig
 {
     private readonly BoneClass[] _classes;

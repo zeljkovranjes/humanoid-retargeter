@@ -149,6 +149,15 @@ internal static class CitizenAnimationModels
 		return File.ReadAllText( source );
 	}
 
+	/// <summary>A graph or subgraph source by asset path: the project's own copy first, then the
+	/// mounted (shipped) file. Null when neither exists.</summary>
+	internal static string ReadGraphSource( string path )
+	{
+		var local = ProjectFile( path );
+		var source = File.Exists( local ) ? local : AssetSystem.FindByPath( path )?.AbsolutePath;
+		return source is not null && File.Exists( source ) ? File.ReadAllText( source ) : null;
+	}
+
 	internal static string ProjectFile( string relative )
 	{
 		var root = Path.GetFullPath( Project.Current?.GetAssetsPath() ?? throw new InvalidOperationException( "No project is open." ) )

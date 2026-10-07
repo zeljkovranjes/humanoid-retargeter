@@ -16,6 +16,10 @@
     <Compile Include="../../../Editor/SmartPortAnimationExport.cs" />
     <Compile Include="../../../Editor/SmartPortAttachments.cs" />
     <Compile Include="../../../Editor/SmartPortIkTargets.cs" />
+    <Compile Include="../../../Editor/SmartPortHeadless.cs" />
+    <Compile Include="../../../Editor/SmartPortHeadlessRequest.cs" />
+    <Compile Include="../../../Editor/SmartPortHeadlessResult.cs" />
+    <Compile Include="../../../Editor/SmartPortBone.cs" />
     <Compile Include="../../../Code/HumanoidRetargeter/**/*.cs" />
   </ItemGroup>
 </Project>
