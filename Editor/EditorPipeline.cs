@@ -154,10 +154,10 @@ public static class EditorPipeline
 		}
 	}
 	/// <summary>Assets-relative path of the committed s&amp;box target rig definition.</summary>
-	public const string TargetRigJsonRelative = "humanoid_retargeter/target_rig_sbox.json";
+	public const string TargetRigJsonRelative = "data/humanoid_retargeter/target_rig_sbox.json";
 
 	/// <summary>Assets-relative path of the committed classic (4-finger) citizen target rig definition.</summary>
-	public const string CitizenTargetRigJsonRelative = "humanoid_retargeter/target_rig_sbox_citizen.json";
+	public const string CitizenTargetRigJsonRelative = "data/humanoid_retargeter/target_rig_sbox_citizen.json";
 
 	/// <summary>
 	/// Finds a file shipped in this library's Assets folder. Works both when the library

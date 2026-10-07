@@ -160,7 +160,7 @@ public class SomaStickBindReproTests
         var scene = Retargeter.ImportSource(File.ReadAllBytes(path), TodoFile);
         var (map, _) = Retargeter.ResolveMapping(scene.Skeleton);
         var target = RetargetTargetSpec.SboxDefault(
-            File.ReadAllText(RepoFile("Assets", "humanoid_retargeter", "target_rig_sbox.json")));
+            File.ReadAllText(RepoFile("Assets", "data", "humanoid_retargeter", "target_rig_sbox.json")));
         return (scene, map, target);
     }
 

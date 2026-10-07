@@ -23,7 +23,7 @@ public class AugmentStaleSourceTests
         "dev", "HumanoidRetargeter.Tests", "fixtures", "kv3", "citizen_human_male.vmdl"));
 
     private static RetargetTargetSpec Target() => RetargetTargetSpec.SboxDefault(
-        File.ReadAllText(TestUtil.RepoFile("Assets", "humanoid_retargeter", "target_rig_sbox.json")));
+        File.ReadAllText(TestUtil.RepoFile("Assets", "data", "humanoid_retargeter", "target_rig_sbox.json")));
 
     private static RetargetRequest BvhRequest()
     {

@@ -35,7 +35,7 @@ public class BatchMixedSourcesTests
             return; // local-only corpus
 
         var target = RetargetTargetSpec.SboxDefault(File.ReadAllText(
-            TestUtil.RepoFile("Assets", "humanoid_retargeter", "target_rig_sbox.json")));
+            TestUtil.RepoFile("Assets", "data", "humanoid_retargeter", "target_rig_sbox.json")));
 
         var requests = new List<RetargetRequest>();
         foreach (var p in todo)
@@ -103,7 +103,7 @@ public class BatchMixedSourcesTests
             return; // local-only
 
         var target = RetargetTargetSpec.SboxDefault(File.ReadAllText(
-            TestUtil.RepoFile("Assets", "humanoid_retargeter", "target_rig_sbox.json")));
+            TestUtil.RepoFile("Assets", "data", "humanoid_retargeter", "target_rig_sbox.json")));
 
         var an5Bytes = File.ReadAllBytes(an5Path);
         var dffBytes = File.ReadAllBytes(dffPath);
@@ -181,7 +181,7 @@ public class BatchMixedSourcesTests
             return; // local-only corpus
 
         var target = RetargetTargetSpec.SboxDefault(File.ReadAllText(
-            TestUtil.RepoFile("Assets", "humanoid_retargeter", "target_rig_sbox.json")));
+            TestUtil.RepoFile("Assets", "data", "humanoid_retargeter", "target_rig_sbox.json")));
 
         RetargetRequest Req(string p) => new()
         {

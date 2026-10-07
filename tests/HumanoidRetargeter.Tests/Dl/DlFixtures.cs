@@ -28,7 +28,7 @@ internal static class DlFixtures
 
     /// <summary>The committed inference weights (Assets/humanoid_retargeter/dl/same_v1.weights).</summary>
     public static readonly Lazy<SameWeights> Weights = new(() => SameWeights.Parse(
-        File.ReadAllBytes(RepoFile("Assets", "humanoid_retargeter", "dl", "same_v1.weights"))));
+        File.ReadAllBytes(RepoFile("Assets", "data", "humanoid_retargeter", "dl", "same_v1.weights"))));
 
     /// <summary>Golden reference tensors (dev/m10/scripts/export_golden.py).</summary>
     public static readonly Lazy<SameWeights> Golden = new(() => SameWeights.Parse(
@@ -68,7 +68,7 @@ internal static class DlFixtures
 
     /// <summary>The shipped s&amp;box target rig from the committed asset (carries tail_world).</summary>
     public static readonly Lazy<TargetRig> SboxRig = new(() => TargetRig.Load(
-        File.ReadAllText(RepoFile("Assets", "humanoid_retargeter", "target_rig_sbox.json"))));
+        File.ReadAllText(RepoFile("Assets", "data", "humanoid_retargeter", "target_rig_sbox.json"))));
 
     /// <summary>Maps golden joint names to this port's node names: identical up to the End
     /// Site suffix casing (fairmotion emits <c>_End</c>, the importers emit <c>_end</c>)

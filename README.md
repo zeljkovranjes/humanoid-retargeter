@@ -111,6 +111,6 @@ Smart Port are in `tests\SmartPort\Engine` (see its README).
 ## License
 
 No license file yet; the package is free for non-commercial use. The optional SAME weights are
-**CC BY-NC 4.0 (non-commercial)**, see the [attribution](Assets/humanoid_retargeter/dl/ATTRIBUTION.md).
+**CC BY-NC 4.0 (non-commercial)**, see the [attribution](Assets/data/humanoid_retargeter/dl/ATTRIBUTION.md).
 Vendored editor code (ValveResourceFormat, Datamodel.NET, ZstdSharp, ValveKeyValue) keeps its MIT/BSD
 licenses in `Editor/Embedded/`.

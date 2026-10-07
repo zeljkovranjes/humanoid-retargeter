@@ -30,7 +30,7 @@ public class CitizenTargetTests
 
     private static readonly Lazy<RetargetTargetSpec> CitizenTarget = new(()
         => RetargetTargetSpec.SboxCitizen(
-            File.ReadAllText(RepoFile("Assets", "humanoid_retargeter", "target_rig_sbox_citizen.json"))));
+            File.ReadAllText(RepoFile("Assets", "data", "humanoid_retargeter", "target_rig_sbox_citizen.json"))));
 
     private static RetargetRequest ZombieCrawlRequest() => new()
     {

@@ -65,7 +65,7 @@ public class ClipPlacementTests
 
     private static TargetRig Rig()
         => RetargetTargetSpec.SboxDefault(File.ReadAllText(
-            TestUtil.RepoFile("Assets", "humanoid_retargeter", "target_rig_sbox.json"))).Rig;
+            TestUtil.RepoFile("Assets", "data", "humanoid_retargeter", "target_rig_sbox.json"))).Rig;
 
     private static List<XForm[]> Solve(SourceScene scene, TargetRig rig)
     {

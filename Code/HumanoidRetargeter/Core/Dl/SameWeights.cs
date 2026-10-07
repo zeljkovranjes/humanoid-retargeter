@@ -9,7 +9,7 @@ namespace HumanoidRetargeter.Core.Dl;
 
 /// <summary>
 /// Parses the committed SAME model weight blob
-/// (<c>Assets/humanoid_retargeter/dl/same_v1.weights</c>, produced by
+/// (<c>Assets/data/humanoid_retargeter/dl/same_v1.weights</c>, produced by
 /// <c>dev/m10/scripts/export_weights.py</c>) into named float32 tensors: the GAT
 /// encoder/decoder parameters under their original PyTorch state-dict keys plus the
 /// <c>ms.*</c> feature normalization statistics. No file IO — callers pass bytes

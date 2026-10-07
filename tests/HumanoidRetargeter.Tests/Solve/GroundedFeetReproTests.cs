@@ -87,7 +87,7 @@ public class GroundedFeetReproTests
         var scene = Retargeter.ImportSource(bytes, todoFileName);
         var (map, _) = Retargeter.ResolveMapping(scene.Skeleton);
         var target = RetargetTargetSpec.SboxDefault(
-            File.ReadAllText(RepoFile("Assets", "humanoid_retargeter", "target_rig_sbox.json")));
+            File.ReadAllText(RepoFile("Assets", "data", "humanoid_retargeter", "target_rig_sbox.json")));
 
         var result = Retargeter.Convert(new RetargetRequest
         {

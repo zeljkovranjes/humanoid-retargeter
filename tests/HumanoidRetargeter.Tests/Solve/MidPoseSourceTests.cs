@@ -32,7 +32,7 @@ public class MidPoseSourceTests
         Assert.NotNull(repaired);
 
         var target = RetargetTargetSpec.SboxDefault(
-            File.ReadAllText(TestUtil.RepoFile("Assets", "humanoid_retargeter", "target_rig_sbox.json")));
+            File.ReadAllText(TestUtil.RepoFile("Assets", "data", "humanoid_retargeter", "target_rig_sbox.json")));
 
         (List<XForm[]> Frames, string Notes) Solve(byte[] bytes)
         {
@@ -83,7 +83,7 @@ public class MidPoseSourceTests
 
         var bytes = File.ReadAllBytes(path);
         var target = RetargetTargetSpec.SboxDefault(
-            File.ReadAllText(TestUtil.RepoFile("Assets", "humanoid_retargeter", "target_rig_sbox.json")));
+            File.ReadAllText(TestUtil.RepoFile("Assets", "data", "humanoid_retargeter", "target_rig_sbox.json")));
         var result = Retargeter.Convert(new RetargetRequest
         {
             SourceData = bytes,

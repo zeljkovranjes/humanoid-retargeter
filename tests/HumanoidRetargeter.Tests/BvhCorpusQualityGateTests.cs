@@ -62,7 +62,7 @@ public class BvhCorpusQualityGateTests
 
         var bytes = File.ReadAllBytes(path);
         var target = RetargetTargetSpec.SboxDefault(File.ReadAllText(
-            TestUtil.RepoFile("Assets", "humanoid_retargeter", "target_rig_sbox.json")));
+            TestUtil.RepoFile("Assets", "data", "humanoid_retargeter", "target_rig_sbox.json")));
         var result = Retargeter.Convert(new RetargetRequest
         {
             SourceData = bytes,

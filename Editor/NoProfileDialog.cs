@@ -64,7 +64,7 @@ public sealed class NoProfileDialog : Dialog
 		var dl = card.Layout.Add( new ChoiceRow( card, "psychology", "Deep learning", "EXPERIMENTAL", Theme.Yellow,
 			dlAvailable
 				? "A neural retarget (SAME) that needs no mapping. Expect imperfect hands. Non-commercial license (CC BY-NC 4.0)."
-				: "Not installed: Assets/humanoid_retargeter/dl/same_v1.weights was not found.",
+				: "Not installed: Assets/data/humanoid_retargeter/dl/same_v1.weights was not found.",
 			() => Choose( DeepLearningChosen ) ) );
 		dl.Enabled = dlAvailable;
 

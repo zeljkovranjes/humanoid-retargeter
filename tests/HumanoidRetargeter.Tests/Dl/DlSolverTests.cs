@@ -17,7 +17,7 @@ namespace HumanoidRetargeter.Tests.Dl;
 public class DlSolverTests
 {
     private static readonly Lazy<byte[]> WeightBytes = new(() => File.ReadAllBytes(
-        DlFixtures.RepoFile("Assets", "humanoid_retargeter", "dl", "same_v1.weights")));
+        DlFixtures.RepoFile("Assets", "data", "humanoid_retargeter", "dl", "same_v1.weights")));
 
     private static readonly string[] BodyRoleBones =
     {

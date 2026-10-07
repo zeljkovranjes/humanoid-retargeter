@@ -24,9 +24,11 @@ Journal for this library. Keep it current: decisions, engine gotchas, what faile
 - `Editor/HumanoidRetargeter/*` flattened to `Editor/` (`HumanoidRetargeter.EditorTools`). Vendored code moved
   to `Editor/Embedded/<Component>/`, folder = namespace, block namespaces made file-scoped; the
   `HumanoidRetargeterDmx` class got its upstream name `Datamodel` back because it collided with the namespace.
-- Not moved, on purpose: `Assets/humanoid_retargeter/` (sbox-check wants `Assets/data/...`), `dev/corpus`,
-  `dev/m0`, `dev/HumanoidRetargeter.Tests/fixtures`. Tests open these by literal repo path in test code, and
-  test code may not change. Moving `Assets/` also changes the mounted asset paths the editor and installed users rely on.
+- `Assets/humanoid_retargeter/` moved to `Assets/data/humanoid_retargeter/` (coordinator decision, same as puppeteer):
+  the 40 literal `"Assets", "humanoid_retargeter"` path strings in tests got `"data"` inserted, nothing else on
+  those lines changed. `UserPresets` writes to the new folder and still reads presets saved in the old one.
+- Not moved, on purpose: `dev/corpus`, `dev/m0`, `dev/HumanoidRetargeter.Tests/fixtures`. Tests open these by
+  literal repo path in test code.
 - Baseline and final results: `dev/out/baseline.txt`, `dev/out/final.txt`.
 
 ## Log

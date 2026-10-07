@@ -28,7 +28,7 @@ public class LocomotionSetTests
 
     private static readonly Lazy<RetargetTargetSpec> SboxTarget = new(()
         => RetargetTargetSpec.SboxDefault(
-            File.ReadAllText(RepoFile("Assets", "humanoid_retargeter", "target_rig_sbox.json"))));
+            File.ReadAllText(RepoFile("Assets", "data", "humanoid_retargeter", "target_rig_sbox.json"))));
 
     private static AnimEntry Entry(string name, bool looping = true)
         => new() { Name = name, SourceFilename = $"animations/{name.ToLowerInvariant()}.dmx", Looping = looping };

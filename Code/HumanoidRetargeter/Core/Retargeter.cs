@@ -1324,7 +1324,7 @@ public static class Retargeter
         {
             throw new InvalidOperationException(
                 "Deep-learning solver requested but RetargetTargetSpec.DlWeights is not set "
-                + "(read Assets/humanoid_retargeter/dl/same_v1.weights and pass its bytes).");
+                + "(read Assets/data/humanoid_retargeter/dl/same_v1.weights and pass its bytes).");
         }
 
         AddNote(report,

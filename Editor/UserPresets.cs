@@ -5,7 +5,9 @@
 // The Code/ facade can do no file IO, so user presets live entirely Editor-side:
 // when the user confirms a preview of a mapping that came from manual edits or the
 // blind auto-mapper, the confirmed mapping is saved as a Profile JSON under
-//   <project assets>/humanoid_retargeter/profiles/user/<SkeletonSignature>.json
+//   <project assets>/data/humanoid_retargeter/profiles/user/<SkeletonSignature>.json
+// (presets saved before 2026-10-06 under <project assets>/humanoid_retargeter/profiles/user
+// are still read)
 // and on every later file add the window looks the signature up FIRST and passes the
 // loaded mapping to the facade as RetargetRequest.MappingOverride with
 // MappingSource.UserPreset - so the same rig is recognized instantly and never asks
@@ -28,13 +30,26 @@ namespace HumanoidRetargeter.EditorTools;
 public static class UserPresets
 {
 	/// <summary>Assets-relative folder the presets are stored in.</summary>
-	public const string FolderRelative = "humanoid_retargeter/profiles/user";
+	public const string FolderRelative = "data/humanoid_retargeter/profiles/user";
 
-	static string FolderAbsolute( string assetsPath )
-		=> Path.Combine( assetsPath, FolderRelative.Replace( '/', Path.DirectorySeparatorChar ) );
+	/// <summary>Assets-relative folder presets were stored in before 2026-10-06; still read, never written.</summary>
+	public const string LegacyFolderRelative = "humanoid_retargeter/profiles/user";
 
-	static string PresetPath( string assetsPath, string signature )
-		=> Path.Combine( FolderAbsolute( assetsPath ), signature + ".json" );
+	static string FolderAbsolute( string assetsPath, string folderRelative = FolderRelative )
+		=> Path.Combine( assetsPath, folderRelative.Replace( '/', Path.DirectorySeparatorChar ) );
+
+	static string PresetPath( string assetsPath, string signature, string folderRelative = FolderRelative )
+		=> Path.Combine( FolderAbsolute( assetsPath, folderRelative ), signature + ".json" );
+
+	// The current location wins; a preset saved by an older version is found in the legacy folder.
+	static string ExistingPresetPath( string assetsPath, string signature )
+	{
+		var path = PresetPath( assetsPath, signature );
+		if ( File.Exists( path ) )
+			return path;
+		var legacy = PresetPath( assetsPath, signature, LegacyFolderRelative );
+		return File.Exists( legacy ) ? legacy : null;
+	}
 
 	/// <summary>
 	/// Loads the user preset for the given skeleton signature and applies it to the
@@ -45,8 +60,8 @@ public static class UserPresets
 	{
 		try
 		{
-			var path = PresetPath( assetsPath, signature );
-			if ( !File.Exists( path ) )
+			var path = ExistingPresetPath( assetsPath, signature );
+			if ( path is null )
 				return null;
 
 			var profile = Profile.FromJson( File.ReadAllText( path ) );
@@ -94,5 +109,5 @@ public static class UserPresets
 
 	/// <summary>Whether a preset exists for the signature.</summary>
 	public static bool Exists( string assetsPath, string signature )
-		=> File.Exists( PresetPath( assetsPath, signature ) );
+		=> ExistingPresetPath( assetsPath, signature ) is not null;
 }

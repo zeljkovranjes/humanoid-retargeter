@@ -35,7 +35,7 @@ public class UnityMetaRealFileTests
 
     private static readonly Lazy<RetargetTargetSpec> SboxTarget = new(()
         => RetargetTargetSpec.SboxDefault(
-            File.ReadAllText(RepoFile("Assets", "humanoid_retargeter", "target_rig_sbox.json"))));
+            File.ReadAllText(RepoFile("Assets", "data", "humanoid_retargeter", "target_rig_sbox.json"))));
 
     [Fact] // skipped (silently green) when the local pack is not present
     public void RealStanceMeta_ParsesBothClipDefinitions()

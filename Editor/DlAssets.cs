@@ -9,7 +9,7 @@ namespace HumanoidRetargeter.EditorTools;
 
 /// <summary>
 /// Editor-side access to the committed deep-learning model asset (Milestone 10): the SAME
-/// weight blob shipped at <c>Assets/humanoid_retargeter/dl/same_v1.weights</c> (CC BY-NC
+/// weight blob shipped at <c>Assets/data/humanoid_retargeter/dl/same_v1.weights</c> (CC BY-NC
 /// 4.0 — see the ATTRIBUTION.md beside it). The <c>Code/</c> facade does no file IO, so
 /// the editor reads the bytes here and passes them via
 /// <see cref="RetargetTargetSpec.DlWeights"/>; the "Deep learning (experimental)" option
@@ -18,7 +18,7 @@ namespace HumanoidRetargeter.EditorTools;
 public static class DlAssets
 {
 	/// <summary>Assets-relative path of the committed weight blob.</summary>
-	public const string WeightsRelative = "humanoid_retargeter/dl/same_v1.weights";
+	public const string WeightsRelative = "data/humanoid_retargeter/dl/same_v1.weights";
 
 	/// <summary>Whether the weight asset is reachable from the current project.</summary>
 	public static bool Available => EditorPipeline.FindLibraryAssetFile( WeightsRelative ) is not null;

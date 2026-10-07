@@ -13,7 +13,7 @@ using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global
 
 /// <summary>
 /// Generates the committed s&amp;box target-rig definition
-/// (<c>Assets/humanoid_retargeter/target_rig_sbox.json</c>) from the research ground-truth
+/// (<c>Assets/data/humanoid_retargeter/target_rig_sbox.json</c>) from the research ground-truth
 /// rig JSON (<c>docs/research/rig_human_male.json</c>). Pure string → string; the generator test
 /// owns reading/writing the files (regenerate-and-diff pattern).
 /// </summary>

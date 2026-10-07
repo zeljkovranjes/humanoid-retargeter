@@ -6,7 +6,7 @@ namespace HumanoidRetargeter.Core.Mapping;
 
 /// <summary>
 /// Built-in preset profiles, embedded as C# data (the same data is written to
-/// <c>Assets/humanoid_retargeter/profiles/*.json</c> by a regenerate-and-diff test so the
+/// <c>Assets/data/humanoid_retargeter/profiles/*.json</c> by a regenerate-and-diff test so the
 /// shipped JSON can never drift from the code).
 /// </summary>
 public static class ProfileLibrary

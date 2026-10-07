@@ -20,11 +20,13 @@ Only what the code can't tell you: design decisions, engine gotchas found here, 
   compiled only outside s&box (`#if !SANDBOX`). Renaming any of these breaks the fitter.
 - `dev/HumanoidRetargeter.Dev.csproj` (net8.0) is referenced by `tests/HumanoidRetargeter.Tests`, the `dev/tools`
   probes and sbox-humanoid-fitter's tests (`..\..\..\humanoid-retargeter\dev\HumanoidRetargeter.Dev.csproj`): keep its path.
-- Test data the tests open by literal repo path (so it must not move): `Assets/humanoid_retargeter/*`,
-  `dev/HumanoidRetargeter.Tests/fixtures/` (also copied into the test output), `dev/corpus/` (local-only; those
-  tests pass silently when it is absent), `dev/m0/ref_idlepose.dmx`. This is why `Assets/humanoid_retargeter/`
-  is not under `Assets/data/` yet (sbox-check reports it): moving it needs test call-site edits and changes the
-  mounted asset paths (`humanoid_retargeter/...`) that `EditorPipeline`, `DlAssets` and `UserPresets` use.
+- Shipped data (target rigs, profiles, DL weights) is in `Assets/data/humanoid_retargeter/` (moved from
+  `Assets/humanoid_retargeter/` on 2026-10-06). `EditorPipeline` and `DlAssets` find it by that Assets-relative path
+  in the open project or under `Libraries/*/Assets`. User presets are written to the user's
+  `Assets/data/humanoid_retargeter/profiles/user/` and still read from the old `Assets/humanoid_retargeter/profiles/user/`.
+- Test data the tests open by literal repo path (move it only together with those path strings):
+  `Assets/data/humanoid_retargeter/*`, `dev/HumanoidRetargeter.Tests/fixtures/` (also copied into the test output),
+  `dev/corpus/` (local-only; those tests pass silently when it is absent), `dev/m0/ref_idlepose.dmx`.
 - `TargetRigGenerator` writes a description string that names `research/rig_human_male.json`; it is baked into
   the shipped `target_rig_sbox*.json` and checked by a regenerate-and-diff test, so leave it as is.
 - `Editor/Embedded/` is vendored, trimmed third-party code (VRF 17.0, Datamodel.NET, ZstdSharp, ValveKeyValue);

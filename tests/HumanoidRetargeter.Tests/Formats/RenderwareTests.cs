@@ -305,7 +305,7 @@ public class RenderwareTests
     public void An5_Convert_ToCitizen_ProducesMovingDmx()
     {
         var target = RetargetTargetSpec.SboxCitizen(
-            File.ReadAllText(RepoFile("Assets", "humanoid_retargeter", "target_rig_sbox_citizen.json")));
+            File.ReadAllText(RepoFile("Assets", "data", "humanoid_retargeter", "target_rig_sbox_citizen.json")));
         var result = Retargeter.Convert(new RetargetRequest
         {
             SourceData = Fixture("7FEA6AEBBEB5C5F3.an5"),

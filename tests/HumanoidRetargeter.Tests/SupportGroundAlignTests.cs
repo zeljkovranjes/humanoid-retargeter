@@ -20,7 +20,7 @@ public class SupportGroundAlignTests
 {
     private static readonly Lazy<RetargetTargetSpec> SboxTarget = new(()
         => RetargetTargetSpec.SboxDefault(File.ReadAllText(
-            TestUtil.RepoFile("Assets", "humanoid_retargeter", "target_rig_sbox.json"))));
+            TestUtil.RepoFile("Assets", "data", "humanoid_retargeter", "target_rig_sbox.json"))));
 
     private static RetargetRequest WalkRequest() => new()
     {

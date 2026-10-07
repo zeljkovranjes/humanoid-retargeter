@@ -29,7 +29,7 @@ public class AdditiveVariantTests
 
     private static readonly Lazy<RetargetTargetSpec> SboxTarget = new(()
         => RetargetTargetSpec.SboxDefault(
-            File.ReadAllText(RepoFile("Assets", "humanoid_retargeter", "target_rig_sbox.json"))));
+            File.ReadAllText(RepoFile("Assets", "data", "humanoid_retargeter", "target_rig_sbox.json"))));
 
     private static RetargetRequest WalkRequest(
         bool additive = true, string? nameOverride = null, bool mirrored = false) => new()

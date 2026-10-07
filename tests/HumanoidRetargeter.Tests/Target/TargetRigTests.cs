@@ -82,7 +82,7 @@ public class TargetRigTests
     {
         var generated = TargetRigGenerator.Generate(LoadRigFixture());
 
-        var assetPath = FindRepoFile(Path.Combine("Assets", "humanoid_retargeter", "target_rig_sbox.json"));
+        var assetPath = FindRepoFile(Path.Combine("Assets", "data", "humanoid_retargeter", "target_rig_sbox.json"));
         if (!File.Exists(assetPath))
         {
             // Regenerate-and-diff pattern: first run writes the committed artifact.

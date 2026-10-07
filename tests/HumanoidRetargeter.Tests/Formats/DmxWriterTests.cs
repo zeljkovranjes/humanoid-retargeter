@@ -654,7 +654,7 @@ public class DmxWriterTests
     public void Write_CitizenRig_EveryBoneIsJointAndChannelPair_HeaderMatchesReference()
     {
         var rigJson = File.ReadAllText(
-            FindRepoFile(Path.Combine("Assets", "humanoid_retargeter", "target_rig_sbox.json")));
+            FindRepoFile(Path.Combine("Assets", "data", "humanoid_retargeter", "target_rig_sbox.json")));
         var rig = TargetRig.Load(rigJson);
         var skeleton = rig.Skeleton;
 

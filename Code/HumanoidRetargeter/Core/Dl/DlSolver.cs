@@ -24,7 +24,7 @@ namespace HumanoidRetargeter.Core.Dl;
 /// CopyPinky handling of the geometric path applies unchanged (finger channels carry rest
 /// pose, so the base model's constraints keep driving pinkies).</para>
 /// <para><b>Weights</b> are passed as bytes (no file IO in <c>Code/</c>): the Editor reads
-/// <c>Assets/humanoid_retargeter/dl/same_v1.weights</c> (CC BY-NC 4.0, see the adjacent
+/// <c>Assets/data/humanoid_retargeter/dl/same_v1.weights</c> (CC BY-NC 4.0, see the adjacent
 /// ATTRIBUTION.md) and hands them to <see cref="RetargetTargetSpec.DlWeights"/>.</para>
 /// <para><b>Options:</b> <see cref="SolveOptions.ClipIndex"/>/<see cref="SolveOptions.ClipName"/>
 /// are honored; hip scales and <see cref="SolveOptions.TransferFingers"/> do not apply to

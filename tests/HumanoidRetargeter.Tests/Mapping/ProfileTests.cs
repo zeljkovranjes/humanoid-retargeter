@@ -298,7 +298,7 @@ public class ProfileTests
     {
         // Every committed (non-user) profile JSON must correspond to a shipped preset -
         // an orphan file would silently diverge from ProfileLibrary.
-        var dir = FindRepoFile(Path.Combine("Assets", "humanoid_retargeter", "profiles"));
+        var dir = FindRepoFile(Path.Combine("Assets", "data", "humanoid_retargeter", "profiles"));
         Assert.True(Directory.Exists(dir), $"profiles folder missing: {dir}");
 
         var known = ProfileLibrary.All.Select(p => p.Name).ToHashSet(StringComparer.Ordinal);
@@ -333,7 +333,7 @@ public class ProfileTests
         {
             var generated = profile.ToJson();
             var assetPath = FindRepoFile(Path.Combine(
-                "Assets", "humanoid_retargeter", "profiles", profile.Name + ".json"));
+                "Assets", "data", "humanoid_retargeter", "profiles", profile.Name + ".json"));
 
             if (!File.Exists(assetPath))
             {

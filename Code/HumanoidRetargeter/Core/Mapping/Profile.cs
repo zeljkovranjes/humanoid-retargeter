@@ -19,7 +19,7 @@ namespace HumanoidRetargeter.Core.Mapping;
 /// <remarks>
 /// Profiles serialize to a schema-versioned JSON document (<c>{"v":1,...}</c>); the shipped
 /// presets live in <see cref="ProfileLibrary"/> and are also written to
-/// <c>Assets/humanoid_retargeter/profiles/*.json</c> by the regenerate-and-diff test.
+/// <c>Assets/data/humanoid_retargeter/profiles/*.json</c> by the regenerate-and-diff test.
 /// User presets (saved after preview confirmation) use the same format, keyed by
 /// <see cref="SkeletonSignature"/>.
 /// </remarks>

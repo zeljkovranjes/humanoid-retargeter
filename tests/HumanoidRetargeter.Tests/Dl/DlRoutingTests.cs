@@ -15,13 +15,13 @@ public class DlRoutingTests
         AppContext.BaseDirectory, "fixtures", "bvh", "bvhpython_test_freebvh.bvh"));
 
     private static string RigJson() => File.ReadAllText(
-        DlFixtures.RepoFile("Assets", "humanoid_retargeter", "target_rig_sbox.json"));
+        DlFixtures.RepoFile("Assets", "data", "humanoid_retargeter", "target_rig_sbox.json"));
 
     [Fact]
     public void DeepLearningRequestSolvesThroughTheFacade()
     {
         var weights = File.ReadAllBytes(
-            DlFixtures.RepoFile("Assets", "humanoid_retargeter", "dl", "same_v1.weights"));
+            DlFixtures.RepoFile("Assets", "data", "humanoid_retargeter", "dl", "same_v1.weights"));
         var target = RetargetTargetSpec.SboxDefault(RigJson(), weights);
 
         var result = Retargeter.Convert(new RetargetRequest

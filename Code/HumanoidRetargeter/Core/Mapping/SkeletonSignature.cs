@@ -10,7 +10,7 @@ namespace HumanoidRetargeter.Core.Mapping;
 
 /// <summary>
 /// Stable identity hash of a skeleton's naming + hierarchy, used to key user preset
-/// profiles (<c>Assets/humanoid_retargeter/profiles/user/&lt;signature&gt;.json</c>): the
+/// profiles (<c>Assets/data/humanoid_retargeter/profiles/user/&lt;signature&gt;.json</c>): the
 /// same rig is recognized instantly on re-import, any bone rename or reparent produces a
 /// different signature.
 /// </summary>

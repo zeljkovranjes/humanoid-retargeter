@@ -29,7 +29,7 @@ public class MirroredVariantTests
 
     private static readonly Lazy<RetargetTargetSpec> SboxTarget = new(()
         => RetargetTargetSpec.SboxDefault(
-            File.ReadAllText(RepoFile("Assets", "humanoid_retargeter", "target_rig_sbox.json"))));
+            File.ReadAllText(RepoFile("Assets", "data", "humanoid_retargeter", "target_rig_sbox.json"))));
 
     private static RetargetRequest WalkRequest(bool mirrored = true, bool footsteps = false) => new()
     {
@@ -241,7 +241,7 @@ public class MirroredVariantTests
         // channels on mirrored clips; truly symmetric helpers stay excluded as on primary
         // clips.
         var citizen = RetargetTargetSpec.SboxCitizen(File.ReadAllText(
-            TestUtil.RepoFile("Assets", "humanoid_retargeter", "target_rig_sbox_citizen.json")));
+            TestUtil.RepoFile("Assets", "data", "humanoid_retargeter", "target_rig_sbox_citizen.json")));
         var rig = citizen.Rig;
         var excluded = new HashSet<int>(rig.BonesOfClass(BoneClass.ConstraintDriven));
         var safe = ClipMirror.MirrorSafeExclusions(rig, excluded);
@@ -277,7 +277,7 @@ public class MirroredVariantTests
         // conjugated LOCAL cannot place them; ClipMirror FK-solves their locals so the
         // mirrored WORLD is the exact sagittal reflection of the partner's world.
         var citizen = RetargetTargetSpec.SboxCitizen(File.ReadAllText(
-            TestUtil.RepoFile("Assets", "humanoid_retargeter", "target_rig_sbox_citizen.json")));
+            TestUtil.RepoFile("Assets", "data", "humanoid_retargeter", "target_rig_sbox_citizen.json")));
         var result = Retargeter.Convert(WalkRequest(mirrored: false), citizen);
         var primary = result.Clips.Single();
         Assert.True(primary.Success, primary.Error);
@@ -321,7 +321,7 @@ public class MirroredVariantTests
         // both (the engine's AnimConstraintList drives them for any pose, mirrored or
         // not); a twin with a different channel set is a data shape no primary clip has.
         var citizen = RetargetTargetSpec.SboxCitizen(File.ReadAllText(
-            TestUtil.RepoFile("Assets", "humanoid_retargeter", "target_rig_sbox_citizen.json")));
+            TestUtil.RepoFile("Assets", "data", "humanoid_retargeter", "target_rig_sbox_citizen.json")));
         var result = Retargeter.Convert(WalkRequest(), citizen);
         var primary = result.Clips.Single(c => !c.IsMirroredVariant);
         var mirrored = result.Clips.Single(c => c.IsMirroredVariant);

@@ -432,7 +432,7 @@ public class GltfImporterTests
     public void Facade_ConvertGlbToSboxTarget_SucceedsWithDetectedProfile()
     {
         var target = RetargetTargetSpec.SboxDefault(
-            File.ReadAllText(RepoFile("Assets", "humanoid_retargeter", "target_rig_sbox.json")));
+            File.ReadAllText(RepoFile("Assets", "data", "humanoid_retargeter", "target_rig_sbox.json")));
 
         var result = Retargeter.Convert(new RetargetRequest
         {

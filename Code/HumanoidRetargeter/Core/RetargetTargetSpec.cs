@@ -100,7 +100,7 @@ public sealed class RetargetTargetSpec
 
     /// <summary>
     /// Raw bytes of the committed SAME weight blob
-    /// (<c>Assets/humanoid_retargeter/dl/same_v1.weights</c>; callers do the file IO).
+    /// (<c>Assets/data/humanoid_retargeter/dl/same_v1.weights</c>; callers do the file IO).
     /// Required only when a request selects <see cref="SolverKind.DeepLearning"/>; the
     /// solver instance is built once per batch from these bytes.
     /// </summary>
@@ -108,7 +108,7 @@ public sealed class RetargetTargetSpec
 
     /// <summary>
     /// The shipped s&amp;box default target: rig parsed from the committed
-    /// <c>Assets/humanoid_retargeter/target_rig_sbox.json</c> text (callers do the file IO),
+    /// <c>Assets/data/humanoid_retargeter/target_rig_sbox.json</c> text (callers do the file IO),
     /// 0.3937 vmdl scale, citizen human male base model, pelvis root. Pass the committed
     /// SAME weight bytes as <paramref name="dlWeights"/> to enable the deep-learning solver.
     /// </summary>
@@ -123,7 +123,7 @@ public sealed class RetargetTargetSpec
 
     /// <summary>
     /// The classic (4-finger) s&amp;box citizen target: rig parsed from the committed
-    /// <c>Assets/humanoid_retargeter/target_rig_sbox_citizen.json</c> text (callers do the
+    /// <c>Assets/data/humanoid_retargeter/target_rig_sbox_citizen.json</c> text (callers do the
     /// file IO), 0.3937 vmdl scale, citizen base model, pelvis root, Y-up cm. The rig has no
     /// pinky bones, so pinky roles stay unassigned — the engine's own constraints handle the
     /// pinky at runtime for models that have one. Pass the committed SAME weight bytes as

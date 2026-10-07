@@ -16,7 +16,7 @@ using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global
 /// <summary>
 /// A humanoid target rig: skeleton plus per-bone <see cref="BoneClass"/> and (for animated
 /// bones) canonical <see cref="BoneRole"/> annotations. The shipped s&amp;box default is
-/// loaded from the committed <c>Assets/humanoid_retargeter/target_rig_sbox.json</c> produced
+/// loaded from the committed <c>Assets/data/humanoid_retargeter/target_rig_sbox.json</c> produced
 /// by <see cref="TargetRigGenerator"/> (see <see cref="SboxDefault"/>); arbitrary user-picked
 /// targets are built from any <see cref="SkeletonModel"/> via <see cref="FromSkeleton"/>.
 /// This type does no file IO — callers pass JSON text.
@@ -189,7 +189,7 @@ public sealed class TargetRig
 
     /// <summary>
     /// Parses the shipped s&amp;box default target rig from the committed
-    /// <c>Assets/humanoid_retargeter/target_rig_sbox.json</c> text (callers do the file IO).
+    /// <c>Assets/data/humanoid_retargeter/target_rig_sbox.json</c> text (callers do the file IO).
     /// Alias of <see cref="Load"/>, named per design §1 to distinguish the curated default
     /// target from <see cref="FromSkeleton"/> custom targets.
     /// </summary>

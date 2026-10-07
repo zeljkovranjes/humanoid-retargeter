@@ -33,7 +33,7 @@ public class CitizenTargetRigTests
     {
         var generated = GenerateCitizenJson();
 
-        var assetPath = FindRepoFile(Path.Combine("Assets", "humanoid_retargeter", "target_rig_sbox_citizen.json"));
+        var assetPath = FindRepoFile(Path.Combine("Assets", "data", "humanoid_retargeter", "target_rig_sbox_citizen.json"));
         if (!File.Exists(assetPath))
         {
             // Regenerate-and-diff pattern: first run writes the committed artifact.
