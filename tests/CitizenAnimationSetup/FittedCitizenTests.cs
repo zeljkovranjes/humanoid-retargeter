@@ -103,6 +103,24 @@ public class FittedCitizenTests
         }
     }
 
+    [Fact]
+    public void PinkyFollowsTheRingFingerWhenStockClipsHaveNoPinkyMotion()
+    {
+        // Stock Citizen clips curl the ring finger only; the stock model copies it onto the pinky.
+        var hand = SkeletonModel.Create(new[]
+        {
+            new BoneDefinition("hand_L", null, XForm.Identity),
+            new BoneDefinition("finger_ring_0_L", "hand_L", new XForm(new Vector3(1, 0, 0), Quaternion.Identity)),
+            new BoneDefinition("finger_pinky_0_L", "hand_L", new XForm(new Vector3(1, -1, 0), Quaternion.Identity)),
+        });
+        var frame = hand.Bones.Select(b => b.RestLocal).ToArray();
+        frame[1].Rot = Quaternion.CreateFromAxisAngle(Vector3.UnitY, 1.2f);
+        var copied = new FittedCitizenPose(hand, hand, copyRingToPinky: true).Transfer(frame);
+        Assert.True(MathQ.AngleBetween(copied[2].Rot, frame[1].Rot) < .0001f);
+        var independent = new FittedCitizenPose(hand, hand).Transfer(frame);
+        Assert.True(MathQ.AngleBetween(independent[2].Rot, Quaternion.Identity) < .0001f);
+    }
+
     private static string Document(string children, string extra = "")
         => VmdlWriter.Kv3Header + "{ rootNode = { children = [ " + children + " ] " + extra + " } }";
 

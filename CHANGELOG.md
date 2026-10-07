@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-07
+### Fixed
+- Pinkies on characters made with "Create Citizen animation model" now curl with the ring finger in fists and grips, as on the stock Citizen, instead of sticking out backwards.
+
 ## 2026-10-06
 ### Breaking
 - Runtime namespaces moved under `HumanoidRetargeter.Core`. Code that calls the library directly needs its `using` lines updated:

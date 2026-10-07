@@ -44,3 +44,8 @@ Journal for this library. Keep it current: decisions, engine gotchas, what faile
   stock locomotion on every speed ring and through subgraphs) into the new layout: their files were run through the
   same move/rename/split script as the restructure and 3-way merged; every added line is present. More [Alias]es:
   types other packages bind by name (mocap, weapon-importer, rigger, Source 1 Migrator via SmartPortHeadless).
+- 2026-10-07: bodynychu report (Humanoid Rigger + Create Citizen animation model). Pinkies were 120-150 degrees off in fists:
+  the rigger disables CopyPinky on fitted rigs, but stock Citizen sources have no pinky motion (the stock model copies the ring).
+  FittedCitizenPose gained copyRingToPinky (used only by FittedCitizenAnimations): pinky joints take the matching ring joint's
+  delta, re-expressed in the pinky's parent frame. The arm twist and knee/elbow problems were fixed in the rigger (frames,
+  helper weights); after both, every bone and helper of the fitted model moves within 1 degree of the stock Human male.

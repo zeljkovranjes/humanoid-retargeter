@@ -43,7 +43,7 @@ internal static class FittedCitizenAnimations
 		if ( offset != 0 ) destination = HumanoidRetargeter.Core.Skeleton.Skeleton.Create( destination.Bones.Select( bone => new BoneDefinition(
 			bone.Name, bone.ParentIndex < 0 ? null : destination[bone.ParentIndex].Name,
 			ModelGrounding.SourceLocal( bone.RestLocal, bone.ParentIndex < 0, offset ) ) ).ToArray() );
-		var transfer = new FittedCitizenPose( source, destination );
+		var transfer = new FittedCitizenPose( source, destination, copyRingToPinky: true );
 		var spec = StockAnimationReplacement.TargetSpec( referencePath, target.PreviewModelPath );
 		var sourceIndices = source.Bones.Select( b => model.Bones.GetBone( b.Name ).Index ).ToArray();
 		var scaleIndices = destination.Bones.Select( b => source.IndexOf( b.Name ) ).ToArray();

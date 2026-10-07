@@ -19,10 +19,16 @@ public sealed class FittedCitizenPose
     // Each bone's bind rotation, swung so the bone points where the stock bone points at rest.
     private readonly Quaternion[] aimedBind;
     private readonly float[] translationScale;
+    // Pinky joints driven by the matching ring joint: source ring index and the rest-frame
+    // change from the ring's parent to the pinky's parent (-1 when the pinky keeps its own channel).
+    private readonly int[] ringSource;
+    private readonly Quaternion[] ringToPinkyParent;
     // Two-handed hold goals: (goal, weapon socket on the anchor hand, support hand, support hand's socket).
     private readonly List<(int Goal, int Anchor, int Hand, int Grip)> supportGoals = new();
 
-    public FittedCitizenPose(SkeletonModel source, SkeletonModel target)
+    /// <param name="copyRingToPinky">The pinkies follow the ring fingers, as the stock Citizen's CopyPinky
+    /// constraints do. Stock clips carry no pinky motion, and fitted rigs disable CopyPinky.</param>
+    public FittedCitizenPose(SkeletonModel source, SkeletonModel target, bool copyRingToPinky = false)
     {
         var error = CitizenAnimationSetup.HierarchyError(target, source);
         if (error is not null) throw new ArgumentException(error, nameof(target));
@@ -33,6 +39,8 @@ public sealed class FittedCitizenPose
         aimedBind = new Quaternion[target.Count];
         var aimedWorld = new Quaternion[target.Count];
         translationScale = new float[target.Count];
+        ringSource = new int[target.Count];
+        ringToPinkyParent = new Quaternion[target.Count];
         // Root travel scales by leg length, not the root's arbitrary scene placement.
         float LegLength(SkeletonModel rig)
         {
@@ -49,6 +57,15 @@ public sealed class FittedCitizenPose
         for (var i = 0; i < target.Count; i++)
         {
             var s = indices[i] = source.IndexOf(target[i].Name);
+            ringSource[i] = -1;
+            if (copyRingToPinky && s >= 0 && target[i].Name.StartsWith("finger_pinky_", StringComparison.Ordinal)
+                && source.IndexOf("finger_ring_" + target[i].Name["finger_pinky_".Length..]) is var ring && ring >= 0
+                && source[ring].ParentIndex >= 0 && source[s].ParentIndex >= 0)
+            {
+                ringSource[i] = ring;
+                ringToPinkyParent[i] = Quaternion.Normalize(Quaternion.Conjugate(source.RestWorld[source[s].ParentIndex].Rot)
+                    * source.RestWorld[source[ring].ParentIndex].Rot);
+            }
             var tp = target[i].ParentIndex;
             var parentWorld = tp < 0 ? Quaternion.Identity : aimedWorld[tp];
             aimedBind[i] = target[i].RestLocal.Rot;
@@ -140,6 +157,11 @@ public sealed class FittedCitizenPose
             var original = source[s].RestLocal;
             var basis = parentBasis[i];
             var delta = Quaternion.Normalize(frame[s].Rot * Quaternion.Conjugate(original.Rot));
+            if (ringSource[i] is var ring and >= 0)
+            {
+                var ringDelta = Quaternion.Normalize(frame[ring].Rot * Quaternion.Conjugate(source[ring].RestLocal.Rot));
+                delta = Quaternion.Normalize(ringToPinkyParent[i] * ringDelta * Quaternion.Conjugate(ringToPinkyParent[i]));
+            }
             var rotation = Quaternion.Normalize(basis * delta * Quaternion.Conjugate(basis) * aimedBind[i]);
             var position = bind.Pos + NVector3.Transform(frame[s].Pos - original.Pos, basis) * translationScale[i];
             output[i] = new XForm(position, rotation);
