@@ -34,7 +34,7 @@ public static class SmartPortCopiedSocketEngineTest
             data["started"] = DateTime.UtcNow; Save();
             var source = AssetSystem.FindByPath("models/citizen/citizen.vmdl") ?? throw new Exception("Missing Citizen source");
             var target = AssetSystem.FindByPath("humanoid_retargeter_smoke/customfbx/catgirl_2_preview_bind_9e13ad1f.vmdl") ?? throw new Exception("Missing Catgirl target fixture");
-            var type = AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType("HumanoidRetargeter.Editor.SmartPortModels")).First(t => t != null);
+            var type = AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType("HumanoidRetargeter.EditorTools.SmartPortModels")).First(t => t != null);
             var name = "copied_socket_" + DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
             Action<string> progress = s => { data["stage"] = s; Save(); };
             var task = (Task)type.GetMethod("CreateAsync", BindingFlags.Static | BindingFlags.NonPublic)

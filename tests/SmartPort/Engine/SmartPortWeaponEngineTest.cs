@@ -33,7 +33,7 @@ public static class SmartPortWeaponEngineTest
             data["started"] = DateTime.UtcNow; Save();
             var source = AssetSystem.FindByPath("models/player/human/frank_mp.vmdl") ?? throw new Exception("Missing Frank");
             var target = AssetSystem.FindByPath("models/citizen_human/citizen_human_male.vmdl") ?? throw new Exception("Missing Human Citizen");
-            var type = AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType("HumanoidRetargeter.Editor.SmartPortModels")).First(t => t != null);
+            var type = AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType("HumanoidRetargeter.EditorTools.SmartPortModels")).First(t => t != null);
             var name = "weapon_" + DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
             Action<string> progress = s => { data["stage"] = s; Save(); };
             var task = (Task)type.GetMethod("CreateAsync", BindingFlags.Static | BindingFlags.NonPublic)

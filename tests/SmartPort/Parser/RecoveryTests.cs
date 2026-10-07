@@ -1,6 +1,6 @@
-using HumanoidRetargeter.Editor;
-using HumanoidRetargeterCompression;
-using HumanoidRetargeterVrf;
+using HumanoidRetargeter.EditorTools;
+using HumanoidRetargeter.EditorTools.Embedded.Compression;
+using HumanoidRetargeter.EditorTools.Embedded.ValveResourceFormat;
 using Xunit;
 
 namespace SmartPort.Parser.Tests;
@@ -10,7 +10,7 @@ public class RecoveryTests
     [Fact]
     public void EmbeddedZstdDecodesFrameWithoutNativeLibrary()
     {
-        using var decoder = new HumanoidRetargeterZstd.Decompressor();
+        using var decoder = new HumanoidRetargeter.EditorTools.Embedded.ZstdSharp.Decompressor();
         byte[] frame = [0x28, 0xB5, 0x2F, 0xFD, 0x20, 4, 0x21, 0, 0, 116, 101, 115, 116];
         var output = new byte[4];
         Assert.True(decoder.TryUnwrap(frame, output, out var count));
@@ -24,15 +24,15 @@ public class RecoveryTests
     [InlineData(0x000FFFFFu, 0f, 0f, -1f)]
     public void SboxPackedNormalsMatchNativeRecompiledFixture(uint packed, float x, float y, float z)
     {
-        var buffer = new HumanoidRetargeterVrf.Blocks.VBIB.OnDiskBufferData
+        var buffer = new HumanoidRetargeter.EditorTools.Embedded.ValveResourceFormat.Blocks.VBIB.OnDiskBufferData
         {
             ElementCount = 1, ElementSizeInBytes = 4, Data = BitConverter.GetBytes(packed)
         };
-        var attribute = new HumanoidRetargeterVrf.Blocks.VBIB.RenderInputLayoutField
+        var attribute = new HumanoidRetargeter.EditorTools.Embedded.ValveResourceFormat.Blocks.VBIB.RenderInputLayoutField
         {
-            SemanticName = "NORMAL", Format = HumanoidRetargeterVrf.DXGI_FORMAT.R10G10B10A2_UNORM
+            SemanticName = "NORMAL", Format = HumanoidRetargeter.EditorTools.Embedded.ValveResourceFormat.DXGI_FORMAT.R10G10B10A2_UNORM
         };
-        var (normals, tangents) = HumanoidRetargeterVrf.Blocks.VBIB.GetNormalTangentArray(buffer, attribute);
+        var (normals, tangents) = HumanoidRetargeter.EditorTools.Embedded.ValveResourceFormat.Blocks.VBIB.GetNormalTangentArray(buffer, attribute);
         Assert.True(System.Numerics.Vector3.Distance(normals[0], new(x, y, z)) < .002f);
         Assert.Empty(tangents); // ModelDoc regenerates tangents from UVs.
     }
@@ -49,7 +49,7 @@ public class RecoveryTests
             * System.Numerics.Quaternion.CreateFromAxisAngle(System.Numerics.Vector3.UnitY, p * MathF.PI / 180)
             * System.Numerics.Quaternion.CreateFromAxisAngle(System.Numerics.Vector3.UnitX, r * MathF.PI / 180);
         var original = Rotation(pitch, yaw, roll);
-        var angles = HumanoidRetargeterVrf.IO.ModelExtract.ToEulerAngles(original);
+        var angles = HumanoidRetargeter.EditorTools.Embedded.ValveResourceFormat.IO.ModelExtract.ToEulerAngles(original);
         var actual = Rotation(angles.X, angles.Y, angles.Z);
         Assert.True(MathF.Abs(System.Numerics.Quaternion.Dot(original, actual)) > .999999f);
     }

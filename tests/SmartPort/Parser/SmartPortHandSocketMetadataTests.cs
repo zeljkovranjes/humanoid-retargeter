@@ -1,6 +1,6 @@
-using HumanoidRetargeter.Editor;
-using HumanoidRetargeterVrf;
-using HumanoidRetargeterVrf.ResourceTypes;
+using HumanoidRetargeter.EditorTools;
+using HumanoidRetargeter.EditorTools.Embedded.ValveResourceFormat;
+using HumanoidRetargeter.EditorTools.Embedded.ValveResourceFormat.ResourceTypes;
 using Xunit;
 
 namespace SmartPort.Parser.Tests;

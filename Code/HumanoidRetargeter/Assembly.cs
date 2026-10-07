@@ -1,5 +1,8 @@
 #nullable enable annotations
 
+// All runtime code is engine-agnostic and lives in Core/: no Sandbox/Editor references allowed
+// there. It also compiles as plain .NET (dev/HumanoidRetargeter.Core.csproj, dev/HumanoidRetargeter.Dev.csproj).
+
 // Global usings for the s&box in-engine compiler.
 //
 // The plain net8.0 dev harness gets these automatically via <ImplicitUsings>,
@@ -22,7 +25,7 @@ global using System.Threading.Tasks;
 // with the global-namespace type at every use site). The working fix is a
 // *namespace-scoped* alias, declared after the file-scoped namespace line:
 //
-//     namespace HumanoidRetargeter.Xyz;
+//     namespace HumanoidRetargeter.Core.Xyz;
 //     using Vector3 = System.Numerics.Vector3;
 //
 // Every file in this tree that uses the simple name Vector3 carries that line.

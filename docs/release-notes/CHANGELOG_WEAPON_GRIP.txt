@@ -1,0 +1,42 @@
+Title
+Weapon Grip Update
+
+Version
+(set your next version)
+
+Date
+09/24/2026
+
+
+Added
+# Smart Port
+Palm alignment - hands that receive a copied weapon socket are turned so the palm holds the weapon like the source, on any rig profile (https://github.com/zeljkovranjes/humanoid-retargeter/commit/f47219d)
+Weapon-rigid support hand - the support hand's grip stays on the same spot of the unscaled weapon as on the source (https://github.com/zeljkovranjes/humanoid-retargeter/commit/f47219d)
+# Citizen Animation Setup
+Weapon-rigid support hand - Create Citizen animation model keeps the support hand on the weapon for fitted Citizen armatures of any size (https://github.com/zeljkovranjes/humanoid-retargeter/commit/f47219d)
+# Import
+Skin bind reading - FBX import now reads the pose each bone's skin was bound to (https://github.com/zeljkovranjes/humanoid-retargeter/commit/429dcbf)
+
+Improved
+# Smart Port
+Existing weapon sockets - a character's own hold_R stays authoritative on its hand while the grip is drawn into reach of short arms, without changing bone lengths (https://github.com/zeljkovranjes/humanoid-retargeter/commit/f47219d)
+Support arm reach - the support arm keeps the source's bend reserve at body scale so walking no longer pulls the hand off the weapon (https://github.com/zeljkovranjes/humanoid-retargeter/commit/f47219d)
+# Docs
+Profiles - README lists 3ds Max Biped and Rigify among the built-in profiles (https://github.com/zeljkovranjes/humanoid-retargeter/commit/429dcbf)
+
+Fixed
+# Smart Port
+Floating guns - weapons now sit in the palm on Mixamo, UE Mannequin, 3ds Max Biped, Rigify, Advanced Skeleton and auto-mapped rigs; grip error went from up to 5.9 units and 16 degrees to under 0.12 units and 0.3 degrees (https://github.com/zeljkovranjes/humanoid-retargeter/commit/f47219d)
+Support hand off the weapon - the hand-to-hand spacing no longer scales with the body; error went from up to 45 units to under 0.08 units (https://github.com/zeljkovranjes/humanoid-retargeter/commit/f47219d)
+# Citizen Animation Setup
+Support hand off the weapon - fitted Citizen characters of a different size keep the support hand on the gun (https://github.com/zeljkovranjes/humanoid-retargeter/commit/f47219d)
+# Import
+3ds Max Biped fingers - fingers and wrists no longer tear into long strands when animated on Biped exports whose skeleton was saved in a different pose than the skin (https://github.com/zeljkovranjes/humanoid-retargeter/commit/429dcbf)
+# Tests
+Standalone tests - tests/CitizenAnimationSetup builds and runs again on its own (https://github.com/zeljkovranjes/humanoid-retargeter/commit/f47219d)
+
+Removed
+
+Known Issues
+# Smart Port
+Very short arms - a cartoon rig with arms about half Citizen's proportion cannot reach a full-size rifle or shotgun fore-end while walking; the support hand stops about 1.3 units short and the weapon is not scaled to compensate

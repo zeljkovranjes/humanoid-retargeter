@@ -1,12 +1,12 @@
-using HumanoidRetargeterDmx;
+using HumanoidRetargeter.EditorTools.Embedded.Datamodel;
 using System.Numerics;
-using HumanoidRetargeterVrf;
-using HumanoidRetargeterVrf.Blocks;
-using HumanoidRetargeterVrf.IO;
-using HumanoidRetargeterVrf.ResourceTypes;
-using HumanoidRetargeterVrf.Serialization.KeyValues;
+using HumanoidRetargeter.EditorTools.Embedded.ValveResourceFormat;
+using HumanoidRetargeter.EditorTools.Embedded.ValveResourceFormat.Blocks;
+using HumanoidRetargeter.EditorTools.Embedded.ValveResourceFormat.IO;
+using HumanoidRetargeter.EditorTools.Embedded.ValveResourceFormat.ResourceTypes;
+using HumanoidRetargeter.EditorTools.Embedded.ValveResourceFormat.Serialization.KeyValues;
 using Xunit;
-using Dmx = HumanoidRetargeterDmx.HumanoidRetargeterDmx;
+using Dmx = HumanoidRetargeter.EditorTools.Embedded.Datamodel.Datamodel;
 
 namespace SmartPort.Parser.Tests;
 

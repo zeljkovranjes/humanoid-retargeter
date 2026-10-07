@@ -1,11 +1,11 @@
 using System.Numerics;
-using HumanoidRetargeter.Cleanup;
-using HumanoidRetargeter.Mapping;
-using HumanoidRetargeter.Maths;
-using HumanoidRetargeter.Skeleton;
-using HumanoidRetargeter.Target;
+using HumanoidRetargeter.Core.Cleanup;
+using HumanoidRetargeter.Core.Mapping;
+using HumanoidRetargeter.Core.Maths;
+using HumanoidRetargeter.Core.Skeleton;
+using HumanoidRetargeter.Core.Target;
 using Xunit;
-using SkeletonModel = HumanoidRetargeter.Skeleton.Skeleton;
+using SkeletonModel = HumanoidRetargeter.Core.Skeleton.Skeleton;
 
 namespace HumanoidRetargeter.Tests.Target;
 

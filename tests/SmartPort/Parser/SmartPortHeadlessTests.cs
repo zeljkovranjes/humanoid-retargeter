@@ -1,14 +1,14 @@
 using System.Numerics;
 using System.Text.Json;
-using HumanoidRetargeter.Editor;
-using HumanoidRetargeter.Maths;
-using HumanoidRetargeter.Skeleton;
-using HumanoidRetargeter.Target;
-using HumanoidRetargeterDmx;
-using HumanoidRetargeterVrf;
-using HumanoidRetargeterVrf.ResourceTypes;
+using HumanoidRetargeter.EditorTools;
+using HumanoidRetargeter.Core.Maths;
+using HumanoidRetargeter.Core.Skeleton;
+using HumanoidRetargeter.Core.Target;
+using HumanoidRetargeter.EditorTools.Embedded.Datamodel;
+using HumanoidRetargeter.EditorTools.Embedded.ValveResourceFormat;
+using HumanoidRetargeter.EditorTools.Embedded.ValveResourceFormat.ResourceTypes;
 using Xunit;
-using SkeletonModel = HumanoidRetargeter.Skeleton.Skeleton;
+using SkeletonModel = HumanoidRetargeter.Core.Skeleton.Skeleton;
 
 namespace SmartPort.Parser.Tests;
 

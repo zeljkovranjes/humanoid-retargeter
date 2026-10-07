@@ -11,12 +11,15 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.10.0" />
     <PackageReference Include="xunit" Version="2.8.1" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.1" />
-    <Compile Include="../../../Editor/HumanoidRetargeter/Embedded/**/*.cs" />
-    <Compile Include="../../../Editor/HumanoidRetargeter/CompiledAssetRecovery.cs" />
-    <Compile Include="../../../Editor/HumanoidRetargeter/SmartPortAnimationExport.cs" />
-    <Compile Include="../../../Editor/HumanoidRetargeter/SmartPortAttachments.cs" />
-    <Compile Include="../../../Editor/HumanoidRetargeter/SmartPortIkTargets.cs" />
-    <Compile Include="../../../Editor/HumanoidRetargeter/SmartPortHeadless.cs" />
+    <Compile Include="../../../Editor/Embedded/**/*.cs" />
+    <Compile Include="../../../Editor/CompiledAssetRecovery.cs" />
+    <Compile Include="../../../Editor/SmartPortAnimationExport.cs" />
+    <Compile Include="../../../Editor/SmartPortAttachments.cs" />
+    <Compile Include="../../../Editor/SmartPortIkTargets.cs" />
+    <Compile Include="../../../Editor/SmartPortHeadless.cs" />
+    <Compile Include="../../../Editor/SmartPortHeadlessRequest.cs" />
+    <Compile Include="../../../Editor/SmartPortHeadlessResult.cs" />
+    <Compile Include="../../../Editor/SmartPortBone.cs" />
     <Compile Include="../../../Code/HumanoidRetargeter/**/*.cs" />
   </ItemGroup>
 </Project>

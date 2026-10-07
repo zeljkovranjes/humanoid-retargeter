@@ -1,12 +1,12 @@
-using HumanoidRetargeter.Maths;
-using HumanoidRetargeter.Skeleton;
-using HumanoidRetargeter.Target;
-using HumanoidRetargeterVrf;
-using HumanoidRetargeterVrf.ResourceTypes;
-using HumanoidRetargeterVrf.ResourceTypes.ModelAnimation;
-using HumanoidRetargeterVrf.Serialization.KeyValues;
+using HumanoidRetargeter.Core.Maths;
+using HumanoidRetargeter.Core.Skeleton;
+using HumanoidRetargeter.Core.Target;
+using HumanoidRetargeter.EditorTools.Embedded.ValveResourceFormat;
+using HumanoidRetargeter.EditorTools.Embedded.ValveResourceFormat.ResourceTypes;
+using HumanoidRetargeter.EditorTools.Embedded.ValveResourceFormat.ResourceTypes.ModelAnimation;
+using HumanoidRetargeter.EditorTools.Embedded.ValveResourceFormat.Serialization.KeyValues;
 using Xunit;
-using SkeletonModel = HumanoidRetargeter.Skeleton.Skeleton;
+using SkeletonModel = HumanoidRetargeter.Core.Skeleton.Skeleton;
 
 namespace SmartPort.Parser.Tests;
 
@@ -40,8 +40,8 @@ public class SmartPortRetargetTests
     public void RecoveredParentConstraintRetainsItsDestinationBone()
     {
         const string bone = "test_parent_constraint_slave";
-        HumanoidRetargeterVrf.Utils.StringToken.Store(new[] { bone });
-        var hash = HumanoidRetargeterVrf.Utils.StringToken.InvertedTable.Single(p => p.Value == bone).Key;
+        HumanoidRetargeter.EditorTools.Embedded.ValveResourceFormat.Utils.StringToken.Store(new[] { bone });
+        var hash = HumanoidRetargeter.EditorTools.Embedded.ValveResourceFormat.Utils.StringToken.InvertedTable.Single(p => p.Value == bone).Key;
         var slave = new KVObject(null);
         slave.AddProperty("m_nBoneHash", hash);
         slave.AddProperty("m_flWeight", 1.0);
@@ -58,7 +58,7 @@ public class SmartPortRetargetTests
         constraint.AddProperty("m_slaves", slaves);
         constraint.AddProperty("m_targets", new KVObject(null, isArray: true));
         var node = new KVObject(null); node.AddProperty("_class", "AnimConstraintParent");
-        typeof(HumanoidRetargeterVrf.IO.ModelExtract).GetMethod("ProcessBoneConstraintChildren",
+        typeof(HumanoidRetargeter.EditorTools.Embedded.ValveResourceFormat.IO.ModelExtract).GetMethod("ProcessBoneConstraintChildren",
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!.Invoke(null, new object[] { constraint, node });
         Assert.Equal(bone, node.GetStringProperty("constrained_bone"));
     }
