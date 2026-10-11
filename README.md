@@ -30,6 +30,7 @@ Search for **Humanoid Retargeter** in the s&box library manager, or add
 3. Choose an s&box character or add a custom humanoid model.
 4. Review the detected bone mapping and correct uncertain assignments.
 5. Preview the animation and adjust the retargeting options.
+   To shorten a clip or cut a section out, click its **Trim** (scissors) button: select frames on the timeline, press Delete to cut them or K to keep only them, Ctrl+Z / Ctrl+Y to undo and redo, Ctrl+R to restore the whole clip, then **Apply trim**.
 6. Choose an output folder and filename, or select an existing VMDL.
 7. Click **Convert All** and use the compiled sequences in your model or animgraph.
 
@@ -69,6 +70,7 @@ foreach ( var clip in result.Clips )
 | Footstep events | Off | Adds `AE_FOOTSTEP` events from detected foot plants. |
 | Mirrored variants (_M) | Off | Also writes a left/right-mirrored twin of every clip. |
 | Additive variants, frame | Off, 0 | Also writes a `<clip>_delta` additive sequence against the given frame. |
+| Trim (per animation) | Whole clip | Frames kept from the solved clip (`RetargetRequest.KeptFrames` in code). Travel continues across cuts. |
 
 ## How it works
 
@@ -88,6 +90,7 @@ Not applicable: it is an editor tool. Its output is ordinary compiled animation 
 
 - Custom models need a rig and skin weights. Automatic mapping is not perfect; check the preview before exporting.
 - Facial and morph animations are not transferred.
+- A trim is kept per animation for the session only. After changing Sample fps, open Trim again: frame numbers change with the rate. Cuts keep the travel continuous but not the facing direction.
 - Use FBX 7.x, and keep external model textures and glTF buffers alongside their model.
 - RenderWare ANM/AN5 animations need a companion DFF skeleton. CBA animations need a joint-table JSON; compressed full-body CBA tracks are not supported.
 - The deep-learning fallback does not transfer fingers, and its weights are non-commercial (CC BY-NC 4.0).

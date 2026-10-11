@@ -176,4 +176,9 @@ public sealed class RetargetRequest
 
     /// <summary>Force the looping flag on the output sequence(s); null = the source clip's flag.</summary>
     public bool? LoopingOverride { get; init; }
+
+    /// <summary>Trim: the solved frames to keep (zero-based, ascending), applied to every clip this request
+    /// converts, so pair it with <see cref="TakeIndex"/> on multi-take files. Null keeps the whole clip.
+    /// Travel stays continuous across a cut (see <see cref="Trim.ClipTrim.Apply"/>).</summary>
+    public IReadOnlyList<int>? KeptFrames { get; init; }
 }

@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-10-11
+Title: Trim Update
+### Added
+# Editor
+Trim editor - a scissors button on each animation opens the character preview with a timeline: cut sections out, keep only a selection, or trim before or after any frame
+Trim editor - Ctrl+Z undoes, Ctrl+Y redoes and Ctrl+R restores the whole animation
+Trim editor - cutting the middle of a walk keeps the character moving forward instead of jumping back
+# API
+RetargetRequest.KeptFrames - trims a conversion from code
+
 ## 2026-10-07
 ### Fixed
 - Pinkies on characters made with "Create Citizen animation model" now curl with the ring finger in fists and grips, as on the stock Citizen, instead of sticking out backwards.

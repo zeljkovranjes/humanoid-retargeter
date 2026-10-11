@@ -49,3 +49,9 @@ Journal for this library. Keep it current: decisions, engine gotchas, what faile
   FittedCitizenPose gained copyRingToPinky (used only by FittedCitizenAnimations): pinky joints take the matching ring joint's
   delta, re-expressed in the pinky's parent frame. The arm twist and knee/elbow problems were fixed in the rigger (frames,
   helper weights); after both, every bone and helper of the fitted model moves within 1 degree of the stock Human male.
+- 2026-10-11: user request "trim existing animations" with a timeline like text-to-animation's. Trim is applied to the
+  SOLVED frames (Core/Trim/ClipTrim, after SolveAndClean, before EmitClip, primary and mirrored twin), so the editor's
+  timeline indices are exactly the preview's frames and sample fps. TrimEdit holds kept frame numbers with snapshot
+  undo/redo (Core, tested). Cuts shift parentless bones on the ground plane so travel continues one step on from the
+  frame before the cut; yaw is not re-aligned yet (add if turning clips get cut). ClipResult.WithFrames exists because
+  SolvedFrames is internal-set and the editor needs a trimmed preview clip. Trims live on SourceTakeEntry (session only).

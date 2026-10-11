@@ -864,6 +864,48 @@ public sealed class RetargetWindow : Widget
 		dialog.Show();
 	}
 
+	/// <summary>Opens the trim editor on the take's untrimmed solve; Apply stores the kept frames on the take.</summary>
+	async void OpenTrim( SourceTakeEntry take )
+	{
+		var entry = take.File;
+		if ( _converting || entry.Scene is null || _target is null )
+			return;
+
+		SetStatus( $"Solving {take.DisplayName} for trimming…", Theme.Blue );
+		var request = BuildRequest( take, trimmed: false );
+		var target = _target;
+		HumanoidRetargeter.Core.ClipResult clip;
+		try
+		{
+			var result = await Task.Run( () => Retargeter.Convert( request, target.Spec ) );
+			await EditorPipeline.SwitchToMainThread();
+			clip = result.Clips.FirstOrDefault( c => c.Success && !c.IsMirroredVariant && c.SolvedFrames is { Count: > 1 } );
+			if ( clip is null )
+			{
+				SetStatus( result.Errors.FirstOrDefault() ?? $"{take.DisplayName} has nothing to trim.", Theme.Red );
+				return;
+			}
+		}
+		catch ( Exception e )
+		{
+			await EditorPipeline.SwitchToMainThread();
+			SetStatus( $"Trim: {e.Message}", Theme.Red );
+			return;
+		}
+
+		RefreshStatus();
+		new TrimDialog( this, take.DisplayName, clip, target, take.KeptFrames )
+		{
+			Applied = kept =>
+			{
+				take.KeptFrames = kept;
+				take.ConversionStatus = null; // the converted clip no longer matches
+				take.StatusDetail = "";
+				RefreshAll();
+			},
+		}.Show();
+	}
+
 	/// <summary>The imported source clip a take row represents, for the preview's ghost
 	/// overlay: definition rows (Unity sidecar) locate their take by name (the facade's rule:
 	/// match <see cref="HumanoidRetargeter.Core.Formats.ExternalClipDef.TakeName"/>, else the first
@@ -988,8 +1030,9 @@ public sealed class RetargetWindow : Widget
 	/// definitions through and ALWAYS set the row index — TakeIndex then addresses the
 	/// definition the row represents, and the facade slices the take to its frame range
 	/// (preview re-solves via this same request, so it previews the sliced range too).</summary>
-	HumanoidRetargeter.Core.RetargetRequest BuildRequest( SourceTakeEntry take, StockAnimationSlot slot = null ) => new()
+	HumanoidRetargeter.Core.RetargetRequest BuildRequest( SourceTakeEntry take, StockAnimationSlot slot = null, bool trimmed = true ) => new()
 	{
+		KeptFrames = trimmed ? take.KeptFrames : null,
 		SourceData = take.File.Bytes,
 		SourceFileName = take.File.FileName,
 		ExternalBufferResolver = uri => TargetPickers.ReadGltfDependency( take.File.FilePath, uri ),
@@ -1826,6 +1869,12 @@ public sealed class RetargetWindow : Widget
 				suggestion is null ? "Replace a stock animation: choose an Idle, Walk, Run or Jump slot in a copied Citizen graph"
 					: $"Replace a stock animation. Suggested: {suggestion.Family} {suggestion.Direction} ({suggestion.Basis})." ) );
 			replace.Enabled = canPreview;
+			var trimmed = take?.KeptFrames is not null;
+			var trim = Layout.Add( RtStyle.Icon( this, "content_cut", () => _window.OpenTrim( take ),
+				trimmed ? $"Trim: {take.KeptFrames.Count} frames kept. Click to edit the trim" : "Trim: cut frames out of this animation" ) );
+			trim.Enabled = canPreview;
+			if ( trimmed )
+				trim.Foreground = Theme.Green;
 			Layout.Add( RtStyle.Icon( this, "close", Remove, take is not null && entry.Takes.Count > 1 ? "Remove this take from the list" : "Remove from the list" ) );
 		}
 
@@ -1842,6 +1891,8 @@ public sealed class RetargetWindow : Widget
 				parts.Add( $"{clip.Duration:0.0#} s" );
 				parts.Add( $"{clip.Fps:0} fps" );
 			}
+			if ( _take?.KeptFrames is { } kept )
+				parts.Add( $"trimmed to {kept.Count} frames" );
 			return string.Join( "  ·  ", parts );
 		}
 

@@ -40,6 +40,9 @@ public sealed class SourceTakeEntry
 	/// no conversion ran — the row then shows the file's mapping status.</summary>
 	public EntryStatus? ConversionStatus { get; set; }
 
+	/// <summary>Trim set in the trim editor: the solved frames this take keeps, or null for the whole clip.</summary>
+	public IReadOnlyList<int> KeptFrames { get; set; }
+
 	/// <summary>One-line detail of the last conversion of this take.</summary>
 	public string StatusDetail { get; set; } = "";
 

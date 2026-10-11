@@ -67,6 +67,27 @@ public sealed class ClipResult
         SolvedFrames = null;
     }
 
+    /// <summary>A copy of this result carrying <paramref name="frames"/> instead (the trim editor previews its cut this way).</summary>
+    public ClipResult WithFrames(List<XForm[]> frames) => new()
+    {
+        ClipName = ClipName,
+        SourceFileName = SourceFileName,
+        SourceId = SourceId,
+        DmxFileName = DmxFileName,
+        DmxContent = DmxContent,
+        Mapping = Mapping,
+        Success = Success,
+        Error = Error,
+        SolvedFrames = frames,
+        Fps = Fps,
+        Looping = Looping,
+        ExtractMotion = ExtractMotion,
+        FootstepEvents = FootstepEvents,
+        IsMirroredVariant = IsMirroredVariant,
+        HasAdditiveVariant = HasAdditiveVariant,
+        AdditiveVariantName = AdditiveVariantName,
+    };
+
     /// <summary>Output sample rate.</summary>
     public float Fps { get; init; }
 

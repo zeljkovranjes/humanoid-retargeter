@@ -565,7 +565,7 @@ public static class Retargeter
         {
             clip = SolveAndClean(request, target, context, scene, map, report, take, clipName);
             EmitClip(request, target, context, options, usedNames, clips, entries, report,
-                sourceId, clipName, clip.Frames, clip.Fps, clip.Looping, isMirrored: false);
+                sourceId, clipName, Trimmed(request, context, clip.Frames), clip.Fps, clip.Looping, isMirrored: false);
         }
         catch (Exception e)
         {
@@ -606,7 +606,7 @@ public static class Retargeter
                 var mirroredClip = SolveAndClean(
                     request, target, context, mirroredScene, map, report, take, mirroredName);
                 EmitClip(request, target, context, options, usedNames, clips, entries, report,
-                    sourceId, mirroredName, mirroredClip.Frames, mirroredClip.Fps,
+                    sourceId, mirroredName, Trimmed(request, context, mirroredClip.Frames), mirroredClip.Fps,
                     clip.Looping, isMirrored: true);
             }
             catch (Exception e)
@@ -625,6 +625,12 @@ public static class Retargeter
 
         return mapsPinky;
     }
+
+    /// <summary>The request's trim (<see cref="RetargetRequest.KeptFrames"/>) applied to solved frames.</summary>
+    private static List<XForm[]> Trimmed(RetargetRequest request, TargetContext context, List<XForm[]> frames)
+        => request.KeptFrames is { } kept
+            ? Trim.ClipTrim.Apply(frames, kept, context.Rig.Skeleton, context.Up is { } up ? GroundUp(up) : null)
+            : frames;
 
     /// <summary>Shared tail of clip production (primary and mirrored twin): optional footstep
     /// events, DMX serialization, the <see cref="ClipResult"/> and the vmdl
