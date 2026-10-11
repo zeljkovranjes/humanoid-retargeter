@@ -26,3 +26,5 @@ dev/data/
 dev/out/
 .claude/settings.local.json
 DISCORD.md
+CLAUDE.md
+DEVLOG.md
