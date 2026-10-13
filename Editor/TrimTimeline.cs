@@ -243,9 +243,9 @@ internal sealed class TrimTimeline : Widget
 		_drag = Drag.None;
 	}
 
-	protected override void OnWheel( WheelEvent e )
+	protected override void OnMouseWheel( WheelEvent e )
 	{
-		base.OnWheel( e );
+		base.OnMouseWheel( e );
 		var anchor = XToFrame( e.Position.x );
 		_zoom = Math.Clamp( _zoom * (e.Delta > 0 ? 1.15f : 1f / 1.15f), 1f, Math.Max( 1f, Count / 8f ) );
 		_scroll = Math.Clamp( anchor - (e.Position.x - Side) / PixelsPerFrame, 0, Math.Max( 0, Count - 1 - VisibleFrames ) );
