@@ -928,11 +928,14 @@ public static class Retargeter
 
         // Topmost orphans: unmapped, off the hips' ancestor path, no mapped ancestor,
         // and the parent is either the scene root path or absent (children of deeper
-        // orphans ride along unchanged).
+        // orphans ride along unchanged). IK bones are skipped: IkBoneBaker already placed
+        // them, and root_IK rests at the origin, nearer a foot than the hips, so anchoring it
+        // swung every hand/foot IK target with that foot (engine hand IK then pulled the arms).
         var tops = new List<(int Bone, int Anchor)>();
         for (var i = 0; i < skeleton.Count; i++)
         {
-            if (rig.RoleOf(i) is not null || hipsPath.Contains(i) || HasMappedAncestor(i))
+            if (rig.RoleOf(i) is not null || hipsPath.Contains(i) || HasMappedAncestor(i)
+                || rig.ClassOf(i) == BoneClass.IkBaked)
                 continue;
             var parent = skeleton[i].ParentIndex;
             if (parent >= 0 && !hipsPath.Contains(parent))

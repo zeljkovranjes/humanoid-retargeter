@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-10-13
+Title: Hand IK and Wheel Fixes
+### Fixed
+# Retargeting
+Hand and foot IK targets - stay on the hands and feet again; they had started following a foot, so in game the arms were pulled behind the back and the wrists looked flat
+# Editor
+Trim timeline - use the current mouse-wheel callback to retain wheel zooming without obsolete API warnings
+
 ## 2026-10-11
 Title: Trim Update
 ### Added
