@@ -58,6 +58,7 @@ public sealed class PreviewWidget : SceneRenderingWidget
 	XForm[] _interpolatedScratch;
 
 	HumanoidRetargeter.Core.ClipResult _clip;
+	(string Name, float[] Weights)[] _morphTracks = Array.Empty<(string, float[])>();
 	float _time;
 	float _yaw = 35f;
 	Vector2 _lastMouse;
@@ -504,6 +505,9 @@ public sealed class PreviewWidget : SceneRenderingWidget
 	public void SetClip( HumanoidRetargeter.Core.ClipResult clip )
 	{
 		_clip = clip;
+		_morphTracks = clip?.MorphWeights.Select( entry =>
+			(HumanoidRetargeter.Core.Formats.Dmx.DmxWriter.MorphName( entry.Key ), entry.Value) ).ToArray()
+			?? Array.Empty<(string, float[])>();
 		_time = 0;
 		CurrentFrame = 0;
 		_ghostAlignedClip = null; // ghost anchor depends on this clip's frame 0 - recompute
@@ -629,6 +633,15 @@ public sealed class PreviewWidget : SceneRenderingWidget
 
 		if ( _sceneModel.IsValid() )
 		{
+			if ( _clip is not null )
+			{
+				foreach ( var (name, weights) in _morphTracks )
+				{
+					if ( weights.Length > 0 )
+						_sceneModel.Morphs.Set( name,
+							weights[ Math.Clamp( CurrentFrame, 0, weights.Length - 1 ) ] );
+				}
+			}
 			for ( var i = 0; i < count; i++ )
 			{
 				var modelBone = _rigToModelBone[i];

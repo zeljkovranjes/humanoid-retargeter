@@ -7,9 +7,9 @@ check the detected bone mapping in the live preview, and convert them to compile
 sequences. It is pure C# with no Blender, Python or native DLLs. The optional deep-learning fallback
 ships SAME weights licensed CC BY-NC 4.0 (non-commercial).
 
-- Input: FBX (7.x), BVH, glTF, GLB and VRM, plus supported ANM, AN5 and CBA files. Multi-animation FBX files unpack into individual clips; batches can mix sources.
+- Input: FBX (7.x), BVH, glTF, GLB and VRM, plus MMD VMD/VPD motions and supported ANM, AN5 and CBA files. Multi-animation FBX files unpack into individual clips; batches can mix sources.
 - Built-in profiles for Mixamo, ActorCore, UE Mannequin, 3ds Max Biped, Rigify and other common rigs; unknown rigs are auto-mapped, with manual correction and saved presets.
-- Targets: s&box Human (default), classic Citizen, or a custom VMDL, FBX, GLB or glTF model.
+- Targets: s&box Human (default), classic Citizen, or a custom VMDL, FBX, GLB, glTF, PMX or PMD model.
 - Output: a new animation VMDL, or clips spliced into an existing VMDL (with backup and collision guards). The s&box IK helper bones are baked the way the stock Citizen clips drive them, so the default animgraph works.
 
 ## Requirements
@@ -33,6 +33,8 @@ Search for **Humanoid Retargeter** in the s&box library manager, or add
    To shorten a clip or cut a section out, click its **Trim** (scissors) button: select frames on the timeline, press Delete to cut them or K to keep only them, Ctrl+Z / Ctrl+Y to undo and redo, Ctrl+R to restore the whole clip, then **Apply trim**.
 6. Choose an output folder and filename, or select an existing VMDL.
 7. Click **Convert All** and use the compiled sequences in your model or animgraph.
+
+For MMD motion on regular humanoids, add a VMD/VPD and choose s&box Human, Citizen or your custom target; no PMX/PMD is required. A built-in standard MMD source skeleton handles common body, finger and IK controls. Optionally use the motion row's skeleton button to select a PMX/PMD for exact proportions and custom bones. PMX/PMD custom characters need their texture folders intact and also export an `.mmdanim` resource beside the VMDL. Add **MMD Playback** to a GameObject and select that resource for SDEF/QDEF, UV/material morphs and baked soft-body playback. See [MMD support and limits](docs/MMD.md).
 
 ### In code
 
@@ -84,12 +86,13 @@ window, preview and asset writing live in `Editor/`.
 
 ## Multiplayer
 
-Not applicable: it is an editor tool. Its output is ordinary compiled animation assets.
+Standard output is ordinary compiled animation. MMD Playback works locally in single-player, on a host and on clients; it does not synchronize its playback clock. A game's networking code decides which animation and time each client displays.
 
 ## Limitations
 
 - Custom models need a rig and skin weights. Automatic mapping is not perfect; check the preview before exporting.
-- Facial and morph animations are not transferred.
+- MMD vertex/group morphs and bone morphs are supported on compatible custom targets. Other facial formats are not transferred.
+- Advanced MMD deformation uses the MMD Playback component; standard VMDL output and the retargeter's skeletal preview use linear skinning. Soft-body simulation supports cloth/rope links, pins, anchors and rigid collisions, with limits described in [MMD details](docs/MMD.md). Physics can differ from MMD.
 - A trim is kept per animation for the session only. After changing Sample fps, open Trim again: frame numbers change with the rate. Cuts keep the travel continuous but not the facing direction.
 - Use FBX 7.x, and keep external model textures and glTF buffers alongside their model.
 - RenderWare ANM/AN5 animations need a companion DFF skeleton. CBA animations need a joint-table JSON; compressed full-body CBA tracks are not supported.
@@ -117,3 +120,4 @@ No license file yet; the package is free for non-commercial use. The optional SA
 **CC BY-NC 4.0 (non-commercial)**, see the [attribution](Assets/data/humanoid_retargeter/dl/ATTRIBUTION.md).
 Vendored editor code (ValveResourceFormat, Datamodel.NET, ZstdSharp, ValveKeyValue) keeps its MIT/BSD
 licenses in `Editor/Embedded/`.
+The managed Bullet port retains its zlib-style notice. Adapted SDEF and soft-body code retains its MIT notices; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

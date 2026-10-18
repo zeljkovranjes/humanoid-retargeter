@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using HumanoidRetargeter.Core;
 using HumanoidRetargeter.Core.Formats;
 using HumanoidRetargeter.Core.Formats.Ant;
@@ -122,7 +123,7 @@ public sealed class SourceFileEntry
 			entry.Bytes = File.ReadAllBytes( filePath );
 			ResolveSkeletonFile( entry, skeletonPath );
 			entry.Scene = Retargeter.ImportSource( entry.Bytes, filePath, skeletonData: entry.SkeletonBytes,
-				externalBufferResolver: uri => TargetPickers.ReadGltfDependency( filePath, uri ) );
+				externalBufferResolver: uri => TargetPickers.ReadGltfDependency( filePath, uri ), useStandardMmdSkeleton: true );
 			entry.Signature = SkeletonSignature.Compute( entry.Scene.Skeleton );
 			for ( var i = 0; i < entry.Scene.Clips.Count; i++ )
 				entry.Takes.Add( new SourceTakeEntry( entry, i, entry.Scene.Clips[i].Name ) );
@@ -163,8 +164,12 @@ public sealed class SourceFileEntry
 	public static bool IsAntAnimation( string filePath )
 		=> Path.GetExtension( filePath ).Equals( ".cba", StringComparison.OrdinalIgnoreCase );
 
+	/// <summary>Whether the file is an MMD motion or pose with an optional PMX/PMD source model.</summary>
+	public static bool IsMmdAnimation( string filePath )
+		=> Path.GetExtension( filePath ).ToLowerInvariant() is ".vmd" or ".vpd";
+
 	static bool NeedsCompanionSkeleton( string filePath )
-		=> IsRenderwareAnimation( filePath ) || IsAntAnimation( filePath );
+		=> IsRenderwareAnimation( filePath ) || IsAntAnimation( filePath ) || IsMmdAnimation( filePath );
 
 	/// <summary>
 	/// Companion resolution: an explicit <paramref name="skeletonPath"/> wins. For ANT,
@@ -187,6 +192,12 @@ public sealed class SourceFileEntry
 			{
 				entry.SkeletonPath = skeletonPath;
 				entry.SkeletonBytes = File.ReadAllBytes( skeletonPath );
+				return;
+			}
+
+			if ( IsMmdAnimation( entry.FilePath ) )
+			{
+				ResolveMmdModel( entry );
 				return;
 			}
 
@@ -239,6 +250,21 @@ public sealed class SourceFileEntry
 		{
 			// Resolution is best-effort; a missing skeleton surfaces through the importer.
 		}
+	}
+
+	static void ResolveMmdModel( SourceFileEntry entry )
+	{
+		var folder = Path.GetDirectoryName( Path.GetFullPath( entry.FilePath ) );
+		var candidates = Directory.EnumerateFiles( folder )
+			.Where( path => Path.GetExtension( path ).ToLowerInvariant() is ".pmx" or ".pmd" ).ToArray();
+		var stem = Path.GetFileNameWithoutExtension( entry.FilePath );
+		var named = candidates.Where( path => string.Equals( Path.GetFileNameWithoutExtension( path ), stem, StringComparison.OrdinalIgnoreCase ) ).ToArray();
+		var chosen = named.Length == 1 ? named[ 0 ] : candidates.Length == 1 ? candidates[ 0 ] : null;
+		// Several models may share the same Japanese bone names. Do not guess between characters.
+		if ( chosen is null )
+			return;
+		entry.SkeletonPath = chosen;
+		entry.SkeletonBytes = File.ReadAllBytes( chosen );
 	}
 
 	static void ResolveAntJointTable( SourceFileEntry entry )

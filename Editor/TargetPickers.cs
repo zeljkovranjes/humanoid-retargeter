@@ -8,6 +8,7 @@ using Editor;
 using HumanoidRetargeter.Core;
 using HumanoidRetargeter.Core.Formats.Fbx;
 using HumanoidRetargeter.Core.Formats.Gltf;
+using HumanoidRetargeter.Core.Formats.Mmd;
 using HumanoidRetargeter.Core.Mapping;
 using HumanoidRetargeter.Core.Maths;
 using HumanoidRetargeter.Core.Target;
@@ -283,21 +284,24 @@ public static class TargetPickers
 			var imported = extension switch
 			{
 				".fbx" => FbxImporter.Import( bytes ),
+				".pmx" or ".pmd" => MmdImporter.Import( bytes ),
 				".glb" => GltfImporter.Import( bytes, new GltfImportOptions { UseSkinBindPose = true } ),
 				".gltf" => GltfImporter.Import( bytes, new GltfImportOptions
 				{
 					UseSkinBindPose = true,
 					ExternalBufferResolver = uri => ReadGltfDependency( filePath, uri ),
 				} ),
-				_ => throw new FormatException( "Expected an .fbx, .glb, or .gltf model." ),
+				_ => throw new FormatException( "Expected an .fbx, .glb, .gltf, .pmx or .pmd model." ),
 			};
-			skeleton = imported.Skeleton;
+			skeleton = extension is ".pmx" or ".pmd"
+				? MmdBoneNames.EncodeSkeleton( imported.Skeleton )
+				: imported.Skeleton;
 			unitScaleCm = imported.UnitScaleCm;
 			upAxis = imported.UpAxis;
 			// Both tokens live uncompressed in their respective container metadata.
-			hasMesh = extension == ".fbx"
+			hasMesh = extension is ".pmx" or ".pmd" || (extension == ".fbx"
 				? ContainsToken( bytes, "Geometry" )
-				: ContainsToken( bytes, "\"meshes\"" );
+				: ContainsToken( bytes, "\"meshes\"" ));
 		}
 		catch ( Exception e )
 		{

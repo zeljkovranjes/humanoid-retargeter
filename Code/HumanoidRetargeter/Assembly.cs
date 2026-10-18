@@ -1,7 +1,7 @@
 #nullable enable annotations
 
-// All runtime code is engine-agnostic and lives in Core/: no Sandbox/Editor references allowed
-// there. It also compiles as plain .NET (dev/HumanoidRetargeter.Core.csproj, dev/HumanoidRetargeter.Dev.csproj).
+// Core has no Sandbox/Editor references and also compiles as plain .NET.
+// MMD playback's engine adapters, component and resource live outside Core.
 
 // Global usings for the s&box in-engine compiler.
 //

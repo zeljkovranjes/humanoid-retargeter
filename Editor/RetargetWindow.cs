@@ -176,7 +176,7 @@ public sealed class RetargetWindow : Widget
 		var top = Layout.AddRow();
 		top.Spacing = 8;
 		var add = top.Add( new Button.Primary( "Add Files…" ) { Icon = "add", Tint = Theme.Green, FixedHeight = 28 } );
-		add.ToolTip = "Add .fbx / .bvh / .glb / .gltf / .vrm / .anm / .an5 / .cba animation files to convert (or drop them on this panel)";
+		add.ToolTip = "Add FBX, BVH, glTF, VRM, ANM, AN5, CBA, VMD or VPD animation files (or drop them on this panel). PMX/PMD files select a custom character.";
 		add.Clicked = AddFilesViaDialog;
 		top.Add( new RtButton( this, "Smart Port…", "swap_horiz", () => new SmartPortDialog( this ).Show(),
 			"Smart Port: bring a whole animation setup (clips, events and animgraph) from one model onto another character", 28 ) );
@@ -262,7 +262,7 @@ public sealed class RetargetWindow : Widget
 		targetCombo.AddItem( "s&box Human (default)", "person", TrySelectSboxTarget, selected: true );
 		targetCombo.AddItem( "s&box Citizen (classic)", "person_outline", TrySelectSboxCitizenTarget );
 		targetCombo.AddItem( "Custom model (.vmdl)…", "view_in_ar", PickCustomModelTarget );
-		targetCombo.AddItem( "Custom model file (.fbx/.glb/.gltf)…", "category", PickCustomFbxTarget );
+		targetCombo.AddItem( "Custom model file (.fbx/.glb/.gltf/.pmx/.pmd)…", "category", PickCustomFbxTarget );
 		_targetInfo = character.Layout.Add( RtStyle.Muted( new Label( "", character ) { WordWrap = true }, small: true ) );
 		_citizenSetupButton = character.Layout.Add( new Button( "Create Citizen animation model", "accessibility_new" ) { FixedHeight = 26 } );
 		_citizenSetupButton.Enabled = false;
@@ -460,7 +460,7 @@ public sealed class RetargetWindow : Widget
 	void PickCustomFbxTarget()
 	{
 		var path = EditorUtility.OpenFileDialog( "Select target model",
-			"3D Model Files (*.fbx *.glb *.gltf)", null );
+			"3D Model Files (*.fbx *.glb *.gltf *.pmx *.pmd)", null );
 		if ( string.IsNullOrEmpty( path ) )
 			return;
 		var resolved = TargetPickers.FromModelFile( path, out var error, out var rejected );
@@ -640,7 +640,7 @@ public sealed class RetargetWindow : Widget
 		var fd = new FileDialog( null ) { Title = "Add animation files…" };
 		fd.SetFindExistingFiles();
 		fd.SetModeOpen();
-		fd.SetNameFilter( "Animation Files (*.fbx *.bvh *.glb *.gltf *.vrm *.anm *.an5 *.cba)" );
+		fd.SetNameFilter( "Animation and MMD Model Files (*.fbx *.bvh *.glb *.gltf *.vrm *.anm *.an5 *.cba *.vmd *.vpd *.pmx *.pmd)" );
 		if ( !fd.Execute() )
 			return;
 
@@ -663,9 +663,25 @@ public sealed class RetargetWindow : Widget
 	{
 		var assetsPath = Project.Current?.GetAssetsPath();
 		var needDecision = new List<SourceFileEntry>();
+		var models = paths.Where( path => System.IO.Path.GetExtension( path ).ToLowerInvariant() is ".pmx" or ".pmd" ).ToArray();
+		if ( models.Length > 1 )
+		{
+			SetStatus( "Choose one PMX/PMD character at a time; a batch can contain several motions for that character.", Theme.Yellow );
+			return;
+		}
+		if ( models.Length == 1 )
+		{
+			var resolved = TargetPickers.FromModelFile( models[ 0 ], out var error, out var rejected );
+			ApplyPickedTarget( resolved, error, rejected );
+		}
+		var mmdModel = models.FirstOrDefault() ?? _target?.ModelFilePath;
+		if ( System.IO.Path.GetExtension( mmdModel ?? "" ).ToLowerInvariant() is not (".pmx" or ".pmd") )
+			mmdModel = null;
 
 		foreach ( var path in paths )
 		{
+			if ( System.IO.Path.GetExtension( path ).ToLowerInvariant() is ".pmx" or ".pmd" )
+				continue;
 			if ( _entries.Any( e => string.Equals( e.FilePath, path, StringComparison.OrdinalIgnoreCase ) ) )
 				continue;
 
@@ -673,7 +689,8 @@ public sealed class RetargetWindow : Widget
 
 			// Parse off the UI thread; Task.Run continuations are not guaranteed to resume
 			// on the editor main thread, so hop back explicitly before touching the UI.
-			var entry = await Task.Run( () => SourceFileEntry.Load( path, assetsPath ) );
+			var companion = SourceFileEntry.IsMmdAnimation( path ) ? mmdModel : null;
+			var entry = await Task.Run( () => SourceFileEntry.Load( path, assetsPath, companion ) );
 			await EditorPipeline.SwitchToMainThread();
 
 			if ( !this.IsValid() )
@@ -759,11 +776,12 @@ public sealed class RetargetWindow : Widget
 	void PickSkeletonFor( SourceFileEntry entry )
 	{
 		var isAnt = SourceFileEntry.IsAntAnimation( entry.FilePath );
+		var isMmd = SourceFileEntry.IsMmdAnimation( entry.FilePath );
 		var path = EditorUtility.OpenFileDialog(
-			isAnt
+			isMmd ? $"Select MMD character (.pmx/.pmd) for {entry.FileName}" : isAnt
 				? $"Select ANT joint table (.json) for {entry.FileName}"
 				: $"Select skeleton model (.dff) for {entry.FileName}",
-			isAnt ? "Joint Tables (*.json)" : "RenderWare Models (*.dff)",
+			isMmd ? "MMD Models (*.pmx *.pmd)" : isAnt ? "Joint Tables (*.json)" : "RenderWare Models (*.dff)",
 			System.IO.Path.GetDirectoryName( entry.FilePath ) );
 		if ( string.IsNullOrEmpty( path ) )
 			return;
@@ -989,7 +1007,7 @@ public sealed class RetargetWindow : Widget
 				|| MathF.Abs( scene.Clips[take.TakeIndex].Fps - clip.Fps ) > 0.01f )
 			{
 				scene = Retargeter.ImportSource(
-					entry.Bytes, entry.FileName, clip.Fps, entry.SkeletonBytes );
+					entry.Bytes, entry.FileName, clip.Fps, entry.SkeletonBytes, useStandardMmdSkeleton: true );
 			}
 
 			var derived = HumanoidRetargeter.Core.Dl.DlMappingDeriver.Derive(
@@ -1172,6 +1190,8 @@ public sealed class RetargetWindow : Widget
 			compileTimeoutSeconds: string.IsNullOrEmpty( target.Spec.MeshFilePath )
 				? 120f : EditorPipeline.MeshCompileTimeoutSeconds );
 		await EditorPipeline.SwitchToMainThread();
+		if ( write.Errors.Count == 0 )
+			await MmdPlaybackExport.WriteAsync( target, batch, options.DmxFolderRelative, write );
 		return (batch, write);
 	}
 
@@ -1530,6 +1550,9 @@ public sealed class RetargetWindow : Widget
 		List<string> prepNotes )
 	{
 		var lines = new List<(string, Color, string)>();
+		if ( write is not null )
+			foreach ( var path in write.MmdAnimationFiles )
+				lines.Add( ("animation", Theme.Green, $"MMD playback: {path}. Add MMD Playback to a GameObject and select this animation.") );
 
 		foreach ( var note in prepNotes )
 			lines.Add( ("build", Theme.Yellow, note) );
@@ -1854,10 +1877,12 @@ public sealed class RetargetWindow : Widget
 
 			// Animation without a resolvable companion skeleton: offer an explicit .dff or ANT
 			// joint-table selection (see SourceFileEntry.ResolveSkeletonFile).
-			if ( entry.NeedsSkeletonFile )
+			if ( entry.NeedsSkeletonFile || SourceFileEntry.IsMmdAnimation( entry.FilePath ) )
 			{
 				Layout.Add( RtStyle.Icon( this, "accessibility", () => _window.PickSkeletonFor( entry ),
-					SourceFileEntry.IsAntAnimation( entry.FilePath )
+					SourceFileEntry.IsMmdAnimation( entry.FilePath )
+						? $"Optional source model: select a PMX/PMD for exact proportions and custom bones. Current: {entry.SkeletonPath ?? "built-in standard MMD skeleton"}"
+						: SourceFileEntry.IsAntAnimation( entry.FilePath )
 						? "Pick skeleton: EA ANT animations carry joint indices only — select the ordered joint-table JSON"
 						: "Pick skeleton: RenderWare animations carry no skeleton — select the character's model .dff" ) );
 			}

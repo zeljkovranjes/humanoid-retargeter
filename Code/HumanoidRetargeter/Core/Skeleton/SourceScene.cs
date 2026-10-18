@@ -19,6 +19,7 @@ namespace HumanoidRetargeter.Core.Skeleton;
 /// </remarks>
 public sealed class SourceScene
 {
+	internal bool HasMmdAuxiliaryMotion { get; init; }
     /// <summary>Source skeleton with rest pose, in centimeters, native axes.</summary>
     public Skeleton Skeleton { get; }
 

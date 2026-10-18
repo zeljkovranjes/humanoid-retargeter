@@ -42,10 +42,15 @@ public sealed class RetargetRequest
     /// skeleton of their own: RenderWare <c>.anm</c>/<c>.an5</c> sources require the
     /// character model's <c>.dff</c>; EA ANT <c>.cba</c> sources require an ordered joint-table
     /// JSON (either the root array or an extracted <c>{ "joints": [...] }</c> wrapper).
+    /// MMD <c>.vmd</c>/<c>.vpd</c> optionally use a <c>.pmx</c>/<c>.pmd</c> for exact source geometry;
+    /// otherwise <see cref="UseStandardMmdSkeleton"/> supplies a generic humanoid source rig.
     /// Callers resolve the companion file; the facade does no file IO. Ignored by
     /// self-contained formats. A request without its required companion fails clearly.
     /// </summary>
     public byte[]? SkeletonData { get; init; }
+
+	/// <summary>Use the built-in humanoid source rig for VMD/VPD when no PMX/PMD is supplied.</summary>
+	public bool UseStandardMmdSkeleton { get; init; } = true;
 
     /// <summary>
     /// Optional external-buffer reader for plain <c>.gltf</c> input. IO-owning callers

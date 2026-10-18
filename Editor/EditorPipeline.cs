@@ -264,6 +264,17 @@ public static class EditorPipeline
 			var destination = Path.GetFullPath( Path.Combine(
 				assetsPath, relative.Replace( '/', Path.DirectorySeparatorChar ) ) );
 			var modelBytes = File.ReadAllBytes( target.ModelFilePath );
+			var isMmd = extension is ".pmx" or ".pmd";
+			if ( isMmd )
+			{
+				// Isolate per-model material identities and textures, including repeated basenames.
+				relative = Path.Combine( Path.GetDirectoryName( relative ) ?? "", safeStem + "_mmd", safeStem + ".gltf" ).Replace( '\\', '/' );
+				destination = Path.GetFullPath( Path.Combine( assetsPath, relative ) );
+				Directory.CreateDirectory( Path.GetDirectoryName( destination ) );
+				modelBytes = MmdModelTarget.Convert( modelBytes, target.ModelFilePath, Path.GetDirectoryName( destination ), report );
+				extension = ".gltf";
+				fileName = safeStem + ".gltf";
+			}
 
 			if ( !string.Equals( Path.GetFullPath( target.ModelFilePath ), destination,
 				StringComparison.OrdinalIgnoreCase ) )
@@ -300,10 +311,11 @@ public static class EditorPipeline
 			// "it has a source with the .fbx and a folder named textures"). Best-effort:
 			// references the model makes to files that do not exist anywhere (e.g. .tga names
 			// shipped as .png conversions) cannot be resolved by any importer.
-			CopySidecarTextures( Path.GetDirectoryName( target.ModelFilePath ),
-				Path.GetDirectoryName( destination ), extension == ".fbx"
-					? ExtractFbxMaterials( modelBytes ).SelectMany( m => m.TextureReferences ) : null );
-			if ( extension == ".gltf" )
+			if ( !isMmd )
+				CopySidecarTextures( Path.GetDirectoryName( target.ModelFilePath ),
+					Path.GetDirectoryName( destination ), extension == ".fbx"
+						? ExtractFbxMaterials( modelBytes ).SelectMany( m => m.TextureReferences ) : null );
+			if ( extension == ".gltf" && !isMmd )
 				CopyGltfDependencies( target.ModelFilePath, destination );
 
 			// Auto-generate a vmat per source material that has none: the compiler otherwise
@@ -316,7 +328,7 @@ public static class EditorPipeline
 			// the compiler cannot resolve as resource paths ("Trying to load an illegal
 			// resource name X.vmat"), so the vmdl must remap them to the real files - the
 			// same MaterialGroupList mechanism the shipped citizen vmdl uses.
-			target.Spec.MaterialRemaps = GenerateMissingVmats( destination );
+			target.Spec.MaterialRemaps = isMmd ? MmdModelTarget.CreateMaterials( destination ) : GenerateMissingVmats( destination );
 
 			// ModelDoc cannot consume glTF directly as a RenderMeshFile (its supported
 			// skinned sources are FBX and model-DMX). Bridge glTF to model-DMX in-process;
@@ -1614,6 +1626,9 @@ public static class EditorPipeline
 
 		/// <summary>Number of DMX files written.</summary>
 		public int DmxFilesWritten { get; set; }
+
+		/// <summary>MMD resources produced for native deformation playback.</summary>
+		public List<string> MmdAnimationFiles { get; } = new();
 
 		/// <summary>IO / registration / compile problems (conversion errors are reported
 		/// separately on the batch result).</summary>

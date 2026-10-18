@@ -13,6 +13,8 @@ namespace HumanoidRetargeter.Core;
 /// <summary>Outcome of retargeting one source take to one output clip.</summary>
 public sealed class ClipResult
 {
+	/// <summary>Sampled facial morph weights by original source name, aligned with solved frames.</summary>
+	public IReadOnlyDictionary<string, float[]> MorphWeights { get; internal set; } = new Dictionary<string, float[]>();
     /// <summary>Final (collision-suffixed) sequence name.</summary>
     public required string ClipName { get; init; }
 
@@ -65,10 +67,14 @@ public sealed class ClipResult
     {
         DmxContent = "";
         SolvedFrames = null;
+		MorphWeights = new Dictionary<string, float[]>();
     }
 
     /// <summary>A copy of this result carrying <paramref name="frames"/> instead (the trim editor previews its cut this way).</summary>
-    public ClipResult WithFrames(List<XForm[]> frames) => new()
+    public ClipResult WithFrames(List<XForm[]> frames) => WithFrames( frames, null );
+
+    /// <summary>Copies a trimmed pose sequence and its corresponding morph samples.</summary>
+    public ClipResult WithFrames(List<XForm[]> frames, IReadOnlyList<int>? keptFrames) => new()
     {
         ClipName = ClipName,
         SourceFileName = SourceFileName,
@@ -79,6 +85,8 @@ public sealed class ClipResult
         Success = Success,
         Error = Error,
         SolvedFrames = frames,
+        MorphWeights = keptFrames is null ? MorphWeights
+            : MorphWeights.ToDictionary( entry => entry.Key, entry => keptFrames.Select( index => entry.Value[ index ] ).ToArray() ),
         Fps = Fps,
         Looping = Looping,
         ExtractMotion = ExtractMotion,

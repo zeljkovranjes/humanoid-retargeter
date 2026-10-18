@@ -20,7 +20,7 @@ namespace HumanoidRetargeter.Core.Formats.Dmx;
 /// MD5-derived from the options name and an element path, and export tags use fixed
 /// placeholder strings.
 /// </summary>
-public static class DmxWriter
+public static partial class DmxWriter
 {
     private const string Header = "<!-- dmx encoding keyvalues2_noids 4 format model 22 -->";
 
@@ -172,8 +172,9 @@ public static class DmxWriter
             var i = channelBones[n];
             WriteChannel(w, skeleton, clip, i, transformGuids[i], position: true, last: false);
             WriteChannel(w, skeleton, clip, i, transformGuids[i], position: false,
-                last: n == channelBones.Count - 1);
+                last: n == channelBones.Count - 1 && clip.MorphWeights.Count == 0);
         }
+		WriteMorphChannels( w, clip );
         w.EndArray();
 
         w.Attr("frameRate", "int",

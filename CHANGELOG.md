@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026-10-18
+Title: MMD Characters and Motion
+### Added
+# Import
+MMD models - select PMX or PMD characters as custom targets, including skin weights and texture folders
+MMD motion - import VMD animations and VPD poses with their character model, Japanese bone mapping, interpolation and IK
+Standalone MMD motion - add VMD/VPD directly onto Human, Citizen or custom humanoid targets using a built-in source skeleton; PMX/PMD selection is optional
+MMD physics - bake rigid bodies, collision masks and spring joints with a managed C# Bullet solver inside the retargeter
+MMD faces - preserve vertex/group morphs and bone morphs, including facial weights in preview and exported animation
+# Playback
+MMD Playback - export a character animation resource with native SDEF/QDEF deformation, UV/material morphs and sphere subtextures
+MMD soft bodies - bake cloth/rope links, pins, anchors and rigid collisions into seekable vertex animation
+MMD impulse morphs - apply local and world-space impulses through the managed Bullet solver
+# Materials
+MMD appearance - import diffuse textures, toon ramps, sphere maps and skinned outline shells
+### Improved
+# Import
+Shared mesh buffers - export only the vertices each material uses, reducing MMD model file sizes
+### Fixed
+# Import
+Japanese decoding - read CP932 without the code-page provider blocked by the s&box whitelist
+Duplicate helper bones - preserve models with repeated helper names without breaking their indexed hierarchy
+Japanese morph names - use stable ASCII flex identifiers accepted by ModelDoc
+Sandbox compatibility - remove blocked diagnostic APIs and replace cloning calls with explicit copies
+Trimmed morphs - keep expression samples aligned with trimmed preview frames
+MMD custom targets - preserve Japanese bone identities through model compilation so Alicia and other PMX/PMD characters accept VMD and FBX clips without false anatomical bind-pose errors
+MMD playback orientation - undo the compiled bind's coordinate rotation when exporting native playback
+### Known Issues
+# MMD
+Standard VMDL - advanced MMD deformation needs the exported MMD Playback component; standard VMDL and skeletal preview use linear skinning
+Soft-body fidelity - cluster, pressure/volume, aerodynamic and soft-to-soft collision behavior is not reproduced by the adapted cloth/rope solver
+Physics - the managed Bullet version and model-space outlines can differ from MikuMikuDance
+
 ## 2026-10-13
 Title: Hand IK and Wheel Fixes
 ### Fixed

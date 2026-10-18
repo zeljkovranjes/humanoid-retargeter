@@ -11,7 +11,7 @@ namespace HumanoidRetargeter.EditorTools;
 /// <summary>What can be dropped on the retargeter: animation files from disk or the asset browser.</summary>
 internal static class RtDrop
 {
-	static readonly string[] Extensions = { ".fbx", ".bvh", ".glb", ".gltf", ".vrm", ".anm", ".an5", ".cba" };
+	static readonly string[] Extensions = { ".fbx", ".bvh", ".glb", ".gltf", ".vrm", ".anm", ".an5", ".cba", ".vmd", ".vpd", ".pmx", ".pmd" };
 
 	public static bool IsAnimationFile( string path )
 		=> !string.IsNullOrEmpty( path ) && Extensions.Contains( System.IO.Path.GetExtension( path ).ToLowerInvariant() );

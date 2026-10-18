@@ -34,6 +34,9 @@ public sealed class Clip
     /// <summary>Frames in playback order; each entry is one local transform per bone.</summary>
     public List<XForm[]> Frames { get; }
 
+	/// <summary>Optional named morph-controller weights, sampled on the same frame grid as the bones.</summary>
+	public Dictionary<string, float[]> MorphWeights { get; } = new( StringComparer.Ordinal );
+
     /// <summary>Number of frames currently in the clip.</summary>
     public int FrameCount => Frames.Count;
 

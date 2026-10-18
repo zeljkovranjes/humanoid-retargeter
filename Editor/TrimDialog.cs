@@ -138,7 +138,7 @@ public sealed class TrimDialog : Dialog
 	{
 		var playing = _preview.Playing;
 		var frames = ClipTrim.Apply( _clip.SolvedFrames, _edit.Kept, _skeleton, _up );
-		_preview.SetClip( _clip.WithFrames( frames ) );
+		_preview.SetClip( _clip.WithFrames( frames, _edit.Kept ) );
 		_timeline.Refit();
 		_preview.Scrub( _timeline.Playhead );
 		_preview.Playing = playing;

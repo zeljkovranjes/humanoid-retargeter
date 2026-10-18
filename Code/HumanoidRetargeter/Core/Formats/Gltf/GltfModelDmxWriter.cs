@@ -24,7 +24,7 @@ using Vector3 = System.Numerics.Vector3;
 /// not accept glTF as a RenderMeshFile, while DMX preserves the same skeleton, vertices,
 /// materials and four-weight skinning without an external converter.
 /// </summary>
-public static class GltfModelDmxWriter
+public static partial class GltfModelDmxWriter
 {
     private const float MetersToCentimeters = 100f;
 
@@ -54,6 +54,7 @@ public static class GltfModelDmxWriter
         public required int[] Triangles;
         public required float[] Weights;
         public required int[] Joints;
+		public Dictionary<string, Vector3[]> Morphs = new( StringComparer.Ordinal );
     }
 
     private static List<MeshPart> ReadMeshParts(GltfDocument document, SkeletonModel skeleton)
@@ -169,7 +170,7 @@ public static class GltfModelDmxWriter
                     : mesh.TryGetProperty("name", out var meshName) ? meshName.GetString() : null;
                 var partName = UniqueName(
                     Sanitize(baseName ?? $"mesh_{meshIndex}") + $"_{primitiveIndex}", usedNames);
-                parts.Add(new MeshPart
+                parts.Add(Compact(new MeshPart
                 {
                     Name = partName,
                     Material = MaterialName(materialArray, primitive),
@@ -179,7 +180,8 @@ public static class GltfModelDmxWriter
                     Triangles = triangles,
                     Weights = weights,
                     Joints = joints,
-                });
+					Morphs = ReadMorphs( document, mesh, primitive, vertexTransforms ),
+                }));
                 primitiveIndex++;
             }
         }
@@ -676,6 +678,7 @@ public static class GltfModelDmxWriter
         writer.Attr("name", "string", "root");
         writer.Attr("model", "element", modelId);
         writer.Attr("skeleton", "element", modelId);
+		WriteMorphControls( writer, parts, meshIds );
         writer.EndTop();
 
         writer.BeginTop("DmeModel");
@@ -732,6 +735,7 @@ public static class GltfModelDmxWriter
             writer.Attr("visible", "bool", "1");
             writer.Attr("currentState", "element", vertexIds[i]);
             WriteRefs(writer, "baseStates", new[] { vertexIds[i] });
+			WriteMorphDeltas( writer, part );
             writer.BeginArray("faceSets");
             writer.BeginArrayElement("DmeFaceSet");
             writer.Attr("name", "string", part.Material);

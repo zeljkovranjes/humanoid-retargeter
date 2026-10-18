@@ -11,6 +11,7 @@ using HumanoidRetargeter.Core.Formats.Bvh;
 using HumanoidRetargeter.Core.Formats.Dmx;
 using HumanoidRetargeter.Core.Formats.Fbx;
 using HumanoidRetargeter.Core.Formats.Gltf;
+using HumanoidRetargeter.Core.Formats.Mmd;
 using HumanoidRetargeter.Core.Formats.Renderware;
 using HumanoidRetargeter.Core.Mapping;
 using HumanoidRetargeter.Core.Maths;
@@ -329,7 +330,7 @@ public static class Retargeter
     {
         ArgumentNullException.ThrowIfNull(sourceData);
         ArgumentNullException.ThrowIfNull(fileName);
-        var scene = ImportSource(sourceData, fileName, skeletonData: skeletonData);
+        var scene = ImportSource(sourceData, fileName, skeletonData: skeletonData, useStandardMmdSkeleton: true);
         var takeNames = new List<string>(scene.Clips.Count);
         foreach (var clip in scene.Clips)
             takeNames.Add(clip.Name);
@@ -357,7 +358,7 @@ public static class Retargeter
         {
             scene = ImportSource(
                 request.SourceData, request.SourceFileName, request.SampleFps, request.SkeletonData,
-                request.ExternalBufferResolver);
+                request.ExternalBufferResolver, request.UseStandardMmdSkeleton);
             (map, report) = ResolveMapping(
                 scene.Skeleton, request.MappingOverride, authoredMapping: scene.AuthoredMapping);
             // Import diagnostics (mid-pose exports, cross-stack static disagreements, ...)
@@ -565,7 +566,8 @@ public static class Retargeter
         {
             clip = SolveAndClean(request, target, context, scene, map, report, take, clipName);
             EmitClip(request, target, context, options, usedNames, clips, entries, report,
-                sourceId, clipName, Trimmed(request, context, clip.Frames), clip.Fps, clip.Looping, isMirrored: false);
+                sourceId, clipName, Trimmed(request, context, clip.Frames), clip.Fps, clip.Looping, isMirrored: false,
+                scene.Clips[ take ].MorphWeights);
         }
         catch (Exception e)
         {
@@ -607,7 +609,7 @@ public static class Retargeter
                     request, target, context, mirroredScene, map, report, take, mirroredName);
                 EmitClip(request, target, context, options, usedNames, clips, entries, report,
                     sourceId, mirroredName, Trimmed(request, context, mirroredClip.Frames), mirroredClip.Fps,
-                    clip.Looping, isMirrored: true);
+                    clip.Looping, isMirrored: true, scene.Clips[ take ].MorphWeights);
             }
             catch (Exception e)
             {
@@ -643,7 +645,8 @@ public static class Retargeter
         BatchOptions options, HashSet<string> usedNames,
         List<ClipResult> clips, List<AnimEntry> entries,
         MappingReportInfo report, string sourceId,
-        string clipName, List<XForm[]> frames, float fps, bool looping, bool isMirrored)
+        string clipName, List<XForm[]> frames, float fps, bool looping, bool isMirrored,
+        IReadOnlyDictionary<string, float[]>? morphWeights = null)
     {
         if (request.CreateAdditiveVariant && (request.AdditiveReferenceFrame < 0 || request.AdditiveReferenceFrame >= frames.Count))
             throw new ArgumentOutOfRangeException(nameof(request.AdditiveReferenceFrame), "Additive reference frame must be inside the sampled output clip.");
@@ -653,8 +656,15 @@ public static class Retargeter
         // up axis away from the mesh bind; child channels are unaffected. Compensate the
         // serialized copy only so compiled playback matches the solved preview.
         var dmxFrames = PrepareDmxFrames(frames, target);
+        var outputClip = new Clip( clipName, fps, looping, dmxFrames );
+        if ( morphWeights is not null )
+        {
+            foreach ( var (name, values) in morphWeights )
+                outputClip.MorphWeights[ name ] = request.KeptFrames is { } kept
+                    ? kept.Select( index => values[ index ] ).ToArray() : values;
+        }
         var dmx = DmxWriter.Write(
-            target.Rig.Skeleton, new Clip(clipName, fps, looping, dmxFrames), new DmxWriteOptions
+            target.Rig.Skeleton, outputClip, new DmxWriteOptions
             {
                 Name = clipName,
                 SourceNote = isMirrored ? request.SourceFileName + " (mirrored)" : request.SourceFileName,
@@ -697,6 +707,7 @@ public static class Retargeter
             Mapping = report,
             Success = true,
             SolvedFrames = frames,
+			MorphWeights = outputClip.MorphWeights,
             Fps = fps,
             Looping = looping,
             ExtractMotion = extractMotion,
@@ -863,6 +874,8 @@ public static class Retargeter
         // ---- orphan helper bones ride the hips (LAST: anchored to the FINAL hips, after
         // foot-plant pinning / root motion have settled the trajectory) -------------------
         FollowHipsWithOrphanBones(target.Rig, frames, report);
+		if ( scene.HasMmdAuxiliaryMotion )
+			MmdAuxiliaryMotion.Apply( scene, target.Rig, frames, take );
 
         var looping = request.LoopingOverride ?? solved.Looping;
         return new Clip(clipName, solved.Fps, looping, frames);
@@ -1793,11 +1806,15 @@ public static class Retargeter
     /// <param name="skeletonData">Companion skeleton bytes for animation-only formats
     /// (RenderWare .anm/.an5 need the model .dff — see
     /// <see cref="RetargetRequest.SkeletonData"/>); ignored by self-contained formats.</param>
+    /// <param name="externalBufferResolver">Reads external glTF buffers when needed.</param>
+    /// <param name="useStandardMmdSkeleton">Allow model-free VMD/VPD import using a generic
+    /// MMD humanoid. Raw import retains strict companion validation by default; editor loading,
+    /// inspection and conversion enable this fallback.</param>
     /// <exception cref="FormatException">Thrown when the bytes are not a readable
     /// FBX/BVH/glTF/RenderWare animation.</exception>
     public static SourceScene ImportSource(
         byte[] data, string fileName, float? sampleFps = null, byte[]? skeletonData = null,
-        Func<string, byte[]>? externalBufferResolver = null)
+        Func<string, byte[]>? externalBufferResolver = null, bool useStandardMmdSkeleton = false)
     {
         ArgumentNullException.ThrowIfNull(data);
         ArgumentNullException.ThrowIfNull(fileName);
@@ -1839,6 +1856,7 @@ public static class Retargeter
             "anm" or "an5" => RwAnmImporter.Import(data, skeletonData, rwOptions),
             // EA ANT animation packages (EA Canada titles; verified on Fight Night Champion).
             "cba" => AntImporter.Import(data, skeletonData, antOptions),
+            "pmx" or "pmd" or "vmd" or "vpd" => MmdImporter.Import( data, skeletonData, sampleFps ?? 30f, FileStem( fileName ), useStandardMmdSkeleton ),
             _ => SniffFormat(data) switch
             {
                 "fbx" => FbxImporter.Import(data, fbxOptions),
@@ -1846,14 +1864,18 @@ public static class Retargeter
                 "gltf" => GltfImporter.Import(data, gltfOptions),
                 "rwanim" => RwAnmImporter.Import(data, skeletonData, rwOptions),
                 "ant" => AntImporter.Import(data, skeletonData, antOptions),
+                "mmd" => MmdImporter.Import( data, skeletonData, sampleFps ?? 30f, FileStem( fileName ), useStandardMmdSkeleton ),
                 _ => throw new FormatException(
-                    $"Unrecognized source format for '{fileName}' (expected .fbx, .bvh, .glb, .gltf, .vrm, .anm, .an5 or .cba)."),
+                    $"Unrecognized source format for '{fileName}' (expected .fbx, .bvh, .glb, .gltf, .vrm, .anm, .an5, .cba, .pmx, .pmd, .vmd or .vpd)."),
             },
         };
     }
 
     private static string? SniffFormat(byte[] data)
     {
+        if ( MmdImporter.Detect( data ) is not null )
+            return "mmd";
+
         // Binary FBX magic: "Kaydara FBX Binary  \0".
         const string fbxMagic = "Kaydara FBX Binary";
         if (StartsWithAscii(data, fbxMagic))
@@ -1939,6 +1961,9 @@ public static class Retargeter
             VetoImpossibleHead(skeleton, detected.Result);
             return (detected.Result, BuildReport(detected.Result, needsUserDecision: false, skeleton));
         }
+
+        if ( MmdMapping.TryMap( skeleton ) is { } mmd )
+            return (mmd, BuildReport( mmd, mmd.Confidence < ProfileDetector.DetectionThreshold, skeleton ));
 
         var auto = AutoMapper.Map(skeleton);
         VetoImpossibleHead(skeleton, auto);

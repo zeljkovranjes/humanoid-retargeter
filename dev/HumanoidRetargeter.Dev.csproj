@@ -11,7 +11,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="..\Code\HumanoidRetargeter\**\*.cs" />
+    <InternalsVisibleTo Include="HumanoidRetargeter.Tests" />
+    <Compile Include="..\Code\HumanoidRetargeter\Assembly.cs" />
+    <Compile Include="..\Code\HumanoidRetargeter\Core\**\*.cs" />
   </ItemGroup>
 
 </Project>
