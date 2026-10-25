@@ -10,10 +10,19 @@
   "EditorReferences": null,
   "Mounts": null,
   "IsStandaloneOnly": false,
+  "AI": {
+    "EnableMcpCommunication": true
+  },
   "Metadata": {
     "Summary": "Retargets humanoid animations (Mixamo, ActorCore, UE Mannequin, BVH, glTF and more) onto s&box characters in the editor.",
     "Description": "Humanoid Retargeter converts skeletal animations from common humanoid rigs (Mixamo, ActorCore, UE Mannequin, BVH mocap, glTF/VRM and more) onto the s&box Human, the classic Citizen or any custom humanoid model, entirely inside the editor. Open View > Humanoid Retargeter, add animation files, check the detected bone mapping in the live preview, and convert them to compiled, animgraph-ready VMDL sequences. It is pure C# with no Blender, Python or native DLLs. The optional deep-learning fallback ships SAME weights licensed CC BY-NC 4.0 (non-commercial).",
     "WebsiteUrl": "https://github.com/zeljkovranjes/humanoid-retargeter",
-    "Tags": [ "animation", "retargeting", "humanoid", "mocap", "fbx" ]
+    "Tags": [
+      "animation",
+      "retargeting",
+      "humanoid",
+      "mocap",
+      "fbx"
+    ]
   }
 }
