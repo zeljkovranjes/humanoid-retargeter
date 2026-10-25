@@ -8,6 +8,8 @@ Facing alignment - RuntimePoseRetargeter and TryCreateAutoMapped take alignFacin
 ### Fixed
 # Mapping
 Busy namespaced rigs - a body named with a shared prefix (bip01_pelvis, bip01_l_thigh...) among many more hair, cloth and tail bones now maps by name; such rigs used to fall back to topology, which could take long cloth strings for the legs and leave the real legs standing still
+# Solve
+Crumpled chests - a spine joint placed behind or below the one before it (some models on the citizen skeleton put spine_2 that way) no longer turns the chest round; the spine aims at the next joint above instead
 
 ## 2026-10-18
 Title: MMD Characters and Motion

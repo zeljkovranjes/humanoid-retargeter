@@ -25,7 +25,8 @@ using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global
 /// <para><b>Primary axis P</b> = normalize(chain-child head − bone head), where the chain
 /// child is the next <i>mapped</i> role down the bone's anatomical chain
 /// (Hips→Spine0..4→Neck→Head; Clavicle→UpperArm→LowerArm→Hand; UpperLeg→LowerLeg→Foot→Toe;
-/// per-finger Meta→Prox→Mid→Dist). Tips: the Head inherits its previous chain segment
+/// per-finger Meta→Prox→Mid→Dist); in the body chain, the next one that rises above the bone
+/// (see <see cref="NextChainJoint"/>). Tips: the Head inherits its previous chain segment
 /// (neck→head — the skull-base axis, real anatomy; measured 0–27° forward of character up
 /// across neutral-rest rigs), falling back to a virtual character-up extension only when
 /// that segment is absent or degenerate; Hand points at the midpoint of its mapped finger
@@ -183,8 +184,9 @@ public sealed class CanonicalFrames
             var (role, pos) = mapped[i];
             Vector3? prevDir = i > 0 ? pos - mapped[i - 1].Pos : null;
 
-            var (primary, isVirtual) = i + 1 < mapped.Count
-                ? ((Vector3?)(mapped[i + 1].Pos - pos), false)
+            var next = NextChainJoint(mapped, i, kind, cf);
+            var (primary, isVirtual) = next >= 0
+                ? ((Vector3?)(mapped[next].Pos - pos), false)
                 : TipPrimary(skeleton, kind, role, pos, prevDir, left, map, worldRest, cf);
             if (primary is null || primary.Value.LengthSquared() < 1e-8f)
                 continue;
@@ -195,6 +197,34 @@ public sealed class CanonicalFrames
                 virtualPrimary.Add(role);
         }
     }
+
+    /// <summary>
+    /// The chain joint a bone's primary axis aims at, -1 for the chain's tip: the next mapped
+    /// one, except that the body chain skips joints that do not rise above this one (by
+    /// <see cref="MinimumBodyRise"/>). Rigs on the s&amp;box citizen skeleton can place
+    /// spine_2 a little behind and below spine_1; aimed at that stub, spine_1's axis points
+    /// backwards and matching it to a source's upward spine turns the chest round. When no
+    /// later joint rises, the next one is used as before.
+    /// </summary>
+    private static int NextChainJoint(List<(BoneRole Role, Vector3 Pos)> mapped, int i, ChainKind kind, CharacterFrame cf)
+    {
+        if (i + 1 >= mapped.Count)
+            return -1;
+        if (kind != ChainKind.Body)
+            return i + 1;
+
+        for (var j = i + 1; j < mapped.Count; j++)
+        {
+            var segment = mapped[j].Pos - mapped[i].Pos;
+            if (segment.LengthSquared() >= 1e-8f && Vector3.Dot(Vector3.Normalize(segment), cf.Up) >= MinimumBodyRise)
+                return j;
+        }
+        return i + 1;
+    }
+
+    /// <summary>Least cosine between character up and a body segment the primary axis aims
+    /// along (~78°): spines and necks lean, but never run flat or downward.</summary>
+    private const float MinimumBodyRise = 0.2f;
 
     /// <summary>Primary direction for the last mapped bone of a chain. <c>Virtual</c> is true
     /// when the direction is a character-axis convention rather than this rig's real joint

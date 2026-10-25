@@ -116,6 +116,53 @@ public sealed class RuntimePoseRetargeterTests
         }
     }
 
+    [Fact]
+    public void SpineJointBehindItsParent_DoesNotTwistTheChest()
+    {
+        // A real sbox.game model on the citizen skeleton places spine_2 a little behind and
+        // below spine_1, with the neck well above both. Aimed at that stub, spine_1 was turned
+        // ~100 degrees to point it up like the source's, crumpling the chest, and spine_2
+        // turned back so the head still landed right.
+        var source = SkeletonModel.Create(SpineRig(new Vector3(0, 11, 0), new Vector3(0, 11, 0)));
+        var target = SkeletonModel.Create(SpineRig(new Vector3(0, -2, -4), new Vector3(0, 16, 4)));
+        var rig = TargetRig.FromSkeleton(target, AutoMapper.Map(target));
+        var runtime = new RuntimePoseRetargeter(source, AutoMapper.Map(source), rig);
+
+        var pose = new XForm[target.Count];
+        runtime.Retarget(RestLocals(source), pose);
+
+        // A few degrees remain: the target's shoulders sit back, so its character up leans back
+        var spine1 = target.IndexOf("spine_1");
+        var turn = MathQ.AngleBetween(World(target, pose)[spine1].Rot, target.RestWorld[spine1].Rot);
+        Assert.True(turn < 15f * MathF.PI / 180f, $"spine_1 turned {turn * 180f / MathF.PI:0.0} degrees from its bind at rest");
+    }
+
+    // Citizen-named rig, Y-up: spine_2 and the neck at the given offsets from spine_1 and spine_2
+    private static List<BoneDefinition> SpineRig(Vector3 spine2, Vector3 neck)
+    {
+        var bones = new List<BoneDefinition>
+        {
+            new("pelvis", null, new XForm(new Vector3(0, 95, 0), Quaternion.Identity)),
+            new("spine_0", "pelvis", new XForm(new Vector3(0, 8, 0), Quaternion.Identity)),
+            new("spine_1", "spine_0", new XForm(new Vector3(0, 11, 0), Quaternion.Identity)),
+            new("spine_2", "spine_1", new XForm(spine2, Quaternion.Identity)),
+            new("neck_0", "spine_2", new XForm(neck, Quaternion.Identity)),
+            new("head", "neck_0", new XForm(new Vector3(0, 9, 0), Quaternion.Identity)),
+        };
+        foreach (var (s, x) in new[] { ("L", -1f), ("R", 1f) })
+        {
+            bones.Add(new($"clavicle_{s}", "spine_2", new XForm(new Vector3(3 * x, 12, 0), Quaternion.Identity)));
+            bones.Add(new($"arm_upper_{s}", $"clavicle_{s}", new XForm(new Vector3(12 * x, 0, 0), Quaternion.Identity)));
+            bones.Add(new($"arm_lower_{s}", $"arm_upper_{s}", new XForm(new Vector3(25 * x, 0, 0), Quaternion.Identity)));
+            bones.Add(new($"hand_{s}", $"arm_lower_{s}", new XForm(new Vector3(22 * x, 0, 0), Quaternion.Identity)));
+            bones.Add(new($"leg_upper_{s}", "pelvis", new XForm(new Vector3(9 * x, -4, 0), Quaternion.Identity)));
+            bones.Add(new($"leg_lower_{s}", $"leg_upper_{s}", new XForm(new Vector3(0, -42, 0), Quaternion.Identity)));
+            bones.Add(new($"ankle_{s}", $"leg_lower_{s}", new XForm(new Vector3(0, -42, 0), Quaternion.Identity)));
+            bones.Add(new($"ball_{s}", $"ankle_{s}", new XForm(new Vector3(0, -6, 12), Quaternion.Identity)));
+        }
+        return bones;
+    }
+
     // The fixture's target, its whole bind turned about the up axis (the fixture is Y-up)
     private static TargetRig TurnedTarget(SkeletonModel source, float radians)
     {
