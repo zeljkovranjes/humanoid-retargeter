@@ -2,6 +2,8 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Numerics;
 using HumanoidRetargeter.Core.Mapping;
 using HumanoidRetargeter.Core.Maths;
 using HumanoidRetargeter.Core.Skeleton;
@@ -9,6 +11,8 @@ using HumanoidRetargeter.Core.Target;
 using SkeletonModel = HumanoidRetargeter.Core.Skeleton.Skeleton;
 
 namespace HumanoidRetargeter.Core.Solve;
+
+using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global-namespace Vector3 (see Code/HumanoidRetargeter/Assembly.cs)
 
 /// <summary>
 /// Cached, in-memory humanoid pose retargeter for live pose streams. It reuses the same
@@ -26,6 +30,7 @@ public sealed class RuntimePoseRetargeter
 {
     private readonly GeometricSolver.Plan _plan;
     private readonly XForm[] _scratchDestination;
+    private readonly int[] _targetRoots;
 
     /// <summary>The immutable source skeleton used to compile this retarget plan.</summary>
     public SkeletonModel SourceSkeleton { get; }
@@ -43,6 +48,13 @@ public sealed class RuntimePoseRetargeter
     public int TargetBoneCount => TargetRig.Skeleton.Count;
 
     /// <summary>
+    /// Rotation applied to every destination pose about the target's root, turning the target from the way its own
+    /// bind faces to the way the source's bind faces. Identity unless the plan was compiled with
+    /// <c>alignFacingToSource</c>.
+    /// </summary>
+    public Quaternion FacingCorrection { get; }
+
+    /// <summary>
     /// Compiles a reusable runtime solve plan.
     /// </summary>
     /// <param name="sourceSkeleton">Source hierarchy and rest pose, in centimeters.</param>
@@ -57,13 +69,19 @@ public sealed class RuntimePoseRetargeter
     /// Whether source root placement shares the source rest coordinate space. Set false for
     /// absolute capture-volume streams that should be recentered like BVH input.
     /// </param>
+    /// <param name="alignFacingToSource">
+    /// Turn every destination pose so the target faces the way the source does, for a target placed in the source's
+    /// space (a live character driven by another). Without it the target keeps the facing of its own bind, which is
+    /// what an animation authored for that rig wants, but a rig bound facing sideways then turns sideways.
+    /// </param>
     public RuntimePoseRetargeter(
         SkeletonModel sourceSkeleton,
         MappingResult sourceMapping,
         TargetRig targetRig,
         IReadOnlyList<XForm>? initialSourcePose = null,
         SolveOptions? options = null,
-        bool restPlacementAuthored = true)
+        bool restPlacementAuthored = true,
+        bool alignFacingToSource = false)
     {
         SourceSkeleton = sourceSkeleton ?? throw new ArgumentNullException(nameof(sourceSkeleton));
         SourceMapping = sourceMapping ?? throw new ArgumentNullException(nameof(sourceMapping));
@@ -95,6 +113,11 @@ public sealed class RuntimePoseRetargeter
 
         _plan = new GeometricSolver.Plan(scene, clip, sourceMapping, targetRig, options ?? new SolveOptions());
         _scratchDestination = new XForm[targetRig.Skeleton.Count];
+
+        FacingCorrection = alignFacingToSource
+            ? FacingBetween(sourceSkeleton, sourceMapping, targetRig)
+            : Quaternion.Identity;
+        _targetRoots = targetRig.Skeleton.Bones.Where(b => b.ParentIndex < 0).Select(b => b.Index).ToArray();
     }
 
     /// <summary>
@@ -109,6 +132,7 @@ public sealed class RuntimePoseRetargeter
                 nameof(destinationLocals));
 
         _plan.SolveFrameInto(sourceLocals, _scratchDestination);
+        ApplyFacing(_scratchDestination);
         _scratchDestination.AsSpan().CopyTo(destinationLocals);
     }
 
@@ -136,6 +160,7 @@ public sealed class RuntimePoseRetargeter
         try
         {
             _plan.SolveFrameInto(sourceLocals, _scratchDestination);
+            ApplyFacing(_scratchDestination);
             _scratchDestination.AsSpan().CopyTo(destinationLocals);
             error = null;
             return true;
@@ -159,7 +184,8 @@ public sealed class RuntimePoseRetargeter
         out RuntimePoseRetargeter? retargeter,
         out string? error,
         IReadOnlyList<XForm>? initialSourcePose = null,
-        SolveOptions? options = null)
+        SolveOptions? options = null,
+        bool alignFacingToSource = false)
     {
         retargeter = null;
         error = null;
@@ -174,7 +200,8 @@ public sealed class RuntimePoseRetargeter
 
             var targetRig = TargetRig.FromSkeleton(targetSkeleton, targetMap);
             retargeter = new RuntimePoseRetargeter(
-                sourceSkeleton, sourceMapping, targetRig, initialSourcePose, options);
+                sourceSkeleton, sourceMapping, targetRig, initialSourcePose, options,
+                alignFacingToSource: alignFacingToSource);
             return true;
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
@@ -182,6 +209,40 @@ public sealed class RuntimePoseRetargeter
             error = $"Could not create runtime retargeter: {ex.Message}";
             return false;
         }
+    }
+
+    // Turns the whole destination pose about the target's root (its children follow their parents).
+    private void ApplyFacing(XForm[] pose)
+    {
+        if (FacingCorrection.IsIdentity)
+            return;
+
+        foreach (var root in _targetRoots)
+        {
+            var bone = pose[root];
+            pose[root] = new XForm(
+                Vector3.Transform(bone.Pos, FacingCorrection),
+                MathQ.Normalize(FacingCorrection * bone.Rot));
+        }
+    }
+
+    // The turn about the source's up axis that brings the target's bind facing onto the source's. Only the heading
+    // is matched: a slight lean in either bind stays the solver's business.
+    private static Quaternion FacingBetween(SkeletonModel sourceSkeleton, MappingResult sourceMapping, TargetRig targetRig)
+    {
+        var source = CanonicalFrames.Build(sourceSkeleton, sourceMapping);
+        var target = CanonicalFrames.Build(targetRig.Skeleton, targetRig.ToMappingResult());
+
+        var up = Vector3.Normalize(source.CharacterUp);
+        var from = target.CharacterForward - up * Vector3.Dot(target.CharacterForward, up);
+        var to = source.CharacterForward - up * Vector3.Dot(source.CharacterForward, up);
+        if (from.LengthSquared() < 1e-8f || to.LengthSquared() < 1e-8f)
+            return Quaternion.Identity;
+
+        from = Vector3.Normalize(from);
+        to = Vector3.Normalize(to);
+        var angle = MathF.Atan2(Vector3.Dot(up, Vector3.Cross(from, to)), Vector3.Dot(from, to));
+        return MathF.Abs(angle) < 1e-5f ? Quaternion.Identity : Quaternion.CreateFromAxisAngle(up, angle);
     }
 
     private static void ValidateMapping(SkeletonModel skeleton, MappingResult mapping)

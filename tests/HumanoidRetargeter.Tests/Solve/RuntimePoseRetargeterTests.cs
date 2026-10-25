@@ -72,6 +72,84 @@ public sealed class RuntimePoseRetargeterTests
         Assert.Contains("outside", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void AlignFacingToSource_TurnsATargetBoundFacingAnotherWay()
+    {
+        var (source, sourceMap, _) = Fixture();
+        var turned = TurnedTarget(source, MathF.PI / 2f);
+
+        var plain = new RuntimePoseRetargeter(source, sourceMap, turned);
+        var aligned = new RuntimePoseRetargeter(source, sourceMap, turned, alignFacingToSource: true);
+
+        var plainPose = new XForm[turned.Skeleton.Count];
+        var alignedPose = new XForm[turned.Skeleton.Count];
+        plain.Retarget(RestLocals(source), plainPose);
+        aligned.Retarget(RestLocals(source), alignedPose);
+
+        // The hands' left-to-right line shows which way a body faces
+        var sourceSide = Side(source, source.RestWorld.ToArray(), "hand_l", "hand_r");
+        var plainSide = Side(turned.Skeleton, World(turned.Skeleton, plainPose), "target_hand_l", "target_hand_r");
+        var alignedSide = Side(turned.Skeleton, World(turned.Skeleton, alignedPose), "target_hand_l", "target_hand_r");
+
+        Assert.True(plain.FacingCorrection.IsIdentity);
+        Assert.True(MathQ.AngleBetween(sourceSide, plainSide) > 1.4f, "without alignment the target keeps its own facing");
+        Assert.True(MathQ.AngleBetween(sourceSide, alignedSide) < 1e-3f, "aligned, the target faces like the source");
+    }
+
+    [Fact]
+    public void AlignFacingToSource_LeavesATargetFacingTheSameWayUnchanged()
+    {
+        var (source, sourceMap, target) = Fixture();
+        var plain = new RuntimePoseRetargeter(source, sourceMap, target);
+        var aligned = new RuntimePoseRetargeter(source, sourceMap, target, alignFacingToSource: true);
+
+        var plainPose = new XForm[target.Skeleton.Count];
+        var alignedPose = new XForm[target.Skeleton.Count];
+        plain.Retarget(RestLocals(source), plainPose);
+        aligned.Retarget(RestLocals(source), alignedPose);
+
+        Assert.True(aligned.FacingCorrection.IsIdentity);
+        for (var i = 0; i < plainPose.Length; i++)
+        {
+            Assert.True(Vector3.Distance(plainPose[i].Pos, alignedPose[i].Pos) < 1e-4f, $"bone {i} position");
+            Assert.True(MathQ.AngleBetween(plainPose[i].Rot, alignedPose[i].Rot) < 1e-4f, $"bone {i} rotation");
+        }
+    }
+
+    // The fixture's target, its whole bind turned about the up axis (the fixture is Y-up)
+    private static TargetRig TurnedTarget(SkeletonModel source, float radians)
+    {
+        var turn = Quaternion.CreateFromAxisAngle(Vector3.UnitY, radians);
+        var definitions = source.Bones.Select(b => new BoneDefinition(
+            "target_" + b.Name,
+            b.ParentIndex < 0 ? null : "target_" + source[b.ParentIndex].Name,
+            b.ParentIndex < 0
+                ? new XForm(Vector3.Transform(b.RestLocal.Pos, turn), turn * b.RestLocal.Rot)
+                : b.RestLocal)).ToArray();
+
+        var skeleton = SkeletonModel.Create(definitions);
+        return TargetRig.FromSkeleton(skeleton, AutoMapper.Map(skeleton));
+    }
+
+    private static XForm[] World(SkeletonModel skeleton, XForm[] locals)
+    {
+        var world = new XForm[locals.Length];
+        for (var i = 0; i < locals.Length; i++)
+        {
+            var parent = skeleton[i].ParentIndex;
+            world[i] = parent < 0 ? locals[i] : XForm.Compose(world[parent], locals[i]);
+        }
+
+        return world;
+    }
+
+    // Left hand to right hand, flattened onto the ground (Y-up)
+    private static Vector3 Side(SkeletonModel skeleton, XForm[] world, string left, string right)
+    {
+        var side = world[skeleton.IndexOf(right)].Pos - world[skeleton.IndexOf(left)].Pos;
+        return Vector3.Normalize(new Vector3(side.X, 0f, side.Z));
+    }
+
     private static (SkeletonModel Source, MappingResult SourceMap, TargetRig Target) Fixture(bool includeToes = true)
     {
         var definitions = new List<BoneDefinition>
