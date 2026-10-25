@@ -86,6 +86,15 @@ public static class AutoMapper
     private static readonly string[] FootCores = { "foot", "ankle" };
     private static readonly string[] ToeCores = { "toe", "toebase", "toes", "ball" };
 
+    /// <summary>Every core that names a body part (fingers aside), for judging a namespace.</summary>
+    private static readonly HashSet<string> BodyCores = new(
+        HipsCores.Concat(SpineCores).Concat(NeckCores).Concat(HeadCores).Concat(ClavicleCores)
+            .Concat(UpperArmCores).Concat(LowerArmCores).Concat(HandCores).Concat(UpperLegCores)
+            .Concat(LowerLegCores).Concat(FootCores).Concat(ToeCores).Append("leg"));
+
+    /// <summary>Fewest bones a prefix needs to count as a body namespace: one limb's chain.</summary>
+    private const int MinimumNamespaceBones = 4;
+
     private static MappingResult MapByNames(SkeletonModel skeleton)
     {
         var result = new MappingResult("auto", MappingSource.AutoName);
@@ -113,23 +122,7 @@ public static class AutoMapper
                 continue;
 
             var side = ClassifySide(tokens);
-            var digit = -1;
-            var coreBuilder = new StringBuilder();
-            foreach (var token in tokens)
-            {
-                if (token.All(char.IsDigit))
-                {
-                    if (digit < 0)
-                        digit = int.Parse(token, CultureInfo.InvariantCulture);
-                    continue;
-                }
-                if (LeftTokens.Contains(token) || RightTokens.Contains(token))
-                    continue;
-                if (IgnoredCoreTokens.Contains(token))
-                    continue;
-                coreBuilder.Append(token);
-            }
-            var core = coreBuilder.ToString();
+            var core = CoreOf(tokens, out var digit);
             if (core.Length == 0)
                 continue;
 
@@ -580,7 +573,8 @@ public static class AutoMapper
     /// <summary>
     /// Removes the per-bone FBX namespace (everything up to the last ':') and then the
     /// longest common '_'-terminated prefix shared by &gt;70% of bones (e.g.
-    /// <c>CC_Base_</c>, <c>Bip01_</c>, <c>bone_</c>).
+    /// <c>CC_Base_</c>, <c>Bip01_</c>, <c>bone_</c>), or failing that the
+    /// <see cref="BodyNamespace"/>.
     /// </summary>
     private static string[] StripCommonNamespace(SkeletonModel skeleton)
     {
@@ -611,7 +605,8 @@ public static class AutoMapper
             .Where(kv => kv.Value >= threshold && kv.Key.Length >= 3)
             .OrderByDescending(kv => kv.Key.Length)
             .Select(kv => kv.Key)
-            .FirstOrDefault();
+            .FirstOrDefault()
+            ?? BodyNamespace(names, prefixCounts);
         if (best is null)
             return names;
 
@@ -621,6 +616,69 @@ public static class AutoMapper
                 names[i] = names[i][best.Length..];
         }
         return names;
+    }
+
+    /// <summary>
+    /// The namespace of a rig whose body bones are outnumbered by secondary ones: anime-style
+    /// game rigs carry a ~50-bone <c>bip01_</c> body among 100+ unprefixed hair, cloth and tail
+    /// bones, far under the 70% share, and unstripped none of their body names is recognized.
+    /// Of the prefixes at least <see cref="MinimumNamespaceBones"/> bones share, the one whose
+    /// stripping names the most extra body parts wins; null when none names any.
+    /// </summary>
+    private static string? BodyNamespace(string[] names, Dictionary<string, int> prefixCounts)
+    {
+        string? best = null;
+        var bestGain = 0;
+        foreach (var (prefix, count) in prefixCounts.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+        {
+            if (count < MinimumNamespaceBones || prefix.Length < 3)
+                continue;
+
+            var gain = 0;
+            foreach (var name in names)
+            {
+                if (name.Length <= prefix.Length || !name.StartsWith(prefix, StringComparison.Ordinal))
+                    continue;
+                gain += (NamesBodyPart(name[prefix.Length..]) ? 1 : 0) - (NamesBodyPart(name) ? 1 : 0);
+            }
+
+            if (gain > bestGain)
+            {
+                best = prefix;
+                bestGain = gain;
+            }
+        }
+        return best;
+    }
+
+    private static bool NamesBodyPart(string name)
+    {
+        var tokens = Tokenize(name);
+        return !tokens.Any(t => ExcludedTokens.Contains(t)) && BodyCores.Contains(CoreOf(tokens, out _));
+    }
+
+    /// <summary>The identity part of a tokenized name: every token except digits (the first
+    /// one comes back in <paramref name="digit"/>, -1 when there is none), side markers and
+    /// naming decoration.</summary>
+    private static string CoreOf(List<string> tokens, out int digit)
+    {
+        digit = -1;
+        var core = new StringBuilder();
+        foreach (var token in tokens)
+        {
+            if (token.All(char.IsDigit))
+            {
+                if (digit < 0)
+                    digit = int.Parse(token, CultureInfo.InvariantCulture);
+                continue;
+            }
+            if (LeftTokens.Contains(token) || RightTokens.Contains(token))
+                continue;
+            if (IgnoredCoreTokens.Contains(token))
+                continue;
+            core.Append(token);
+        }
+        return core.ToString();
     }
 
     // -------- tokenization

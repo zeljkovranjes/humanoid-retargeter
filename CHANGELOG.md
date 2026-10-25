@@ -5,6 +5,9 @@ Title: Runtime Facing
 ### Added
 # Runtime
 Facing alignment - RuntimePoseRetargeter and TryCreateAutoMapped take alignFacingToSource, which turns a live target to face the way the source does; a rig bound facing sideways no longer turns sideways when it is driven by a character in game. Off by default, so existing callers are unchanged
+### Fixed
+# Mapping
+Busy namespaced rigs - a body named with a shared prefix (bip01_pelvis, bip01_l_thigh...) among many more hair, cloth and tail bones now maps by name; such rigs used to fall back to topology, which could take long cloth strings for the legs and leave the real legs standing still
 
 ## 2026-10-18
 Title: MMD Characters and Motion

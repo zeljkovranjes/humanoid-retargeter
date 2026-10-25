@@ -180,6 +180,71 @@ public class AutoMapperTests
         AssertRole(skeleton, result, BoneRole.UpperArmL, "mixamorig1:LeftArm");
     }
 
+    [Fact]
+    public void StageA_BodyNamespace_OutnumberedBySecondaryChains_IsStillStripped()
+    {
+        // Anime-style game rig (synthetic, shaped like a real sbox.game player model): a
+        // lower-case "bip01_" body of 21 bones among ~70 unprefixed cloth, tail and hair
+        // bones, so the namespace is far under the 70% share. Left unstripped, no body name
+        // is recognized and the topology fallback took the parka strings hanging from the
+        // chest (longer chains than the real legs) for legs, with the chest as hips.
+        var bones = new List<(string, string?, System.Numerics.Vector3)>
+        {
+            ("bip01_pelvis", null, new(0, 92, 0)),
+            ("bip01_spine", "bip01_pelvis", new(0, 101, 0)),
+            ("bip01_spine1", "bip01_spine", new(0, 109, 0)),
+            ("bip01_spine2", "bip01_spine1", new(0, 117, 0)),
+            ("bip01_spine4", "bip01_spine2", new(0, 128, 0)),
+            ("bip01_neck1", "bip01_spine4", new(0, 140, 0)),
+            ("bip01_head1", "bip01_neck1", new(0, 148, 0)),
+        };
+        foreach (var (s, x) in new[] { ("l", 1f), ("r", -1f) })
+        {
+            bones.Add(($"bip01_{s}_clavicle", "bip01_spine4", new(3 * x, 136, 0)));
+            bones.Add(($"bip01_{s}_upperarm", $"bip01_{s}_clavicle", new(14 * x, 135, 0)));
+            bones.Add(($"bip01_{s}_forearm", $"bip01_{s}_upperarm", new(36 * x, 135, 0)));
+            bones.Add(($"bip01_{s}_hand", $"bip01_{s}_forearm", new(56 * x, 135, 0)));
+            bones.Add(($"bip01_{s}_thigh", "bip01_pelvis", new(8 * x, 88, 0)));
+            bones.Add(($"bip01_{s}_calf", $"bip01_{s}_thigh", new(8 * x, 48, 0)));
+            bones.Add(($"bip01_{s}_foot", $"bip01_{s}_calf", new(8 * x, 8, 0)));
+
+            // A breast bone and the parka string under it, hanging to the ankles
+            bones.Add(($"breast{s}01", "bip01_spine4", new(6 * x, 126, 6)));
+            var parent = $"breast{s}01";
+            for (var i = 1; i <= 11; i++)
+            {
+                var name = $"parkahimo_{s}{i:00}";
+                bones.Add((name, parent, new(6 * x, 126 - 11 * i, 7)));
+                parent = name;
+            }
+        }
+        var tail = "bip01_pelvis";
+        for (var i = 0; i < 10; i++)
+        {
+            bones.Add(($"sippo_{i:00}", tail, new(0, 90 - 3 * i, -8 - 6 * i)));
+            tail = $"sippo_{i:00}";
+        }
+        for (var i = 0; i < 12; i++)
+        {
+            var angle = i * MathF.Tau / 12;
+            bones.Add(($"skt_{i:00}", "bip01_spine", new(12 * MathF.Sin(angle), 96, 12 * MathF.Cos(angle))));
+        }
+        for (var i = 0; i < 20; i++)
+            bones.Add(($"hair_{i:00}", "bip01_head1", new(i % 2 == 0 ? 6 : -6, 150 - i, -4)));
+        var skeleton = MappingFixtures.FromWorldPositions(bones);
+
+        var result = AutoMapper.Map(skeleton);
+
+        Assert.Equal(MappingSource.AutoName, result.Source);
+        AssertRole(skeleton, result, BoneRole.Hips, "bip01_pelvis");
+        AssertRole(skeleton, result, BoneRole.Head, "bip01_head1");
+        AssertRole(skeleton, result, BoneRole.HandR, "bip01_r_hand");
+        AssertRole(skeleton, result, BoneRole.UpperLegL, "bip01_l_thigh");
+        AssertRole(skeleton, result, BoneRole.LowerLegR, "bip01_r_calf");
+        AssertRole(skeleton, result, BoneRole.FootL, "bip01_l_foot");
+        AssertRole(skeleton, result, BoneRole.FootR, "bip01_r_foot");
+    }
+
     // ---------------------------------------------------------------- stage B: topology fallback
 
     [Fact]
