@@ -16,6 +16,7 @@ Live twist bones - RuntimePoseRetargeter now turns a target's unmapped forearm, 
 Waiting on new models on Linux - Smart Port and "Create Citizen animation model" no longer sit on a model that has already compiled until they give up (five minutes); they carry on as soon as it is written
 Citizen clips on Linux - "Create Citizen animation model" no longer turns every stock animation into a single frame (261 clips); the reference model it samples them from was being recompiled under it halfway through
 Smart Port graphs on Linux - a port no longer fails with "its animation graph did not load correctly"; the graph is compiled before the new model is loaded to check it
+Citizen model crash - the editor no longer crashes as a model made with "Create Citizen animation model" loads; the stock animation folders it copies in had no names
 
 ## 2026-10-18
 Title: MMD Characters and Motion
