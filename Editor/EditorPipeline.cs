@@ -1761,6 +1761,12 @@ public static class EditorPipeline
 		if ( additionalAssetPaths is not null )
 			foreach ( var path in additionalAssetPaths )
 				Try( () => AssetSystem.RegisterFile( path ) );
+		// The model's graph has to be compiled before the model is loaded to verify it: compiled on demand by that load,
+		// it arrives too late and the model is cached without one
+		if ( additionalAssetPaths is not null )
+			foreach ( var path in additionalAssetPaths.Where( p => p.EndsWith( ".vanmgrph", StringComparison.OrdinalIgnoreCase ) ) )
+				if ( Try( () => AssetSystem.FindByPath( path ) ) is { } graph )
+					await CompileAndWaitAsync( graph, compileTimeoutSeconds );
 
 		result.VmdlAsset = AssetSystem.RegisterFile( result.VmdlPath );
 		if ( result.VmdlAsset is null )
