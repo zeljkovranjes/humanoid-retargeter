@@ -12,6 +12,8 @@ Busy namespaced rigs - a body named with a shared prefix (bip01_pelvis, bip01_l_
 Crumpled chests - a spine joint placed behind or below the one before it (some models on the citizen skeleton put spine_2 that way) no longer turns the chest round; the spine aims at the next joint above instead
 # Runtime
 Live twist bones - RuntimePoseRetargeter now turns a target's unmapped forearm, upper arm and leg twist helpers with the joint they follow, as baked clips already did; they used to stay at rest, so a hand turned over (first-person arms gripping a rifle) wrung the forearm skin
+# Editor
+Waiting on new models on Linux - Smart Port and "Create Citizen animation model" no longer sit on a model that has already compiled until they give up (five minutes); they carry on as soon as it is written
 
 ## 2026-10-18
 Title: MMD Characters and Motion

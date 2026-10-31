@@ -2021,8 +2021,9 @@ public static class EditorPipeline
 		// compiled file is still seen and snapshotted before the compile is triggered.
 		string ResolveCompiledPath()
 		{
+			// Empty, not null, while the asset system hasn't registered the compiled file (seen on Linux)
 			var path = Try( () => asset.GetCompiledFile( true ) );
-			if ( path is not null )
+			if ( !string.IsNullOrEmpty( path ) )
 				return path;
 			var source = Try( () => asset.AbsolutePath );
 			return string.IsNullOrEmpty( source ) ? null : source + "_c";
@@ -2074,7 +2075,7 @@ public static class EditorPipeline
 			// GetCompiledFile may only become authoritative once the compile has run -
 			// prefer it over the convention fallback as soon as it resolves. The freshness
 			// snapshot stays valid either way (both spellings name the same sibling file).
-			compiledAbs = Try( () => asset.GetCompiledFile( true ) ) ?? compiledAbs;
+			compiledAbs = ResolveCompiledPath() ?? compiledAbs;
 			if ( CompiledFileFresh() )
 				return true;
 			// The asset's own compiled flags are trusted only when no stale .vmdl_c could
