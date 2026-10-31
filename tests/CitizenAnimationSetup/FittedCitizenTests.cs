@@ -173,6 +173,17 @@ public class FittedCitizenTests
     }
 
     [Fact]
+    public void InlinedPrefabFoldersAreNamedAfterTheirPrefab()
+    {
+        // The engine crashed loading a compiled model whose animation list held a folder without a name
+        var root = (KvObject)Kv3.Parse(Plan().ModelText).Root;
+        var list = (KvObject)((KvArray)((KvObject)root["rootNode"])["children"]).Items[0];
+        var folder = (KvObject)((KvArray)list["children"]).Items[0];
+        Assert.Equal("Folder", folder.GetString("_class"));
+        Assert.Equal("stock", folder.GetString("name"));
+    }
+
+    [Fact]
     public void RawSamplingDoesNotBakeAdditiveEventsGraphOrConstraintsTwice()
     {
         var source = Document("""
