@@ -49,19 +49,39 @@ public static class TwistBoneFollow
         (BoneRole.UpperLegR, BoneRole.LowerLegR), (BoneRole.LowerLegR, BoneRole.FootR),
     };
 
-    private readonly record struct InlineBone(int Bone, int Parent, int Child, float Fraction);
+    internal readonly record struct InlineBone(int Bone, int Parent, int Child, float Fraction);
 
-    private readonly record struct FullFollower(int Bone, int Driver);
+    internal readonly record struct FullFollower(int Bone, int Driver);
+
+    internal readonly record struct TwistBone(int Bone, int Driver, Vector3 Axis, float Fraction);
+
+    internal readonly record struct InlineGroup(int Parent, int Child, InlineBone[] Entries);
 
     /// <summary>Applies the pass in place; returns how many limb helpers were driven.</summary>
     public static int Apply(
         IReadOnlyList<XForm[]> frames, TargetRig rig, IReadOnlySet<int>? excluded)
     {
         ArgumentNullException.ThrowIfNull(frames);
+        var follow = Prepare(rig, excluded);
+        if (follow is null)
+            return 0;
+
+        foreach (var frame in frames)
+            follow.Apply(frame);
+        return follow.Count;
+    }
+
+    /// <summary>
+    /// Finds <paramref name="rig"/>'s limb helpers once, to drive them in any number of poses
+    /// with <see cref="Follow.Apply"/>; null when it has none. Bones in
+    /// <paramref name="excluded"/> are left alone.
+    /// </summary>
+    public static Follow? Prepare(TargetRig rig, IReadOnlySet<int>? excluded)
+    {
         ArgumentNullException.ThrowIfNull(rig);
         var skeleton = rig.Skeleton;
 
-        var twists = new List<(int Bone, int Driver, Vector3 Axis, float Fraction)>();
+        var twists = new List<TwistBone>();
         var fullFollowers = new List<FullFollower>();
         var fullFollowerBones = new HashSet<int>();
         foreach (var (parentRole, childRole) in Segments)
@@ -105,32 +125,79 @@ public static class TwistBoneFollow
                 var offAxis = (pos - axis * along).Length();
                 if (offAxis > MathF.Tan(15f * MathF.PI / 180f) * MathF.Max(along, 1e-3f))
                     continue;
-                twists.Add((i, child, axis, Math.Clamp(fraction, 0f, 1f)));
+                twists.Add(new TwistBone(i, child, axis, Math.Clamp(fraction, 0f, 1f)));
             }
         }
         var inline = FindInlineBones(rig, excluded);
         if (twists.Count == 0 && inline.Count == 0 && fullFollowers.Count == 0)
-            return 0;
+            return null;
 
-        foreach (var frame in frames)
+        return new Follow(skeleton, twists.ToArray(), fullFollowers.ToArray(), inline);
+    }
+
+    /// <summary>
+    /// A rig's limb helpers, found once by <see cref="Prepare"/>. Driving them in a pose
+    /// allocates nothing, so a live character can run it every frame. Not thread-safe: it
+    /// owns the buffers the inline bones are solved in.
+    /// </summary>
+    public sealed class Follow
+    {
+        private readonly Skeleton.Skeleton _skeleton;
+        private readonly TwistBone[] _twists;
+        private readonly FullFollower[] _fullFollowers;
+        private readonly InlineGroup[] _inlineGroups;
+        private readonly int[] _inlineWritten;
+        private readonly XForm[] _world;
+        private readonly XForm[] _desired;
+
+        /// <summary>How many limb helpers each pose has driven.</summary>
+        public int Count { get; }
+
+        internal Follow(Skeleton.Skeleton skeleton, TwistBone[] twists,
+            FullFollower[] fullFollowers, List<InlineBone> inline)
         {
-            foreach (var follower in fullFollowers)
+            _skeleton = skeleton;
+            _twists = twists;
+            _fullFollowers = fullFollowers;
+            _inlineGroups = inline
+                .GroupBy(entry => (entry.Parent, entry.Child))
+                .Select(group => new InlineGroup(group.Key.Parent, group.Key.Child, group.ToArray()))
+                .ToArray();
+            // Written parents first, so each local is taken against its parent's final world
+            _inlineWritten = inline.Select(entry => entry.Bone)
+                .Concat(_inlineGroups.Select(group => group.Child))
+                .Distinct()
+                .OrderBy(index => index)
+                .ToArray();
+            _world = inline.Count > 0 ? new XForm[skeleton.Count] : Array.Empty<XForm>();
+            _desired = inline.Count > 0 ? new XForm[skeleton.Count] : Array.Empty<XForm>();
+            Count = twists.Length + inline.Count + fullFollowers.Length;
+        }
+
+        /// <summary>Drives the helpers in <paramref name="frame"/>, a parent-local pose, in place.</summary>
+        public void Apply(Span<XForm> frame)
+        {
+            if (frame.Length < _skeleton.Count)
+                throw new ArgumentException(
+                    $"Pose has {frame.Length} bones but the skeleton has {_skeleton.Count}.", nameof(frame));
+
+            foreach (var follower in _fullFollowers)
             {
                 // Both bones share a parent, so the driver's local-space rotation delta
                 // can be applied directly while retaining the deform bone's bind offset.
                 var delta = MathQ.Normalize(frame[follower.Driver].Rot
-                    * Quaternion.Conjugate(skeleton[follower.Driver].RestLocal.Rot));
+                    * Quaternion.Conjugate(_skeleton[follower.Driver].RestLocal.Rot));
                 frame[follower.Bone] = new XForm(
                     frame[follower.Bone].Pos,
-                    MathQ.Normalize(delta * skeleton[follower.Bone].RestLocal.Rot));
+                    MathQ.Normalize(delta * _skeleton[follower.Bone].RestLocal.Rot));
             }
-            foreach (var (bone, driver, axis, fraction) in twists)
+            foreach (var (bone, driver, axis, fraction) in _twists)
             {
                 // The driver's rotation delta from rest, in the shared parent's space,
                 // forced to the SHORTEST arc (W >= 0) so the twist angle below is
                 // continuous in (-180°, 180°) and never flips representation.
                 var delta = MathQ.Normalize(
-                    frame[driver].Rot * Quaternion.Conjugate(skeleton[driver].RestLocal.Rot));
+                    frame[driver].Rot * Quaternion.Conjugate(_skeleton[driver].RestLocal.Rot));
                 if (delta.W < 0f)
                     delta = new Quaternion(-delta.X, -delta.Y, -delta.Z, -delta.W);
                 // Twist component about the limb axis (swing-twist decomposition).
@@ -146,13 +213,52 @@ public static class TwistBoneFollow
                 var angle = 2f * MathF.Atan2(proj, delta.W);
                 var scaled = Quaternion.CreateFromAxisAngle(axis, angle * fraction);
                 frame[bone] = new XForm(
-                    frame[bone].Pos, MathQ.Normalize(scaled * skeleton[bone].RestLocal.Rot));
+                    frame[bone].Pos, MathQ.Normalize(scaled * _skeleton[bone].RestLocal.Rot));
             }
 
-            if (inline.Count > 0)
-                FollowInlineBones(frame, skeleton, inline);
+            if (_inlineGroups.Length > 0)
+                FollowInlineBones(frame);
         }
-        return twists.Count + inline.Count + fullFollowers.Count;
+
+        private void FollowInlineBones(Span<XForm> frame)
+        {
+            for (var i = 0; i < _skeleton.Count; i++)
+            {
+                var parent = _skeleton[i].ParentIndex;
+                _world[i] = parent < 0 ? frame[i] : XForm.Compose(_world[parent], frame[i]);
+                _desired[i] = _world[i];
+            }
+
+            foreach (var group in _inlineGroups)
+            {
+                var parentDelta = MathQ.Normalize(_world[group.Parent].Rot
+                    * Quaternion.Conjugate(_skeleton.RestWorld[group.Parent].Rot));
+                var childDelta = MathQ.Normalize(_world[group.Child].Rot
+                    * Quaternion.Conjugate(_skeleton.RestWorld[group.Child].Rot));
+                if (Quaternion.Dot(parentDelta, childDelta) < 0f)
+                    childDelta = new Quaternion(
+                        -childDelta.X, -childDelta.Y, -childDelta.Z, -childDelta.W);
+
+                foreach (var entry in group.Entries)
+                {
+                    var delta = MathQ.Normalize(Quaternion.Slerp(
+                        parentDelta, childDelta, entry.Fraction));
+                    _desired[entry.Bone] = new XForm(
+                        _world[entry.Bone].Pos,
+                        MathQ.Normalize(delta * _skeleton.RestWorld[entry.Bone].Rot));
+                }
+            }
+
+            // The mapped endpoint is written too: its already-solved world transform stays
+            // exact after its intermediary parent starts following the motion.
+            foreach (var bone in _inlineWritten)
+            {
+                var parent = _skeleton[bone].ParentIndex;
+                frame[bone] = parent < 0
+                    ? _desired[bone]
+                    : XForm.ToLocal(_desired[parent], _desired[bone]);
+            }
+        }
     }
 
     private static List<InlineBone> FindInlineBones(
@@ -202,47 +308,5 @@ public static class TwistBoneFollow
             }
         }
         return result;
-    }
-
-    private static void FollowInlineBones(
-        XForm[] frame, Skeleton.Skeleton skeleton, IReadOnlyList<InlineBone> inline)
-    {
-        var world = new Skeleton.Pose(frame).ToWorld(skeleton);
-        var desired = world.ToArray();
-        var pathBones = new HashSet<int>();
-
-        foreach (var group in inline.GroupBy(entry => (entry.Parent, entry.Child)))
-        {
-            var parent = group.Key.Parent;
-            var child = group.Key.Child;
-            var parentDelta = MathQ.Normalize(world[parent].Rot
-                * Quaternion.Conjugate(skeleton.RestWorld[parent].Rot));
-            var childDelta = MathQ.Normalize(world[child].Rot
-                * Quaternion.Conjugate(skeleton.RestWorld[child].Rot));
-            if (Quaternion.Dot(parentDelta, childDelta) < 0f)
-                childDelta = new Quaternion(
-                    -childDelta.X, -childDelta.Y, -childDelta.Z, -childDelta.W);
-
-            foreach (var entry in group)
-            {
-                var delta = MathQ.Normalize(Quaternion.Slerp(
-                    parentDelta, childDelta, entry.Fraction));
-                desired[entry.Bone] = new XForm(
-                    world[entry.Bone].Pos,
-                    MathQ.Normalize(delta * skeleton.RestWorld[entry.Bone].Rot));
-                pathBones.Add(entry.Bone);
-            }
-            // Compensate the mapped endpoint locally so its already-solved world transform
-            // remains exact after its intermediary parent starts following the motion.
-            pathBones.Add(child);
-        }
-
-        foreach (var bone in pathBones.OrderBy(index => index))
-        {
-            var parent = skeleton[bone].ParentIndex;
-            frame[bone] = parent < 0
-                ? desired[bone]
-                : XForm.ToLocal(desired[parent], desired[bone]);
-        }
     }
 }
