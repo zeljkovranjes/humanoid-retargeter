@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
+using HumanoidRetargeter.Core.Cleanup;
 using HumanoidRetargeter.Core.Mapping;
 using HumanoidRetargeter.Core.Maths;
 using HumanoidRetargeter.Core.Skeleton;
@@ -31,6 +32,10 @@ public sealed class RuntimePoseRetargeter
     private readonly GeometricSolver.Plan _plan;
     private readonly XForm[] _scratchDestination;
     private readonly int[] _targetRoots;
+
+    // The target's unmapped twist and deform helper bones: left at rest while a mapped hand
+    // pronates, they candy-wrap the forearm skin (first-person arms gripping a rifle)
+    private readonly TwistBoneFollow.Follow? _limbHelpers;
 
     /// <summary>The immutable source skeleton used to compile this retarget plan.</summary>
     public SkeletonModel SourceSkeleton { get; }
@@ -118,6 +123,9 @@ public sealed class RuntimePoseRetargeter
             ? FacingBetween(sourceSkeleton, sourceMapping, targetRig)
             : Quaternion.Identity;
         _targetRoots = targetRig.Skeleton.Bones.Where(b => b.ParentIndex < 0).Select(b => b.Index).ToArray();
+
+        // A live pose is written bone by bone, so no constraint of the model's moves these
+        _limbHelpers = TwistBoneFollow.Prepare(targetRig, excluded: null);
     }
 
     /// <summary>
@@ -132,6 +140,7 @@ public sealed class RuntimePoseRetargeter
                 nameof(destinationLocals));
 
         _plan.SolveFrameInto(sourceLocals, _scratchDestination);
+        _limbHelpers?.Apply(_scratchDestination);
         ApplyFacing(_scratchDestination);
         _scratchDestination.AsSpan().CopyTo(destinationLocals);
     }
@@ -160,6 +169,7 @@ public sealed class RuntimePoseRetargeter
         try
         {
             _plan.SolveFrameInto(sourceLocals, _scratchDestination);
+            _limbHelpers?.Apply(_scratchDestination);
             ApplyFacing(_scratchDestination);
             _scratchDestination.AsSpan().CopyTo(destinationLocals);
             error = null;

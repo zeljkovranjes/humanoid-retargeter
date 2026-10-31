@@ -38,6 +38,29 @@ public sealed class RuntimePoseRetargeterTests
     }
 
     [Fact]
+    public void PronatedHand_RollsTheTargetsForearmHelper()
+    {
+        var (source, sourceMap, target) = Fixture(includeForearmHelper: true);
+        var pose = RestLocals(source);
+        var hand = sourceMap.RoleToBone[BoneRole.HandL];
+        // The hand pronates 90 degrees about the forearm, which runs along -X
+        pose[hand] = new XForm(pose[hand].Pos,
+            Quaternion.CreateFromAxisAngle(-Vector3.UnitX, MathF.PI / 2) * pose[hand].Rot);
+
+        var runtime = new RuntimePoseRetargeter(source, sourceMap, target);
+        var destination = new XForm[target.Skeleton.Count];
+        Assert.True(runtime.TryRetarget(pose, destination, out var error), error);
+
+        // Halfway down the forearm, the helper takes half the hand's roll; left at rest it
+        // candy-wraps the forearm skin
+        var helper = target.Skeleton.IndexOf("target_helper_l");
+        Assert.Null(target.RoleOf(helper));
+        var delta = destination[helper].Rot * Quaternion.Conjugate(target.Skeleton[helper].RestLocal.Rot);
+        var degrees = 2f * MathF.Acos(MathF.Min(1f, MathF.Abs(delta.W))) * 180f / MathF.PI;
+        Assert.True(degrees is >= 40f and <= 50f, $"the helper rolled {degrees:0.#} degrees (hand delta {destination[target.Skeleton.IndexOf("target_hand_l")].Rot})");
+    }
+
+    [Fact]
     public void MissingOptionalBones_RetargetsRemainingHumanoid()
     {
         var (source, sourceMap, target) = Fixture(includeToes: false);
@@ -197,7 +220,8 @@ public sealed class RuntimePoseRetargeterTests
         return Vector3.Normalize(new Vector3(side.X, 0f, side.Z));
     }
 
-    private static (SkeletonModel Source, MappingResult SourceMap, TargetRig Target) Fixture(bool includeToes = true)
+    private static (SkeletonModel Source, MappingResult SourceMap, TargetRig Target) Fixture(
+        bool includeToes = true, bool includeForearmHelper = false)
     {
         var definitions = new List<BoneDefinition>
         {
@@ -229,7 +253,11 @@ public sealed class RuntimePoseRetargeterTests
         var targetDefs = definitions.Select(d => new BoneDefinition(
             "target_" + d.Name,
             d.ParentName is null ? null : "target_" + d.ParentName,
-            new XForm(d.RestLocal.Pos * 1.35f, d.RestLocal.Rot))).ToArray();
+            new XForm(d.RestLocal.Pos * 1.35f, d.RestLocal.Rot))).ToList();
+        // An unmapped deform bone halfway down the left forearm, like a rig's forearm twist
+        if (includeForearmHelper)
+            targetDefs.Add(new BoneDefinition("target_helper_l", "target_lowerarm_l",
+                new XForm(new Vector3(-10f * 1.35f, 0, 0), Quaternion.Identity)));
         var targetSkeleton = SkeletonModel.Create(targetDefs);
         var targetMap = AutoMapper.Map(targetSkeleton);
         var target = TargetRig.FromSkeleton(targetSkeleton, targetMap);
