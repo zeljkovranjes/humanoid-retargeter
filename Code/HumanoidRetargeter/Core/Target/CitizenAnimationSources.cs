@@ -63,7 +63,13 @@ public sealed class CitizenAnimationSources
                             else
                                 entries.Items.Add(root);
                         }
-                        var prefab = new KvObject { ["_class"] = new KvString("Folder"), ["children"] = entries };
+                        // Named after the prefab: the engine crashed loading a compiled model with a nameless folder
+                        var prefab = new KvObject
+                        {
+                            ["_class"] = new KvString("Folder"),
+                            ["name"] = new KvString(System.IO.Path.GetFileNameWithoutExtension(path)),
+                            ["children"] = entries,
+                        };
                         Expand(prefab, active);
                         child = prefab;
                         children.Items[i] = child;
