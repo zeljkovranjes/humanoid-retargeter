@@ -2077,7 +2077,17 @@ public static class EditorPipeline
 			// snapshot stays valid either way (both spellings name the same sibling file).
 			compiledAbs = ResolveCompiledPath() ?? compiledAbs;
 			if ( CompiledFileFresh() )
+			{
+				// Until they are registered the asset system treats the new compiled file and the children it generated
+				// (a model's morph textures in <name>/) as missing: loads fail, or the model is recompiled and swapped
+				// out while it is being sampled
+				Try( () => AssetSystem.RegisterFile( compiledAbs ) );
+				var children = Path.Combine( Path.GetDirectoryName( compiledAbs )!, Path.GetFileNameWithoutExtension( compiledAbs ) );
+				if ( Directory.Exists( children ) )
+					foreach ( var child in Directory.EnumerateFiles( children, "*_c", SearchOption.AllDirectories ) )
+						Try( () => AssetSystem.RegisterFile( child ) );
 				return true;
+			}
 			// The asset's own compiled flags are trusted only when no stale .vmdl_c could
 			// be feeding them (no pre-existing file and no resolvable compiled path).
 			if ( compiledAbs is null && preexistingWriteUtc is null

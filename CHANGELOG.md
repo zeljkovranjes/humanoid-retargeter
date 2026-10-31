@@ -14,6 +14,7 @@ Crumpled chests - a spine joint placed behind or below the one before it (some m
 Live twist bones - RuntimePoseRetargeter now turns a target's unmapped forearm, upper arm and leg twist helpers with the joint they follow, as baked clips already did; they used to stay at rest, so a hand turned over (first-person arms gripping a rifle) wrung the forearm skin
 # Editor
 Waiting on new models on Linux - Smart Port and "Create Citizen animation model" no longer sit on a model that has already compiled until they give up (five minutes); they carry on as soon as it is written
+Citizen clips on Linux - "Create Citizen animation model" no longer turns every stock animation into a single frame (261 clips); the reference model it samples them from was being recompiled under it halfway through
 
 ## 2026-10-18
 Title: MMD Characters and Motion
