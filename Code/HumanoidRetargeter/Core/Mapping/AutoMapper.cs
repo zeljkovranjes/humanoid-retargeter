@@ -840,6 +840,15 @@ public static class AutoMapper
             primary[0], primary[1], children, subtreeDepth, positions, lateralAxis, depth, lca);
         var armsPair = legsPair == primary[0] ? primary[1] : primary[0];
 
+        // Left is the greater lateral coordinate only for a character facing the usual way: one built facing the other
+        // way has its sides the other way round, and mapped by the rule alone it was driven mirrored and turned round
+        if (FacesAgainstLateral(children, subtreeDepth, positions, lateralAxis, tolerance, legsPair, lca, armsPair.Node))
+        {
+            result.Notes.Add("Toes point the other way than usual; left and right taken from them.");
+            legsPair = legsPair with { Left = legsPair.Right, Right = legsPair.Left };
+            armsPair = armsPair with { Left = armsPair.Right, Right = armsPair.Left };
+        }
+
         var map = result.RoleToBone;
         map[BoneRole.Hips] = lca;
 
@@ -927,6 +936,32 @@ public static class AutoMapper
     {
         yield return (pair.Left, "L");
         yield return (pair.Right, "R");
+    }
+
+    /// <summary>
+    /// Whether the character's left is on the -lateral side: its toes, reaching forward of its ankles, give the way it
+    /// faces, and left is up × forward. False when its legs have no toes to tell by, keeping +lateral as left.
+    /// </summary>
+    private static bool FacesAgainstLateral(List<int>[] children, int[] subtreeDepth, Vector3[] positions,
+        int lateralAxis, float tolerance, SymmetricPair legs, int hips, int chest)
+    {
+        var up = positions[chest] - positions[hips];
+        if (up.LengthSquared() < 1e-8f)
+            return false;
+        up = Vector3.Normalize(up);
+
+        var forward = Vector3.Zero;
+        foreach (var root in new[] { legs.Left, legs.Right })
+        {
+            // upper leg, lower leg, ankle, then the foot's bones out to the tip of the toes
+            var chain = PrimaryChain(children, subtreeDepth, root);
+            if (chain.Count < 4)
+                return false;
+            var toes = positions[chain[^1]] - positions[chain[2]];
+            forward += toes - Vector3.Dot(toes, up) * up;
+        }
+
+        return forward.Length() >= tolerance && Component(Vector3.Cross(up, forward), lateralAxis) < 0;
     }
 
     /// <summary>

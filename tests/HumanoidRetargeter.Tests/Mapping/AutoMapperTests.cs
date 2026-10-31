@@ -315,6 +315,55 @@ public class AutoMapperTests
         AssertRole(rig.Skeleton, result, BoneRole.HandL, rig.HandL);
     }
 
+    [Theory]
+    [InlineData(1f)]
+    [InlineData(-1f)]
+    public void StageB_SidesFollowTheWayTheToesPoint(float facing)
+    {
+        // Y-up with its toes along +Z, a character's left is +X; built facing -Z (as some ports are), its left is at -X.
+        // Taken by the +X rule alone, such a character was mapped mirrored, and driven turned round.
+        var rig = BuildToedRig(facing);
+        var result = AutoMapper.Map(rig.Skeleton);
+        var (left, right) = facing > 0 ? (rig.PlusX, rig.MinusX) : (rig.MinusX, rig.PlusX);
+
+        Assert.Equal(MappingSource.AutoTopology, result.Source);
+        AssertRole(rig.Skeleton, result, BoneRole.UpperLegL, left.Thigh);
+        AssertRole(rig.Skeleton, result, BoneRole.UpperLegR, right.Thigh);
+        AssertRole(rig.Skeleton, result, BoneRole.ToeL, left.Toe);
+        AssertRole(rig.Skeleton, result, BoneRole.HandL, left.Hand);
+        AssertRole(rig.Skeleton, result, BoneRole.HandR, right.Hand);
+    }
+
+    private static (HumanoidRetargeter.Core.Skeleton.Skeleton Skeleton,
+        (string Thigh, string Toe, string Hand) PlusX, (string Thigh, string Toe, string Hand) MinusX)
+        BuildToedRig(float facing)
+    {
+        var bones = new List<(string, string?, System.Numerics.Vector3)>();
+        string Add(string? parent, System.Numerics.Vector3 world)
+        {
+            var name = $"t{bones.Count:00}";
+            bones.Add((name, parent, world));
+            return name;
+        }
+
+        var hips = Add(null, new(0, 100, 0));
+        var chest = Add(Add(hips, new(0, 120, 0)), new(0, 140, 0));
+        Add(Add(chest, new(0, 150, 0)), new(0, 160, 0)); // neck, head
+
+        var sides = new Dictionary<float, (string Thigh, string Toe, string Hand)>();
+        foreach (var x in new[] { 1f, -1f })
+        {
+            var thigh = Add(hips, new(10 * x, 95, 0));
+            var foot = Add(Add(thigh, new(10 * x, 50, 0)), new(10 * x, 8, 0));
+            var toe = Add(foot, new(10 * x, 2, 12 * facing));
+            var upper = Add(Add(chest, new(8 * x, 140, 0)), new(20 * x, 140, 0));
+            var hand = Add(Add(upper, new(40 * x, 140, 0)), new(60 * x, 140, 0));
+            sides[x] = (thigh, toe, hand);
+        }
+
+        return (MappingFixtures.FromWorldPositions(bones), sides[1f], sides[-1f]);
+    }
+
     [Fact]
     public void StageB_DisconnectedRoots_FailsGracefully_NoThrow()
     {
