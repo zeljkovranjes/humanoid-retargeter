@@ -53,6 +53,8 @@ public sealed class RetargetWindow : Widget
 	bool _naturalCarriage = true;
 	bool _footstepEvents;
 	bool _mirroredVariants;
+	bool _bakeSpriteFrames;
+	Checkbox _spriteFramesBox;
 	bool _additiveVariants;
 	bool _copyAnimGraph = true;
 	LineEdit _additiveReferenceEdit;
@@ -355,6 +357,10 @@ public sealed class RetargetWindow : Widget
 			"Generates AE_FOOTSTEP events from detected foot plants." );
 		RtStyle.Check( extras.Layout, "Mirrored variants (_M)", _mirroredVariants, v => _mirroredVariants = v,
 			"Also produce a left/right-mirrored twin of every clip, named <clip>_M." );
+		_spriteFramesBox = RtStyle.Check( extras.Layout, "2D sprite frames (.sprite)", _bakeSpriteFrames, v => _bakeSpriteFrames = v,
+			"Also redraw every clip frame by frame into a Sprite resource at 12 fps, in place, the way Bonebase draws it: no model, no bent mesh. "
+			+ "Only for the built-in 2D characters, which are drawn from their bones." );
+		_spriteFramesBox.Enabled = false;
 		var additiveRow = extras.Layout.AddRow();
 		additiveRow.Spacing = 6;
 		RtStyle.Check( additiveRow, "Additive variants, frame", _additiveVariants, v => _additiveVariants = v,
@@ -386,6 +392,11 @@ public sealed class RetargetWindow : Widget
 	/// back to a 3D target undoes that, but never a view someone chose by hand.</summary>
 	void MatchPlanarViewToTarget()
 	{
+		var canBakeFrames = _target?.CharacterRigPath is not null;
+		_spriteFramesBox.Enabled = canBakeFrames;
+		if ( !canBakeFrames )
+			_spriteFramesBox.Value = _bakeSpriteFrames = false;
+
 		var drawn = _target is null ? null : HumanoidRetargeter.Core.Solve.PlanarSolver.DrawnView( _target.Spec.Rig );
 		if ( drawn is null && !_planarViewIsAuto )
 			return;
@@ -507,6 +518,41 @@ public sealed class RetargetWindow : Widget
 			return;
 		var resolved = TargetPickers.FromModelFile( path, out var error, out var rejected );
 		ApplyPickedTarget( resolved, error, rejected );
+	}
+
+	/// <summary>Redraws each clip into a Sprite resource. A failure is reported, not thrown:
+	/// the model output above has already been written.</summary>
+	async Task BakeSpriteFramesAsync( IReadOnlyList<SourceTakeEntry> takes, TargetPickers.ResolvedTarget target )
+	{
+		try
+		{
+			var character = HumanoidRetargeter.Core.Sprites.SpriteCharacter.Parse( File.ReadAllText( target.CharacterRigPath ) );
+			var view = _planarView ?? HumanoidRetargeter.Core.Solve.PlanarView.Side;
+			foreach ( var take in takes )
+			{
+				SetStatus( $"Drawing sprite frames for {take.DisplayName}…", Theme.Blue );
+				var request = BuildRequest( take, forSpriteFrames: true );
+				var (clip, frames) = await Task.Run( () =>
+				{
+					var solved = Retargeter.Convert( request, target.Spec ).Clips
+						.FirstOrDefault( c => c.Success && c.SolvedFrames is { Count: > 0 } );
+					return (solved, solved is null ? null : HumanoidRetargeter.Core.Sprites.SpriteBake.Frames(
+						character, target.Spec.Rig, solved.SolvedFrames, solved.Fps, solved.Looping, view ));
+				} );
+				await EditorPipeline.SwitchToMainThread();
+				if ( clip is null )
+					continue;
+				var sprite = await SpriteFramesExport.WriteAsync( clip.ClipName, frames, character.Width, character.Height,
+					HumanoidRetargeter.Core.Sprites.SpriteBake.FramesPerSecond, clip.Looping, NormalizedOutputFolder() );
+				Log.Info( $"[humanoid-retargeter] baked {frames.Count} sprite frames: {sprite}" );
+			}
+		}
+		catch ( Exception e ) when ( e is FormatException or ArgumentException or IOException or InvalidOperationException )
+		{
+			await EditorPipeline.SwitchToMainThread();
+			Log.Warning( $"[humanoid-retargeter] sprite frames failed: {e.Message}" );
+			SetStatus( $"Sprite frames failed: {e.Message}", Theme.Red );
+		}
 	}
 
 	void PickBuiltInCharacter( string name )
@@ -1139,7 +1185,7 @@ public sealed class RetargetWindow : Widget
 	/// definitions through and ALWAYS set the row index — TakeIndex then addresses the
 	/// definition the row represents, and the facade slices the take to its frame range
 	/// (preview re-solves via this same request, so it previews the sliced range too).</summary>
-	HumanoidRetargeter.Core.RetargetRequest BuildRequest( SourceTakeEntry take, StockAnimationSlot slot = null, bool trimmed = true ) => new()
+	HumanoidRetargeter.Core.RetargetRequest BuildRequest( SourceTakeEntry take, StockAnimationSlot slot = null, bool trimmed = true, bool forSpriteFrames = false ) => new()
 	{
 		KeptFrames = trimmed ? take.KeptFrames : null,
 		SourceData = take.File.Bytes,
@@ -1157,12 +1203,12 @@ public sealed class RetargetWindow : Widget
 			: take.File.UseDlSolver
 				? HumanoidRetargeter.Core.SolverKind.DeepLearning
 				: HumanoidRetargeter.Core.SolverKind.Geometric,
-		RootMotion = slot is null ? _rootMotion : RootMotionMode.InPlace,
+		RootMotion = slot is null && !forSpriteFrames ? _rootMotion : RootMotionMode.InPlace,
 		FootPlantCleanup = _footPlant,
 		ArmEffectorIk = _armIk,
 		GenerateFootstepEvents = _footstepEvents,
-		CreateMirroredVariant = slot is null && _mirroredVariants,
-		CreateAdditiveVariant = slot is null && _additiveVariants,
+		CreateMirroredVariant = slot is null && !forSpriteFrames && _mirroredVariants,
+		CreateAdditiveVariant = slot is null && !forSpriteFrames && _additiveVariants,
 		AdditiveReferenceFrame = int.TryParse( _additiveReferenceEdit?.Text ?? "0", out var referenceFrame ) ? referenceFrame : -1,
 		LoopingOverride = slot?.Looping ?? _loopOverride,
 		ClipNameOverride = slot is null ? null : slot.ReplacementPrefix + Guid.NewGuid().ToString( "N" )[..8],
@@ -1523,6 +1569,9 @@ public sealed class RetargetWindow : Widget
 				SetStatus( $"Augmenting {System.IO.Path.GetFileName( augmentPath )} failed - nothing written. {detail}", Theme.Red );
 				return;
 			}
+
+			if ( _bakeSpriteFrames && _target.CharacterRigPath is not null )
+				await BakeSpriteFramesAsync( list, _target );
 
 			_progress = 1f;
 

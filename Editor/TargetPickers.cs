@@ -52,6 +52,10 @@ public static class TargetPickers
 		/// the preview then shows a "no preview model" notice.</summary>
 		public string PreviewModelPath { get; set; }
 
+		/// <summary>The rig definition of a built-in 2D character, which can be redrawn frame by
+		/// frame (<see cref="HumanoidRetargeter.Core.Sprites.SpriteBake"/>); null for anything else.</summary>
+		public string CharacterRigPath { get; set; }
+
 		/// <summary>Multiplier taking target-skeleton positions to engine units for the
 		/// preview (0.3937 for cm rigs, 1.0 for engine-unit rigs).</summary>
 		public float PreviewPositionScale { get; set; } = 1.0f;
@@ -261,7 +265,10 @@ public static class TargetPickers
 			rejected = null;
 			return null;
 		}
-		return FromModelFile( path, out error, out rejected );
+		var resolved = FromModelFile( path, out error, out rejected );
+		if ( resolved is not null )
+			resolved.CharacterRigPath = Path.ChangeExtension( path, ".rig.json" );
+		return resolved;
 	}
 
 	/// <summary>

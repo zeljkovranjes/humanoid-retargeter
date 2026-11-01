@@ -295,6 +295,65 @@ public class SpriteGlbTests
         Assert.True(Walk(rig, new PlanarView(yaw)).SolvedFrames!.Count > 1);
     }
 
+    [Theory]
+    [InlineData("chibi")]
+    [InlineData("humanoid")]
+    [InlineData("profile")]
+    public void Skin_DrawsTheRestPosePixelForPixelLikeBonebase(string name)
+    {
+        var character = SpriteCharacter.Parse(File.ReadAllText(
+            RepoFile("Assets", "data", "humanoid_retargeter", "sprites", $"bonebase_{name}.rig.json")));
+        var expected = File.ReadAllBytes(RepoFile("tests", "HumanoidRetargeter.Tests", "Sprites", "fixtures", $"{name}.rest.rgba"));
+        var heads = character.Bones.Select(b => b.Head).ToArray();
+        var tails = character.Bones.Select(b => b.Tail).ToArray();
+
+        var pixels = SpriteSkin.Draw(character, heads, tails, Enumerable.Range(0, character.Parts.Count).ToArray());
+
+        var differing = 0;
+        for (var i = 0; i < expected.Length; i += 4)
+        {
+            if (!expected.AsSpan(i, 4).SequenceEqual(pixels.AsSpan(i, 4)))
+                differing++;
+        }
+        // Edge pixels only: the rig file keeps six decimals where Lua kept a double.
+        Assert.InRange(differing, 0, 4);
+    }
+
+    [Theory]
+    [InlineData("chibi")]
+    [InlineData("profile")]
+    public void Bake_RedrawsTheClipFrameByFrame(string name)
+    {
+        var folder = new[] { "Assets", "data", "humanoid_retargeter", "sprites" };
+        var character = SpriteCharacter.Parse(File.ReadAllText(RepoFile(folder.Append($"bonebase_{name}.rig.json").ToArray())));
+        var rig = Imported(File.ReadAllBytes(RepoFile(folder.Append($"bonebase_{name}.glb").ToArray())));
+        var clip = Walk(rig, PlanarView.Side);
+
+        var frames = SpriteBake.Frames(character, rig, clip.SolvedFrames!, clip.Fps, clip.Looping, PlanarView.Side);
+
+        // 59 frames at 30 fps are 1.97 s: 24 frames at 12 fps on a loop, 25 without.
+        Assert.InRange(frames.Count, 24, 25);
+        Assert.All(frames, frame =>
+        {
+            Assert.Equal(character.Width * character.Height * 4, frame.Length);
+            Assert.True(frame.Where((_, i) => i % 4 == 3).Count(alpha => alpha > 0) > 100);
+        });
+        Assert.False(frames[1].SequenceEqual(frames[frames.Count / 2]));
+    }
+
+    [Fact]
+    public void Bake_NamesTheBoneARigLacks()
+    {
+        var character = SpriteCharacter.Parse(File.ReadAllText(
+            RepoFile("Assets", "data", "humanoid_retargeter", "sprites", "bonebase_chibi.rig.json")));
+        var rig = Imported(Glb(FrontFigure()));
+
+        var error = Assert.Throws<ArgumentException>(() =>
+            SpriteBake.Frames(character, rig, new[] { Array.Empty<HumanoidRetargeter.Core.Maths.XForm>() }, 30f, true, PlanarView.Side));
+
+        Assert.Contains("hips", error.Message);
+    }
+
     [Fact]
     public void BuiltInChibi_KeepsItsFeetOnTheGround()
     {
