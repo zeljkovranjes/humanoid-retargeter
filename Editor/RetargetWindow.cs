@@ -44,6 +44,10 @@ public sealed class RetargetWindow : Widget
 
 	// Options
 	RootMotionMode _rootMotion = RootMotionMode.Off;
+	HumanoidRetargeter.Core.Solve.PlanarView? _planarView;
+	ComboBox _viewCombo;
+	bool _planarViewIsAuto;
+	bool _foreshorten = true;
 	bool _footPlant = true;
 	bool _armIk = true;
 	bool _naturalCarriage = true;
@@ -307,6 +311,16 @@ public sealed class RetargetWindow : Widget
 		loopCombo.AddItem( "From source", null, () => _loopOverride = null, selected: true );
 		loopCombo.AddItem( "Force on", null, () => _loopOverride = true );
 		loopCombo.AddItem( "Force off", null, () => _loopOverride = false );
+		var viewRow = RtStyle.FieldRow( motion, motion.Layout, "2D view", CaptionWidth,
+			"Retarget onto a 2D plane of the target armature, seen from this camera. Works on 3D armatures and on armatures drawn flat, which stay in their own plane. Foot-plant cleanup and arm IK do not apply." );
+		_viewCombo = viewRow.Add( RtStyle.Field( new ComboBox( motion ) ), 1 );
+		_viewCombo.AddItem( "Off (3D)", null, () => SetPlanarView( null ), selected: true );
+		_viewCombo.AddItem( "Side", null, () => SetPlanarView( HumanoidRetargeter.Core.Solve.PlanarView.Side ) );
+		_viewCombo.AddItem( "Front", null, () => SetPlanarView( HumanoidRetargeter.Core.Solve.PlanarView.Front ) );
+		_viewCombo.AddItem( "Back", null, () => SetPlanarView( HumanoidRetargeter.Core.Solve.PlanarView.Back ) );
+		_viewCombo.AddItem( "3/4", null, () => SetPlanarView( HumanoidRetargeter.Core.Solve.PlanarView.ThreeQuarter ) );
+		RtStyle.Check( motion.Layout, "2D foreshortening", _foreshorten, v => _foreshorten = v,
+			"In 2D, shorten a limb that points toward the camera, as the projection does. Untick to keep every bone its full length." );
 		RtStyle.Check( motion.Layout, "Foot-plant cleanup", _footPlant, v => _footPlant = v,
 			"Lock planted feet to the ground and keep them from sliding." );
 		RtStyle.Check( motion.Layout, "Arm effector IK", _armIk, v => _armIk = v,
@@ -356,6 +370,26 @@ public sealed class RetargetWindow : Widget
 	}
 
 	/// <summary>The top bar says where Convert All writes.</summary>
+	/// <summary>Picks the 2D camera (null = 3D); every row's badge follows it.</summary>
+	void SetPlanarView( HumanoidRetargeter.Core.Solve.PlanarView? view )
+	{
+		_planarView = view;
+		_planarViewIsAuto = false;
+		RebuildList();
+	}
+
+	/// <summary>A flat armature has one way to be seen, so picking it sets the 2D view; going
+	/// back to a 3D target undoes that, but never a view someone chose by hand.</summary>
+	void MatchPlanarViewToTarget()
+	{
+		var drawn = _target is null ? null : HumanoidRetargeter.Core.Solve.PlanarSolver.DrawnView( _target.Spec.Rig );
+		if ( drawn is null && !_planarViewIsAuto )
+			return;
+		_viewCombo.CurrentIndex = drawn is null ? 0 : drawn == HumanoidRetargeter.Core.Solve.PlanarView.Side ? 1 : 2;
+		SetPlanarView( drawn );
+		_planarViewIsAuto = drawn is not null;
+	}
+
 	void UpdateSettingsSummary()
 	{
 		if ( !_outputPath.IsValid() )
@@ -424,6 +458,8 @@ public sealed class RetargetWindow : Widget
 			_target = null;
 			_targetError = e.Message;
 		}
+		if ( _viewCombo.IsValid() )
+			MatchPlanarViewToTarget();
 		RefreshStatus();
 	}
 
@@ -439,6 +475,8 @@ public sealed class RetargetWindow : Widget
 			_target = null;
 			_targetError = e.Message;
 		}
+		if ( _viewCombo.IsValid() )
+			MatchPlanarViewToTarget();
 		RefreshStatus();
 	}
 
@@ -489,6 +527,7 @@ public sealed class RetargetWindow : Widget
 
 		_target = resolved;
 		_targetError = null;
+		MatchPlanarViewToTarget();
 		if ( resolved.Warning is not null )
 			SetStatus( resolved.Warning, Theme.Yellow );
 		else
@@ -1061,9 +1100,11 @@ public sealed class RetargetWindow : Widget
 			? take.TakeIndex
 			: take.File.ClipCount > 1 ? take.TakeIndex : null,
 		MappingOverride = take.File.Mapping,
-		Solver = take.File.UseDlSolver
-			? HumanoidRetargeter.Core.SolverKind.DeepLearning
-			: HumanoidRetargeter.Core.SolverKind.Geometric,
+		Solver = slot is null && _planarView is not null
+			? HumanoidRetargeter.Core.SolverKind.Planar
+			: take.File.UseDlSolver
+				? HumanoidRetargeter.Core.SolverKind.DeepLearning
+				: HumanoidRetargeter.Core.SolverKind.Geometric,
 		RootMotion = slot is null ? _rootMotion : RootMotionMode.InPlace,
 		FootPlantCleanup = _footPlant,
 		ArmEffectorIk = _armIk,
@@ -1078,6 +1119,8 @@ public sealed class RetargetWindow : Widget
 		{
 			HipScaleHorizontal = ParsePositive( _hipScaleHEdit ),
 			HipScaleVertical = ParsePositive( _hipScaleVEdit ),
+			View = _planarView ?? HumanoidRetargeter.Core.Solve.PlanarView.Side,
+			Foreshorten = _foreshorten,
 			// null = recommended defaults (clavicle/neck/head/feet keep the target's
 			// natural carriage, plus the solver's posed-rest fallbacks); empty map =
 			// legacy all-absolute direction matching.
@@ -1863,6 +1906,9 @@ public sealed class RetargetWindow : Widget
 				Color = failed ? Theme.Red : Theme.TextLight,
 				ToolTip = detailText,
 			} );
+
+			if ( take is not null && _window._planarView is not null )
+				Layout.Add( new RtPill( this, RtStyle.Badge2d, Theme.Blue, RtStyle.Badge2dTip ) );
 
 			// Rig pill, right-aligned in a fixed column so the pills line up down the list.
 			var pillCell = Layout.Add( new Widget( this ) { FixedWidth = PillColumn } );
