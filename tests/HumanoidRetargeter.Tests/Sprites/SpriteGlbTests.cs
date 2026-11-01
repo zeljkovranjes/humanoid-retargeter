@@ -191,6 +191,56 @@ public class SpriteGlbTests
         Assert.True(rig.Joints[BoneRole.HandL].Y > 130f, $"hand at {rig.Joints[BoneRole.HandL].Y}");
     }
 
+    /// <summary>Thin arms slanting out of a wide trunk with a gap between them, the way an
+    /// outline's outermost pixels lead a fit off the arm and its bones cross it.</summary>
+    private static byte[] FigureWithClearArms()
+    {
+        var alpha = new byte[Size * Size];
+        Line(alpha, (128, 42), (128, 44), 14);
+        Line(alpha, (128, 66), (128, 124), 26);
+        foreach (var side in new[] { 1f, -1f })
+        {
+            Line(alpha, (128 + 40 * side, 62), (128 + 56 * side, 146), 5);
+            Line(alpha, (128 + 12 * side, 130), (128 + 24 * side, 222), 9);
+        }
+        return alpha;
+    }
+
+    [Fact]
+    public void Fit_LaysArmJointsAlongTheArm()
+    {
+        var rig = SpriteRig.Fit(FigureWithClearArms(), Size, Size);
+
+        foreach (var role in new[] { BoneRole.UpperArmL, BoneRole.LowerArmL, BoneRole.HandL })
+        {
+            var joint = rig.Joints[role];
+            var onArm = 168f + (joint.Y - 62f) * 16f / 84f;
+            Assert.True(MathF.Abs(joint.X - onArm) < 2f, $"{role} at {joint}, the arm is at x {onArm}");
+        }
+        Assert.True(rig.Joints[BoneRole.HandL].Y > 125f, $"hand at {rig.Joints[BoneRole.HandL].Y}");
+    }
+
+    [Fact]
+    public void Fit_ReadsTheKneeFromALegsOutline()
+    {
+        // Bowed legs: the knee is well outside the line from hip to foot.
+        var alpha = new byte[Size * Size];
+        Line(alpha, (128, 42), (128, 44), 14);
+        Line(alpha, (128, 66), (128, 124), 26);
+        foreach (var side in new[] { 1f, -1f })
+        {
+            Line(alpha, (128 + 40 * side, 62), (128 + 56 * side, 146), 5);
+            Line(alpha, (128 + 14 * side, 130), (128 + 40 * side, 176), 9);
+            Line(alpha, (128 + 40 * side, 176), (128 + 16 * side, 222), 9);
+        }
+
+        var rig = SpriteRig.Fit(alpha, Size, Size);
+
+        var knee = rig.Joints[BoneRole.LowerLegL];
+        var onLeg = knee.Y < 176f ? 142f + (knee.Y - 130f) * 26f / 46f : 168f - (knee.Y - 176f) * 24f / 46f;
+        Assert.True(MathF.Abs(knee.X - onLeg) < 3f, $"knee at {knee}, the leg is at x {onLeg}");
+    }
+
     [Fact]
     public void Fit_DoesNotTakeTheGapBetweenTwoShoesForTheCrotch()
     {
