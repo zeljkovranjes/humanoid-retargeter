@@ -7,15 +7,19 @@ Title: 2D Mode
 2D view - a new option (Side, Front, Back, 3/4) retargets a 3D clip through an orthographic camera onto a plane of the target: each bone takes the direction of its projected source segment and the character keeps its own proportions, on the s&box Human, Citizen and custom armatures, including ones drawn flat, with the usual DMX and VMDL output
 2D foreshortening - a limb pointing at the camera shortens as the projection does (down to 10%); on by default, untick it to keep every bone full length
 2D depth order - shoulders and hips sit at the source's own depth, scaled to the target, so the near limbs stay in front of the far ones and swap as the character turns
+2D camera - Turn, Tilt and Roll set the camera freely, not only to Side, Front, Back or 3/4
+2D ground - a character shorter in the leg than the source no longer sinks through the floor; one height correction per clip stands its lowest foot where it rests
 # Editor
 2D preview - a 2D clip on a flat character shows through a locked orthographic camera, square-on to its plane, in Preview and Trim; dragging pans and the wheel zooms instead of orbiting, and the camera angle list is hidden. A 3D character keeps its orbit camera
 2D badge - every animation in the list shows a 2D badge while a 2D view is picked, and so does the preview of a 2D clip
 2D sprites - a new target, 2D sprite (.png/.sprite), reads a humanoid off a sprite's silhouette, front or profile, lets you drag its joints, and builds a rigged model any 3D animation can be retargeted onto; output is the usual VMDL
+2D characters - Chibi, Humanoid and Profile, ready-made targets baked from Bonebase's own rigs and skin (one capsule per bone); limbs stay whole however the clip moves, and they start from the side
 Automatic 2D view - picking a flat humanoid (a sprite, or a flat VMDL, FBX or GLB) sets the 2D view to Front or Side as it was drawn, and going back to a 3D character turns it off
-Sprite preview - a flat character plays on open the way the editor previews a Sprite: lit from the camera, filling the view, with no ground
+Sprite preview - a flat character plays on open on a transparency checker, lit from the camera, standing at the foot of the view, with the source skeleton beside it: drag that skeleton, or move Turn, Tilt and Roll, and the character follows at once (about 40 ms)
 ### Fixed
 # Editor
 Red and black checkerboard on Linux - a custom model's generated materials no longer load as the error material until the editor restarts; they are now compiled and registered before the model that uses them
+Preview after converting - a custom model no longer drops to the skeleton view when it is picked again or after Convert All; its compiled model is kept while nothing has changed
 Transparent textures on custom models - a model with a transparent texture whose size is not a power of two no longer shows the red and black checkerboard; such textures are stretched to the next power of two (512x768 becomes 512x1024), which keeps their UVs
 
 ## 2026-10-24

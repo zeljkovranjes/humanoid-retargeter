@@ -99,6 +99,7 @@ public sealed class PlanarSolver : IRetargetSolver
         if (clip.Frames.Count == 0)
             return output;
         var plan = new Plan(source, clip, sourceMap, target, options);
+        plan.GroundFeet(clip);
         foreach (var frame in clip.Frames)
             output.Frames.Add(plan.SolveFrame(frame));
         return output;
@@ -138,6 +139,38 @@ public sealed class PlanarSolver : IRetargetSolver
         var hipSpan = Across(BoneRole.UpperLegR, BoneRole.UpperLegL);
         var toeSpan = MathF.Max(Across(BoneRole.FootL, BoneRole.ToeL), Across(BoneRole.FootR, BoneRole.ToeR));
         return toeSpan > hipSpan ? PlanarView.Side : PlanarView.Front;
+    }
+
+    /// <summary>
+    /// The camera a <see cref="SolverKind.Planar"/> solve looks at a source through, in the
+    /// source's own space, for showing that source the way it is projected.
+    /// <paramref name="firstFrame"/> is the clip's first frame in world space.
+    /// </summary>
+    /// <exception cref="ArgumentException">Thrown when the mapping lacks the bones a character
+    /// frame needs.</exception>
+    public static (Vector3 Right, Vector3 Up, Vector3 Toward) SourceCamera(
+        SkeletonModel skeleton, MappingResult map, XForm[] firstFrame, PlanarView view)
+    {
+        ArgumentNullException.ThrowIfNull(skeleton);
+        ArgumentNullException.ThrowIfNull(map);
+        ArgumentNullException.ThrowIfNull(firstFrame);
+        var anatomical = CharacterFrame.Compute(skeleton, map, skeleton.RestWorld).Up;
+        var basis = ViewBasis.Of(FacingFrame(skeleton, map, firstFrame, NearestAxis(anatomical)), view).Rolled(view.RollDegrees);
+        return (basis.Right, basis.Up, basis.Toward);
+    }
+
+    /// <summary>A character frame around <paramref name="up"/>, facing the way the clip starts.</summary>
+    private static CharacterFrame FacingFrame(SkeletonModel skeleton, MappingResult map, XForm[] firstFrame, Vector3 up)
+    {
+        try
+        {
+            return CharacterFrame.Compute(skeleton, map, firstFrame, up);
+        }
+        catch (ArgumentException)
+        {
+            // A first frame lying on its side has no hip line to face along.
+            return CharacterFrame.Compute(skeleton, map, skeleton.RestWorld, up);
+        }
     }
 
     private static ViewBasis TargetBasis(TargetRig rig, PlanarView view)
@@ -242,6 +275,16 @@ public sealed class PlanarSolver : IRetargetSolver
                 MathF.Cos(pitch) * toward + MathF.Sin(pitch) * frame.Up);
         }
 
+        /// <summary>The same camera turned in the picture's own plane.</summary>
+        public ViewBasis Rolled(float degrees)
+        {
+            var roll = degrees * MathF.PI / 180f;
+            return new ViewBasis(
+                MathF.Cos(roll) * Right + MathF.Sin(roll) * Up,
+                MathF.Cos(roll) * Up - MathF.Sin(roll) * Right,
+                Toward);
+        }
+
         /// <summary>A rig-space vector as (right, up, toward).</summary>
         public Vector3 ToView(Vector3 world)
             => new(Vector3.Dot(world, Right), Vector3.Dot(world, Up), Vector3.Dot(world, Toward));
@@ -313,6 +356,7 @@ public sealed class PlanarSolver : IRetargetSolver
         private readonly float _scaleH;
         private readonly float _scaleV;
         private readonly float _maxTurn;
+        private float _groundLift;
         private readonly Vector3[] _position;
         private readonly Quaternion[] _rotation;
         private readonly XForm[] _world;
@@ -344,7 +388,7 @@ public sealed class PlanarSolver : IRetargetSolver
                 _ => new Vector3(0f, source.UpAxisSign, 0f),
             };
             var firstWorld = new Pose(clip.Frames[0]).ToWorld(_src);
-            _srcView = ViewBasis.Of(SourceFrame(fileUp, firstWorld), options.View);
+            _srcView = ViewBasis.Of(SourceFrame(fileUp, firstWorld), options.View).Rolled(options.View.RollDegrees);
             _srcUp = fileUp;
 
             _tgtIsFlat = FlatAxis(rig) is not null;
@@ -412,15 +456,7 @@ public sealed class PlanarSolver : IRetargetSolver
             {
                 var anatomical = CharacterFrame.Compute(_src, _srcMap, _src.RestWorld).Up;
                 var up = Vector3.Dot(anatomical, fileUp) < 0.70710678f ? fileUp : NearestAxis(anatomical);
-                try
-                {
-                    return CharacterFrame.Compute(_src, _srcMap, firstWorld, up);
-                }
-                catch (ArgumentException)
-                {
-                    // A first frame lying on its side has no hip line to face along.
-                    return CharacterFrame.Compute(_src, _srcMap, _src.RestWorld, up);
-                }
+                return FacingFrame(_src, _srcMap, firstWorld, up);
             }
             catch (ArgumentException e)
             {
@@ -566,6 +602,36 @@ public sealed class PlanarSolver : IRetargetSolver
             return reference + _srcUp * (motionGround - restGround);
         }
 
+        /// <summary>One height correction for the whole clip, so the lowest a foot gets is
+        /// where it rests. Legs shorter than the source's cannot reach as far down as the
+        /// hips drop; correcting frame by frame would flatten a jump.</summary>
+        public void GroundFeet(Clip clip)
+        {
+            var feet = new List<int>();
+            foreach (var role in new[] { BoneRole.FootL, BoneRole.FootR, BoneRole.ToeL, BoneRole.ToeR })
+            {
+                if (_rig.BoneForRole(role) is { } bone && _isDriven[bone])
+                    feet.Add(bone);
+            }
+            if (feet.Count == 0)
+                return;
+
+            var rest = float.MaxValue;
+            foreach (var foot in feet)
+                rest = MathF.Min(rest, Vector3.Dot(_tgt.RestWorld[foot].Pos, _tgtView.Up));
+
+            var lowest = float.MaxValue;
+            foreach (var frame in clip.Frames)
+            {
+                SolveFrame(frame);
+                foreach (var foot in feet)
+                    lowest = MathF.Min(lowest, Vector3.Dot(_position[foot], _tgtView.Up));
+            }
+            foreach (var link in _links)
+                link.HeldAngle = null;
+            _groundLift = rest - lowest;
+        }
+
         public XForm[] SolveFrame(XForm[] sourceLocals)
         {
             var source = new Pose(sourceLocals).ToWorld(_src);
@@ -599,7 +665,7 @@ public sealed class PlanarSolver : IRetargetSolver
                 hips = _firstHips + _srcUp * Vector3.Dot(hips - _firstHips, _srcUp);
             var travel = _srcView.ToView(hips - _hipsReference);
             return _tgt.RestWorld[_tgtHips].Pos + _tgtView.ToWorld(
-                new Vector3(travel.X * _scaleH, travel.Y * _scaleV, 0f));
+                new Vector3(travel.X * _scaleH, travel.Y * _scaleV + _groundLift, 0f));
         }
 
         private void SolveLink(Link link, XForm[] source)

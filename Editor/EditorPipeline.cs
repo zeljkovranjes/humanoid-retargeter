@@ -159,6 +159,9 @@ public static class EditorPipeline
 	/// <summary>Assets-relative path of the committed s&amp;box target rig definition.</summary>
 	public const string TargetRigJsonRelative = "data/humanoid_retargeter/target_rig_sbox.json";
 
+	/// <summary>Assets-relative folder of the built-in 2D characters.</summary>
+	public const string BuiltInCharacterFolder = "data/humanoid_retargeter/sprites";
+
 	/// <summary>Assets-relative path of the committed classic (4-finger) citizen target rig definition.</summary>
 	public const string CitizenTargetRigJsonRelative = "data/humanoid_retargeter/target_rig_sbox_citizen.json";
 
@@ -235,6 +238,20 @@ public static class EditorPipeline
 		List<string> report = null )
 		=> PrepareModelTargetMesh( target, outputFolderRelative, out error, report );
 
+	/// <summary>Leaves a file that already holds this text alone: a rewrite makes the asset
+	/// system throw away what was compiled from it.</summary>
+	static void WriteIfChanged( string path, string text )
+	{
+		if ( !File.Exists( path ) || File.ReadAllText( path ) != text )
+			File.WriteAllText( path, text );
+	}
+
+	static void WriteIfChanged( string path, byte[] bytes )
+	{
+		if ( !File.Exists( path ) || !File.ReadAllBytes( path ).AsSpan().SequenceEqual( bytes ) )
+			File.WriteAllBytes( path, bytes );
+	}
+
 	/// <summary>Compiles a target's generated materials and registers what they produced. A
 	/// material left to compile on demand under its model arrives too late: the asset system
 	/// has not registered its compiled file (seen on Linux), the model loads with the error
@@ -257,11 +274,19 @@ public static class EditorPipeline
 				continue;
 			}
 
-			var textures = Path.Combine( Path.GetDirectoryName( absolute )!, "textures" );
-			if ( Directory.Exists( textures ) )
-				foreach ( var compiled in Directory.EnumerateFiles( textures, "*.generated.vtex_c" ) )
-					Try( () => AssetSystem.RegisterFile( compiled ) );
+			RegisterGeneratedTextures( Path.GetDirectoryName( absolute )! );
+			RegisterGeneratedTextures( Path.Combine( Path.GetDirectoryName( absolute )!, "textures" ) );
 		}
+	}
+
+	/// <summary>Registers the textures a compiled material generated beside it. Until then the
+	/// asset system counts them as missing children (seen on Linux) and won't load the material.</summary>
+	internal static void RegisterGeneratedTextures( string folder )
+	{
+		if ( !Directory.Exists( folder ) )
+			return;
+		foreach ( var compiled in Directory.EnumerateFiles( folder, "*.generated.vtex_c" ) )
+			Try( () => AssetSystem.RegisterFile( compiled ) );
 	}
 
 	/// <summary>Prepares an FBX, GLB, or glTF custom target mesh for ModelDoc.</summary>
@@ -323,7 +348,7 @@ public static class EditorPipeline
 				{
 					var repaired = HumanoidRetargeter.Core.Formats.Fbx.FbxBindPoseFixer.TryFix(
 						modelBytes, out var bindReport );
-					File.WriteAllBytes( destination, repaired ?? modelBytes );
+					WriteIfChanged( destination, repaired ?? modelBytes );
 					Log.Info( $"[humanoid-retargeter] target FBX bind check: {bindReport}"
 						+ (repaired is not null ? " - repaired copy embedded" : "") );
 					if ( repaired is not null )
@@ -332,7 +357,7 @@ public static class EditorPipeline
 				}
 				else
 				{
-					File.WriteAllBytes( destination, modelBytes );
+					WriteIfChanged( destination, modelBytes );
 				}
 			}
 
@@ -385,7 +410,7 @@ public static class EditorPipeline
 					extension == ".gltf"
 						? uri => TargetPickers.ReadGltfDependency( destination, uri )
 						: null );
-				File.WriteAllText( meshDestination, dmx );
+				WriteIfChanged( meshDestination, dmx );
 				meshImportScale = 1f; // model-DMX was emitted in the rig's centimeter space
 			}
 
@@ -808,7 +833,7 @@ public static class EditorPipeline
 					+ Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase ) )
 					throw new FormatException( $"glTF dependency escapes the output folder: '{uri}'." );
 				Directory.CreateDirectory( Path.GetDirectoryName( destination ) );
-				File.WriteAllBytes( destination, bytes );
+				WriteIfChanged( destination, bytes );
 				Try( () => AssetSystem.RegisterFile( destination ) );
 			}
 		}
@@ -1042,10 +1067,7 @@ public static class EditorPipeline
 					builder.AppendLine( $"\tTextureSelfIllumMask \"{emissive}\"" );
 				}
 				builder.AppendLine( "}" );
-				// Unchanged text stays unwritten: a rewrite throws away the compiled material.
-				var text = builder.ToString();
-				if ( !File.Exists( vmatPath ) || File.ReadAllText( vmatPath ) != text )
-					File.WriteAllText( vmatPath, text );
+				WriteIfChanged( vmatPath, builder.ToString() );
 				Try( () => AssetSystem.RegisterFile( vmatPath ) );
 				Log.Info( $"[humanoid-retargeter] generated material {Path.GetFileName( vmatPath )} "
 					+ $"(color: {color ?? "default"}, normal: {normal ?? "default"}, rough: {rough ?? "default"})" );
@@ -1168,8 +1190,7 @@ public static class EditorPipeline
 						Path.GetFileNameWithoutExtension( source ) + "_hr_alpha.png" );
 					using var image = SkiaSharp.SKImage.FromBitmap( mask );
 					using var data = image.Encode( SkiaSharp.SKEncodedImageFormat.Png, 100 );
-					using ( var stream = File.Open( output, FileMode.Create, FileAccess.Write, FileShare.Read ) )
-						data.SaveTo( stream );
+					WriteIfChanged( output, data.ToArray() );
 					Try( () => AssetSystem.RegisterFile( output ) );
 					return Path.GetRelativePath( assetsPath, output ).Replace( '\\', '/' );
 				}
@@ -1585,7 +1606,7 @@ public static class EditorPipeline
 			var bindAbsolute = Path.GetFullPath( Path.Combine(
 				assetsPath, bindRelative.Replace( '/', Path.DirectorySeparatorChar ) ) );
 			var bindFrame = target.Spec.Rig.Skeleton.Bones.Select( bone => bone.RestLocal ).ToArray();
-			File.WriteAllText( bindAbsolute, HumanoidRetargeter.Core.Formats.Dmx.DmxWriter.Write(
+			WriteIfChanged( bindAbsolute, HumanoidRetargeter.Core.Formats.Dmx.DmxWriter.Write(
 				target.Spec.Rig.Skeleton,
 				new HumanoidRetargeter.Core.Skeleton.Clip( "preview_bind", 30f, false,
 					new List<HumanoidRetargeter.Core.Maths.XForm[]> { bindFrame } ),
@@ -1605,6 +1626,23 @@ public static class EditorPipeline
 				target.Spec.VmdlScale, target.Spec.DefaultRootBone,
 				meshFilePath: meshRelative, meshImportScale: target.Spec.MeshImportScale,
 				materialRemaps: target.Spec.MaterialRemaps, meshImportNames: target.Spec.MeshImportNames );
+			// Nothing changed: the compiled model stands. Rebuilding it pulls it out from under
+			// the engine, which then caches the failed load for the session; the window comes
+			// back here after every conversion.
+			var compiledAbsolute = vmdlAbsolute + "_c";
+			if ( File.Exists( compiledAbsolute ) && File.Exists( vmdlAbsolute ) && File.ReadAllText( vmdlAbsolute ) == text
+				&& File.GetLastWriteTimeUtc( compiledAbsolute ) >= File.GetLastWriteTimeUtc( vmdlAbsolute ) )
+			{
+				await SwitchToMainThread();
+				if ( Try( () => AssetSystem.RegisterFile( vmdlAbsolute ) ) is { } current )
+				{
+					Try( () => AssetSystem.RegisterFile( compiledAbsolute ) );
+					target.PreviewModelPath = current.Path;
+					TargetPickers.TryRebuildFromCompiledPreview( target, current.Path );
+					return true;
+				}
+			}
+
 			File.WriteAllText( vmdlAbsolute, text );
 			// A compiled artifact from an OLDER library version has placeholder materials
 			// baked in (pre-remap era) - never let it satisfy anything; the fresh compile

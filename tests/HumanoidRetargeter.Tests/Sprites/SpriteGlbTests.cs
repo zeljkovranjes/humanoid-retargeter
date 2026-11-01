@@ -146,6 +146,78 @@ public class SpriteGlbTests
     }
 
     [Fact]
+    public void Fit_DoesNotTakeTheTopOfARoundHeadForTheNeck()
+    {
+        var alpha = FrontFigure();
+
+        var rig = SpriteRig.Fit(alpha, Size, Size);
+
+        // The figure's neck is near y 56, its hips near 130. A neck read at the crown of the
+        // head (y 40) pulled every joint under it up the body.
+        Assert.InRange(rig.Joints[BoneRole.Neck].Y, 48f, 66f);
+        Assert.InRange(rig.Joints[BoneRole.Hips].Y, 118f, 150f);
+    }
+
+    [Fact]
+    public void Fit_ReadsTheCrotchFromTheGapBetweenTheLegs()
+    {
+        var alpha = new byte[Size * Size];
+        Line(alpha, (128, 42), (128, 44), 14);
+        Line(alpha, (128, 60), (128, 150), 18);
+        foreach (var side in new[] { 1f, -1f })
+            Line(alpha, (128 + 12 * side, 150), (128 + 18 * side, 222), 8);
+
+        var rig = SpriteRig.Fit(alpha, Size, Size);
+
+        Assert.InRange(rig.Joints[BoneRole.UpperLegL].Y, 150f, 180f);
+    }
+
+    [Fact]
+    public void Fit_EndsAStraightHangingArmAtItsHand()
+    {
+        // Wide shoulders over arms hanging straight down, reaching past the template's hands.
+        var alpha = new byte[Size * Size];
+        Line(alpha, (128, 42), (128, 44), 14);
+        Line(alpha, (128, 62), (128, 130), 16);
+        foreach (var side in new[] { 1f, -1f })
+        {
+            Line(alpha, (128, 66), (128 + 80 * side, 66), 6);
+            Line(alpha, (128 + 80 * side, 66), (128 + 80 * side, 140), 6);
+            Line(alpha, (128 + 12 * side, 130), (128 + 16 * side, 222), 9);
+        }
+
+        var rig = SpriteRig.Fit(alpha, Size, Size);
+
+        Assert.True(rig.Joints[BoneRole.HandL].Y > 130f, $"hand at {rig.Joints[BoneRole.HandL].Y}");
+    }
+
+    [Fact]
+    public void Fit_DoesNotTakeTheGapBetweenTwoShoesForTheCrotch()
+    {
+        var alpha = new byte[Size * Size];
+        Line(alpha, (128, 42), (128, 44), 14);
+        Line(alpha, (128, 60), (128, 205), 20);
+        foreach (var side in new[] { 1f, -1f })
+            Line(alpha, (128 + 14 * side, 210), (128 + 16 * side, 222), 8);
+
+        var rig = SpriteRig.Fit(alpha, Size, Size, isProfile: false);
+
+        Assert.True(rig.Joints[BoneRole.Hips].Y < 180f, $"hips at {rig.Joints[BoneRole.Hips].Y}");
+    }
+
+    [Fact]
+    public void Fit_KeepsTemplateProportionsWithoutANeck()
+    {
+        // A hooded figure: no row narrower than the head and shoulders.
+        var alpha = new byte[Size * Size];
+        Line(alpha, (128, 50), (128, 210), 26);
+
+        var rig = SpriteRig.Fit(alpha, Size, Size, isProfile: false);
+
+        Assert.InRange(rig.Joints[BoneRole.Neck].Y, 55f, 80f);
+    }
+
+    [Fact]
     public void Fit_TakesANarrowStandingFigureForAProfile()
     {
         var rig = SpriteRig.Fit(ProfileFigure(), Size, Size);
@@ -195,6 +267,50 @@ public class SpriteGlbTests
             Assert.Equal("mixamorig_" + name, scene.Skeleton[map.RoleToBone[role]].Name);
         var rig = TargetRig.FromSkeleton(scene.Skeleton, map);
         Assert.Equal(profile ? PlanarView.Side : PlanarView.Front, PlanarSolver.DrawnView(rig));
+    }
+
+    private static string RepoFile(params string[] parts)
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null)
+        {
+            if (File.Exists(Path.Combine(dir.FullName, "humanoid-retargeter.sbproj")))
+                return Path.Combine(new[] { dir.FullName }.Concat(parts).ToArray());
+            dir = dir.Parent!;
+        }
+        throw new InvalidOperationException("Repo root (humanoid-retargeter.sbproj) not found.");
+    }
+
+    [Theory]
+    [InlineData("profile", 90f)]
+    [InlineData("humanoid", 0f)]
+    [InlineData("chibi", 0f)]
+    public void BuiltInCharacters_AreFlatMappedHumanoids(string name, float yaw)
+    {
+        var glb = File.ReadAllBytes(RepoFile("Assets", "data", "humanoid_retargeter", "sprites", $"bonebase_{name}.glb"));
+
+        var rig = Imported(glb);
+
+        Assert.Equal(new PlanarView(yaw), PlanarSolver.DrawnView(rig));
+        Assert.True(Walk(rig, new PlanarView(yaw)).SolvedFrames!.Count > 1);
+    }
+
+    [Fact]
+    public void BuiltInChibi_KeepsItsFeetOnTheGround()
+    {
+        // Chibi legs are far shorter than the walk's: the clip used to sink them through the floor.
+        var rig = Imported(File.ReadAllBytes(RepoFile("Assets", "data", "humanoid_retargeter", "sprites", "bonebase_chibi.glb")));
+        var feet = new[] { BoneRole.FootL, BoneRole.FootR, BoneRole.ToeL, BoneRole.ToeR }.Select(r => rig.BoneForRole(r)!.Value).ToArray();
+        var rest = feet.Min(f => rig.Skeleton.RestWorld[f].Pos.Y);
+
+        var clip = Walk(rig, PlanarView.Side);
+
+        var lowest = clip.SolvedFrames!.Min(frame =>
+        {
+            var world = new Pose(frame).ToWorld(rig.Skeleton);
+            return feet.Min(f => world[f].Pos.Y);
+        });
+        Assert.Equal(rest, lowest, 1);
     }
 
     [Fact]

@@ -71,7 +71,14 @@ public sealed class PreviewWidget : SceneRenderingWidget
 	Vector3 _pan;
 
 	// ---- 2D camera: a clip solved in 2D is seen square-on through a locked orthographic lens --
-	const float SpriteFraming = 1.25f; // orthographic height, in character heights
+	const float SpriteFraming = 2.1f; // orthographic height, in character heights: Bonebase's room around a rig
+	const float SpriteGroundLine = 0.4f; // how far below the view's centre the feet stand, in view heights
+	const float CanvasShare = 0.92f; // of the view's height
+	const float PlaneSize = 100f; // Model.Plane's side
+	const float CanvasGap = 40f; // how far behind the character, so no pose reaches it
+	const string CanvasMaterialPath = "materials/humanoid_retargeter/sprite_canvas.vmat";
+	const float CanvasCompileTimeoutSeconds = 30f;
+	SceneObject _canvas;
 	(Vector3 Up, Vector3 Toward)? _planarAxes;
 	const float SpriteLightStrength = 0.6f; // two lights at the camera: this shows the art's own colours
 	const float SpriteLightRadius = 2000f;
@@ -530,6 +537,14 @@ public sealed class PreviewWidget : SceneRenderingWidget
 		MeasureClipClearance();
 	}
 
+	/// <summary>Swaps in a re-solved clip without losing the playback position.</summary>
+	public void SwapClip( HumanoidRetargeter.Core.ClipResult clip )
+	{
+		var (time, frame) = (_time, CurrentFrame);
+		SetClip( clip );
+		(_time, CurrentFrame) = (time, Math.Clamp( frame, 0, Math.Max( 0, FrameCount - 1 ) ));
+	}
+
 	/// <summary>Jumps to a frame (scrubber); pauses playback.</summary>
 	public void Scrub( int frame )
 	{
@@ -887,7 +902,30 @@ public sealed class PreviewWidget : SceneRenderingWidget
 			light.Radius = enabled ? SpriteLightRadius : radius;
 		}
 		if ( enabled )
+		{
 			ShowGround = false;
+			if ( !_canvas.IsValid() )
+				CreateCanvas();
+		}
+		if ( _canvas.IsValid() )
+			_canvas.RenderingEnabled = enabled;
+	}
+
+	/// <summary>Bonebase's transparency checker, behind the character. The material compiles
+	/// before it is loaded: compiled on demand it arrives too late and stays the error material.</summary>
+	async void CreateCanvas()
+	{
+		if ( AssetSystem.FindByPath( CanvasMaterialPath ) is { } asset )
+		{
+			if ( !asset.IsCompiled )
+				await EditorPipeline.CompileAndWaitAsync( asset, CanvasCompileTimeoutSeconds );
+			EditorPipeline.RegisterGeneratedTextures( System.IO.Path.GetDirectoryName( asset.AbsolutePath ) );
+		}
+		if ( !IsValid || _canvas.IsValid() )
+			return;
+		_canvas = new SceneObject( Scene.SceneWorld, Model.Plane, Transform.Zero );
+		_canvas.SetMaterialOverride( Material.Load( CanvasMaterialPath ) );
+		_canvas.RenderingEnabled = _planarAxes is not null;
 	}
 
 	(Vector3 Up, Vector3 Toward) PlanarAxes( HumanoidRetargeter.Core.Solve.PlanarView view )
@@ -1409,10 +1447,17 @@ public sealed class PreviewWidget : SceneRenderingWidget
 		{
 			// Zoom is the lens here: dollying in as well would put the camera inside the character.
 			Camera.OrthographicHeight = _characterHeight * SpriteFraming * _zoom;
+			center = center.WithZ( _groundZ + Camera.OrthographicHeight * SpriteGroundLine );
 			Camera.WorldPosition = center + _pan + axes.Toward * (distance / _zoom);
 			Camera.WorldRotation = Rotation.LookAt( -axes.Toward, axes.Up );
 			foreach ( var (light, _, _, _) in _lights )
 				light.Position = Camera.WorldPosition;
+			if ( _canvas.IsValid() )
+			{
+				var side = Camera.OrthographicHeight * CanvasShare;
+				_canvas.Transform = new Transform( center + _pan - axes.Toward * (_characterHeight + CanvasGap),
+					Rotation.LookAt( axes.Up, axes.Toward ), side / PlaneSize );
+			}
 			return;
 		}
 
