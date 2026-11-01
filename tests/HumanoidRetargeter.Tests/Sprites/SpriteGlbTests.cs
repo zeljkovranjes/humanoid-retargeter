@@ -295,6 +295,30 @@ public class SpriteGlbTests
         Assert.True(Walk(rig, new PlanarView(yaw)).SolvedFrames!.Count > 1);
     }
 
+    [Theory]
+    [InlineData("chibi")]
+    [InlineData("humanoid")]
+    [InlineData("profile")]
+    public void Skin_DrawsTheRestPosePixelForPixelLikeBonebase(string name)
+    {
+        var character = SpriteCharacter.Parse(File.ReadAllText(
+            RepoFile("Assets", "data", "humanoid_retargeter", "sprites", $"bonebase_{name}.rig.json")));
+        var expected = File.ReadAllBytes(RepoFile("tests", "HumanoidRetargeter.Tests", "Sprites", "fixtures", $"{name}.rest.rgba"));
+        var heads = character.Bones.Select(b => b.Head).ToArray();
+        var tails = character.Bones.Select(b => b.Tail).ToArray();
+
+        var pixels = SpriteSkin.Draw(character, heads, tails, Enumerable.Range(0, character.Parts.Count).ToArray());
+
+        var differing = 0;
+        for (var i = 0; i < expected.Length; i += 4)
+        {
+            if (!expected.AsSpan(i, 4).SequenceEqual(pixels.AsSpan(i, 4)))
+                differing++;
+        }
+        // Edge pixels only: the rig file keeps six decimals where Lua kept a double.
+        Assert.InRange(differing, 0, 4);
+    }
+
     [Fact]
     public void BuiltInChibi_KeepsItsFeetOnTheGround()
     {
