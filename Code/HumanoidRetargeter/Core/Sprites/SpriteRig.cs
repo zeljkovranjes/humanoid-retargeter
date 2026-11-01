@@ -60,6 +60,12 @@ public sealed class SpriteRig
     /// <summary>The share of the figure's height read as its feet.</summary>
     private const float FootRows = 0.1f;
 
+    /// <summary>A limb must hang clear of the trunk for this share of the height to be read from its outline.</summary>
+    private const float FreeLimbRows = 0.1f;
+
+    /// <summary>Where the template's wrist and elbow sit along an arm, shoulder to fingertips and shoulder to wrist.</summary>
+    private const float WristShare = 0.83f, ElbowShare = 0.53f;
+
     private static readonly (BoneRole Role, float X, float Y)[] FrontTemplate =
     {
         (BoneRole.Hips, 32f, 37f), (BoneRole.Spine0, 32f, 31f), (BoneRole.Spine1, 32f, 25.5f),
@@ -361,8 +367,14 @@ public sealed class SpriteRig
             (-1f, BoneRole.UpperArmR, BoneRole.LowerArmR, BoneRole.HandR, BoneRole.UpperLegR, BoneRole.LowerLegR, BoneRole.FootR, BoneRole.ToeR),
         })
         {
-            var reach = Reach(alpha, centre, side, armTop, armBottom);
-            if (reach is { } tip && MathF.Abs(tip.X - centre) > MathF.Abs(Joints[hand].X - centre) * 1.25f)
+            var edge = side > 0f ? Figure.Right : Figure.Left;
+            // A clear run that starts at the hips or lower is a leg, under arms held out.
+            if (FreeLimb(alpha, centre, side, edge, -(int)side, armTop, armBottom) is { } arm && arm[0].Row < Joints[hip].Y)
+            {
+                FollowArm(arm, shoulder, elbow, hand);
+            }
+            else if (Reach(alpha, centre, side, armTop, armBottom) is { } tip
+                && MathF.Abs(tip.X - centre) > MathF.Abs(Joints[hand].X - centre) * 1.25f)
             {
                 Joints[hand] = tip;
                 Joints[elbow] = (Joints[shoulder] + tip) * 0.5f;
@@ -375,7 +387,76 @@ public sealed class SpriteRig
                 Joints[toe] = new Vector2(foot, Joints[toe].Y);
                 Joints[knee] = new Vector2((Joints[hip].X + foot) * 0.5f, Joints[knee].Y);
             }
+
+            var crotch = (int)MathF.Round(centre);
+            if (FreeLimb(alpha, centre, side, crotch, (int)side, (int)Joints[hip].Y, Figure.Bottom) is { } leg)
+            {
+                // The hem of a shirt widens the first rows: read the thigh a little below them.
+                Joints[hip] = new Vector2(leg[leg.Count / 8].X, Joints[hip].Y);
+                Joints[knee] = new Vector2(CentreAt(leg, Joints[knee].Y), Joints[knee].Y);
+            }
         }
+    }
+
+    /// <summary>Lays an arm's joints along the middle of its outline: shoulder under the
+    /// round of its top, unless it comes out of the trunk lower down.</summary>
+    private void FollowArm(List<(int Row, float X, int Width)> arm, BoneRole shoulder, BoneRole elbow, BoneRole hand)
+    {
+        var widths = arm.ConvertAll(row => row.Width);
+        widths.Sort();
+        var shoulderRow = MathF.Min(Joints[shoulder].Y, arm[0].Row + widths[widths.Count / 2] * 0.5f);
+        var wristRow = shoulderRow + (arm[^1].Row - shoulderRow) * WristShare;
+        var elbowRow = shoulderRow + (wristRow - shoulderRow) * ElbowShare;
+        var shoulderX = shoulderRow < arm[0].Row ? Joints[shoulder].X : CentreAt(arm, shoulderRow);
+        Joints[shoulder] = new Vector2(shoulderX, shoulderRow);
+        Joints[elbow] = new Vector2(CentreAt(arm, elbowRow), elbowRow);
+        Joints[hand] = new Vector2(CentreAt(arm, wristRow), wristRow);
+    }
+
+    private static float CentreAt(List<(int Row, float X, int Width)> limb, float row)
+        => limb[Math.Clamp((int)row - limb[0].Row, 0, limb.Count - 1)].X;
+
+    /// <summary>The run of opaque pixels a limb makes on each row it hangs clear of the trunk,
+    /// the first run met walking from <paramref name="startX"/>. Null when too few rows hang
+    /// clear, or the limb rejoins the trunk: a raised arm, a hand on a hip.</summary>
+    private List<(int Row, float X, int Width)>? FreeLimb(byte[] alpha, float centre, float side, int startX, int step, int fromRow, int toRow)
+    {
+        var rows = new List<(int Row, float X, int Width)>();
+        var previous = (First: 0, Last: 0);
+        for (var y = fromRow; y <= toRow; y++)
+        {
+            var run = Run(alpha, y, startX, step);
+            var isClear = run is { } found && (found.First - centre) * side > 0f && (found.Last - centre) * side > 0f;
+            if (!isClear)
+            {
+                if (rows.Count > 0 && run is not null)
+                    return null;
+                continue;
+            }
+            var (first, last) = run!.Value;
+            if (rows.Count > 0 && (first > previous.Last || last < previous.First))
+                break; // past its end: this is another limb
+            rows.Add((y, (first + last) * 0.5f, last - first + 1));
+            previous = (first, last);
+        }
+        return rows.Count >= (Figure.Bottom - Figure.Top + 1) * FreeLimbRows ? rows : null;
+    }
+
+    /// <summary>The first opaque run on a row walking from <paramref name="startX"/>, lowest x first.</summary>
+    private (int First, int Last)? Run(byte[] alpha, int row, int startX, int step)
+    {
+        bool IsOpaque(int x) => x >= 0 && x < Width && alpha[row * Width + x] >= OpaqueAlpha;
+        var x = startX;
+        while (x >= Figure.Left && x <= Figure.Right && !IsOpaque(x))
+            x += step;
+        if (!IsOpaque(x))
+            return null;
+        var near = x;
+        while (IsOpaque(x + step))
+            x += step;
+        while (IsOpaque(near - step))
+            near -= step;
+        return (Math.Min(near, x), Math.Max(near, x));
     }
 
     private Vector2? Reach(byte[] alpha, float centre, float side, int fromRow, int toRow)

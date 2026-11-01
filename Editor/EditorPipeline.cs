@@ -1002,7 +1002,9 @@ public static class EditorPipeline
 						token is "mask" or "masked" or "lash" or "lashes" or "eyelash" or "eyelashes"
 							or "hair" or "hairs" or "brow" or "brows" or "eyebrow" or "eyebrows"
 							or "fur" or "feather" or "feathers" ));
-				var translucent = authored?.Translucent == true || opacity is not null;
+				// A mask stays in the opaque pass: translucent surfaces write no depth, and the
+				// layers of a flat character would paint in mesh order instead of front to back.
+				var translucent = authored?.Translucent == true || (opacity is not null && authored?.AlphaTest != true);
 				if ((alphaTest || translucent) && opacity is null)
 					opacity = color; // common packed RGBA texture (including glTF baseColor)
 				if (opacity is not null && string.Equals(opacity, color, StringComparison.OrdinalIgnoreCase))
