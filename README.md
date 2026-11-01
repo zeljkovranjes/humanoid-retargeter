@@ -9,7 +9,7 @@ ships SAME weights licensed CC BY-NC 4.0 (non-commercial).
 
 - Input: FBX (7.x), BVH, glTF, GLB and VRM, plus MMD VMD/VPD motions and supported ANM, AN5 and CBA files. Multi-animation FBX files unpack into individual clips; batches can mix sources.
 - Built-in profiles for Mixamo, ActorCore, UE Mannequin, 3ds Max Biped, Rigify and other common rigs; unknown rigs are auto-mapped, with manual correction and saved presets.
-- Targets: s&box Human (default), classic Citizen, or a custom VMDL, FBX, GLB, glTF, PMX or PMD model.
+- Targets: s&box Human (default), classic Citizen, a custom VMDL, FBX, GLB, glTF, PMX or PMD model, or a 2D sprite (PNG or Sprite resource).
 - Output: a new animation VMDL, or clips spliced into an existing VMDL (with backup and collision guards). The s&box IK helper bones are baked the way the stock Citizen clips drive them, so the default animgraph works.
 
 ## Requirements
@@ -102,6 +102,7 @@ Standard output is ordinary compiled animation. MMD Playback works locally in si
 - RenderWare ANM/AN5 animations need a companion DFF skeleton. CBA animations need a joint-table JSON; compressed full-body CBA tracks are not supported.
 - The deep-learning fallback does not transfer fingers, and its weights are non-commercial (CC BY-NC 4.0).
 - The 2D view leaves fingers at rest, skips foot-plant cleanup and arm IK, and an armature only counts as flat when it lies along a coordinate plane.
+- A 2D sprite needs a transparent background. It is one image, so an arm drawn over the body stays painted there when the arm moves: draw arms clear of the body, or import a model rigged in separate layers.
 
 ## Development
 

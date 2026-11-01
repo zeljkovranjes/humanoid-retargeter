@@ -267,6 +267,7 @@ public sealed class RetargetWindow : Widget
 		targetCombo.AddItem( "s&box Citizen (classic)", "person_outline", TrySelectSboxCitizenTarget );
 		targetCombo.AddItem( "Custom model (.vmdl)…", "view_in_ar", PickCustomModelTarget );
 		targetCombo.AddItem( "Custom model file (.fbx/.glb/.gltf/.pmx/.pmd)…", "category", PickCustomFbxTarget );
+		targetCombo.AddItem( "2D sprite (.png/.sprite)…", "image", PickSpriteTarget );
 		_targetInfo = character.Layout.Add( RtStyle.Muted( new Label( "", character ) { WordWrap = true }, small: true ) );
 		_citizenSetupButton = character.Layout.Add( new Button( "Create Citizen animation model", "accessibility_new" ) { FixedHeight = 26 } );
 		_citizenSetupButton.Enabled = false;
@@ -503,6 +504,34 @@ public sealed class RetargetWindow : Widget
 			return;
 		var resolved = TargetPickers.FromModelFile( path, out var error, out var rejected );
 		ApplyPickedTarget( resolved, error, rejected );
+	}
+
+	void PickSpriteTarget()
+	{
+		var path = EditorUtility.OpenFileDialog( "Select 2D sprite", "2D Sprites (*.png *.sprite)", null );
+		if ( string.IsNullOrEmpty( path ) )
+			return;
+
+		SpriteTarget.Image image;
+		try
+		{
+			image = SpriteTarget.Load( path );
+			HumanoidRetargeter.Core.Sprites.SpriteRig.Fit( image.Alpha, image.Width, image.Height );
+		}
+		catch ( Exception e ) when ( e is ArgumentException or FormatException or IOException or InvalidOperationException )
+		{
+			ApplyPickedTarget( null, $"Could not import '{Path.GetFileName( path )}': {e.Message}" );
+			return;
+		}
+
+		new SpriteRigDialog( this, image )
+		{
+			Confirmed = rig =>
+			{
+				var resolved = TargetPickers.FromModelFile( SpriteTarget.WriteModel( image, rig ), out var error, out var rejected );
+				ApplyPickedTarget( resolved, error, rejected );
+			},
+		}.Show();
 	}
 
 	void ApplyPickedTarget( TargetPickers.ResolvedTarget resolved, string error,
