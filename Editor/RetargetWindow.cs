@@ -268,6 +268,9 @@ public sealed class RetargetWindow : Widget
 		targetCombo.AddItem( "Custom model (.vmdl)…", "view_in_ar", PickCustomModelTarget );
 		targetCombo.AddItem( "Custom model file (.fbx/.glb/.gltf/.pmx/.pmd)…", "category", PickCustomFbxTarget );
 		targetCombo.AddItem( "2D sprite (.png/.sprite)…", "image", PickSpriteTarget );
+		targetCombo.AddItem( "2D character: Chibi", "accessibility", () => PickBuiltInCharacter( "chibi" ) );
+		targetCombo.AddItem( "2D character: Humanoid", "accessibility", () => PickBuiltInCharacter( "humanoid" ) );
+		targetCombo.AddItem( "2D character: Profile", "accessibility", () => PickBuiltInCharacter( "profile" ) );
 		_targetInfo = character.Layout.Add( RtStyle.Muted( new Label( "", character ) { WordWrap = true }, small: true ) );
 		_citizenSetupButton = character.Layout.Add( new Button( "Create Citizen animation model", "accessibility_new" ) { FixedHeight = 26 } );
 		_citizenSetupButton.Enabled = false;
@@ -504,6 +507,18 @@ public sealed class RetargetWindow : Widget
 			return;
 		var resolved = TargetPickers.FromModelFile( path, out var error, out var rejected );
 		ApplyPickedTarget( resolved, error, rejected );
+	}
+
+	void PickBuiltInCharacter( string name )
+	{
+		var resolved = TargetPickers.FromBuiltInCharacter( name, out var error, out var rejected );
+		ApplyPickedTarget( resolved, error, rejected );
+		if ( resolved is null )
+			return;
+		// Bonebase's starting camera, whichever way the rig is drawn.
+		_viewCombo.CurrentIndex = 1;
+		SetPlanarView( HumanoidRetargeter.Core.Solve.PlanarView.Side );
+		_planarViewIsAuto = true;
 	}
 
 	void PickSpriteTarget()

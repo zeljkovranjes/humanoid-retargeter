@@ -13,6 +13,7 @@ Title: 2D Mode
 2D preview - a 2D clip on a flat character shows through a locked orthographic camera, square-on to its plane, in Preview and Trim; dragging pans and the wheel zooms instead of orbiting, and the camera angle list is hidden. A 3D character keeps its orbit camera
 2D badge - every animation in the list shows a 2D badge while a 2D view is picked, and so does the preview of a 2D clip
 2D sprites - a new target, 2D sprite (.png/.sprite), reads a humanoid off a sprite's silhouette, front or profile, lets you drag its joints, and builds a rigged model any 3D animation can be retargeted onto; output is the usual VMDL
+2D characters - Chibi, Humanoid and Profile, ready-made targets baked from Bonebase's own rigs and skin (one capsule per bone); limbs stay whole however the clip moves, and they start from the side
 Automatic 2D view - picking a flat humanoid (a sprite, or a flat VMDL, FBX or GLB) sets the 2D view to Front or Side as it was drawn, and going back to a 3D character turns it off
 Sprite preview - a flat character plays on open on a transparency checker, lit from the camera, standing at the foot of the view, with the source skeleton beside it: drag that skeleton, or move Turn, Tilt and Roll, and the character follows at once (about 40 ms)
 ### Fixed

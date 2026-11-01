@@ -269,6 +269,50 @@ public class SpriteGlbTests
         Assert.Equal(profile ? PlanarView.Side : PlanarView.Front, PlanarSolver.DrawnView(rig));
     }
 
+    private static string RepoFile(params string[] parts)
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null)
+        {
+            if (File.Exists(Path.Combine(dir.FullName, "humanoid-retargeter.sbproj")))
+                return Path.Combine(new[] { dir.FullName }.Concat(parts).ToArray());
+            dir = dir.Parent!;
+        }
+        throw new InvalidOperationException("Repo root (humanoid-retargeter.sbproj) not found.");
+    }
+
+    [Theory]
+    [InlineData("profile", 90f)]
+    [InlineData("humanoid", 0f)]
+    [InlineData("chibi", 0f)]
+    public void BuiltInCharacters_AreFlatMappedHumanoids(string name, float yaw)
+    {
+        var glb = File.ReadAllBytes(RepoFile("Assets", "data", "humanoid_retargeter", "sprites", $"bonebase_{name}.glb"));
+
+        var rig = Imported(glb);
+
+        Assert.Equal(new PlanarView(yaw), PlanarSolver.DrawnView(rig));
+        Assert.True(Walk(rig, new PlanarView(yaw)).SolvedFrames!.Count > 1);
+    }
+
+    [Fact]
+    public void BuiltInChibi_KeepsItsFeetOnTheGround()
+    {
+        // Chibi legs are far shorter than the walk's: the clip used to sink them through the floor.
+        var rig = Imported(File.ReadAllBytes(RepoFile("Assets", "data", "humanoid_retargeter", "sprites", "bonebase_chibi.glb")));
+        var feet = new[] { BoneRole.FootL, BoneRole.FootR, BoneRole.ToeL, BoneRole.ToeR }.Select(r => rig.BoneForRole(r)!.Value).ToArray();
+        var rest = feet.Min(f => rig.Skeleton.RestWorld[f].Pos.Y);
+
+        var clip = Walk(rig, PlanarView.Side);
+
+        var lowest = clip.SolvedFrames!.Min(frame =>
+        {
+            var world = new Pose(frame).ToWorld(rig.Skeleton);
+            return feet.Min(f => world[f].Pos.Y);
+        });
+        Assert.Equal(rest, lowest, 1);
+    }
+
     [Fact]
     public void Glb_StandsTheFigureOnTheGroundAtHumanHeight()
     {

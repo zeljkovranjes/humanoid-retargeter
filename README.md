@@ -9,7 +9,7 @@ ships SAME weights licensed CC BY-NC 4.0 (non-commercial).
 
 - Input: FBX (7.x), BVH, glTF, GLB and VRM, plus MMD VMD/VPD motions and supported ANM, AN5 and CBA files. Multi-animation FBX files unpack into individual clips; batches can mix sources.
 - Built-in profiles for Mixamo, ActorCore, UE Mannequin, 3ds Max Biped, Rigify and other common rigs; unknown rigs are auto-mapped, with manual correction and saved presets.
-- Targets: s&box Human (default), classic Citizen, a custom VMDL, FBX, GLB, glTF, PMX or PMD model, or a 2D sprite (PNG or Sprite resource).
+- Targets: s&box Human (default), classic Citizen, a custom VMDL, FBX, GLB, glTF, PMX or PMD model, a 2D sprite (PNG or Sprite resource), or a built-in 2D character (Chibi, Humanoid, Profile).
 - Output: a new animation VMDL, or clips spliced into an existing VMDL (with backup and collision guards). The s&box IK helper bones are baked the way the stock Citizen clips drive them, so the default animgraph works.
 
 ## Requirements
@@ -64,7 +64,7 @@ foreach ( var clip in result.Clips )
 | Model name | `retargeted_animations` | File name of the new animation VMDL (ignored when writing into an existing VMDL). |
 | Root motion | Keep as authored | Keep, strip (in place) or extract root motion. |
 | Looping | From source | Keep the source's looping or force it on or off. |
-| 2D view | Off (3D) | Retarget onto a 2D plane through a Side, Front, Back or 3/4 camera, relative to the way the character faces as the clip starts. Works on 3D armatures and on armatures drawn flat. 2D animations show a `2D` badge, and a flat character previews through a locked orthographic camera. |
+| 2D view | Off (3D) | Retarget onto a 2D plane through a Side, Front, Back or 3/4 camera, relative to the way the character faces as the clip starts. Works on 3D armatures and on armatures drawn flat. 2D animations show a `2D` badge, and a flat character previews beside its source skeleton with live Turn, Tilt and Roll. |
 | 2D foreshortening | On | In 2D, shorten a limb pointing toward the camera (down to 10%) instead of keeping it full length. |
 | Foot-plant cleanup | On | Locks planted feet to the ground so they don't slide. |
 | Arm effector IK | On | Pulls wrists onto limb-length-normalized source hand positions. |
@@ -102,7 +102,7 @@ Standard output is ordinary compiled animation. MMD Playback works locally in si
 - RenderWare ANM/AN5 animations need a companion DFF skeleton. CBA animations need a joint-table JSON; compressed full-body CBA tracks are not supported.
 - The deep-learning fallback does not transfer fingers, and its weights are non-commercial (CC BY-NC 4.0).
 - The 2D view leaves fingers at rest, skips foot-plant cleanup and arm IK, and an armature only counts as flat when it lies along a coordinate plane.
-- A 2D sprite needs a transparent background. It is one image, so an arm drawn over the body stays painted there when the arm moves: draw arms clear of the body, or import a model rigged in separate layers.
+- A 2D sprite needs a transparent background. It is one image, so an arm drawn over the body stays painted there when the arm moves: draw arms clear of the body, use a built-in 2D character, or import a model rigged in separate layers.
 
 ## Development
 

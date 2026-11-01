@@ -22,6 +22,7 @@ DISCORD_POST.txt
 HANDOFF.md
 # dev/ stays local (corpus, data, output, rigs) except the plain-.NET harness projects the tests build against
 dev/*
+!dev/sprite-templates/
 !dev/HumanoidRetargeter.Core.csproj
 !dev/HumanoidRetargeter.Dev.csproj
 dev/data/

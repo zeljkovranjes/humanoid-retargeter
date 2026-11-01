@@ -250,6 +250,20 @@ public static class TargetPickers
 		};
 	}
 
+	/// <summary>A built-in 2D character: Bonebase's profile, humanoid or chibi rig, each body
+	/// part a layer of its own, shipped as a rigged model.</summary>
+	public static ResolvedTarget FromBuiltInCharacter( string name, out string error, out RejectedTarget rejected )
+	{
+		var path = EditorPipeline.FindLibraryAssetFile( $"{EditorPipeline.BuiltInCharacterFolder}/bonebase_{name}.glb" );
+		if ( path is null )
+		{
+			error = $"Built-in 2D character '{name}' not found. Is the humanoid_retargeter library installed?";
+			rejected = null;
+			return null;
+		}
+		return FromModelFile( path, out error, out rejected );
+	}
+
 	/// <summary>
 	/// Compatibility entry point for building a target from an FBX file.
 	/// </summary>
