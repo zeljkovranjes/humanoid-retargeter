@@ -99,6 +99,7 @@ public sealed class PlanarSolver : IRetargetSolver
         if (clip.Frames.Count == 0)
             return output;
         var plan = new Plan(source, clip, sourceMap, target, options);
+        plan.GroundFeet(clip);
         foreach (var frame in clip.Frames)
             output.Frames.Add(plan.SolveFrame(frame));
         return output;
@@ -355,6 +356,7 @@ public sealed class PlanarSolver : IRetargetSolver
         private readonly float _scaleH;
         private readonly float _scaleV;
         private readonly float _maxTurn;
+        private float _groundLift;
         private readonly Vector3[] _position;
         private readonly Quaternion[] _rotation;
         private readonly XForm[] _world;
@@ -600,6 +602,36 @@ public sealed class PlanarSolver : IRetargetSolver
             return reference + _srcUp * (motionGround - restGround);
         }
 
+        /// <summary>One height correction for the whole clip, so the lowest a foot gets is
+        /// where it rests. Legs shorter than the source's cannot reach as far down as the
+        /// hips drop; correcting frame by frame would flatten a jump.</summary>
+        public void GroundFeet(Clip clip)
+        {
+            var feet = new List<int>();
+            foreach (var role in new[] { BoneRole.FootL, BoneRole.FootR, BoneRole.ToeL, BoneRole.ToeR })
+            {
+                if (_rig.BoneForRole(role) is { } bone && _isDriven[bone])
+                    feet.Add(bone);
+            }
+            if (feet.Count == 0)
+                return;
+
+            var rest = float.MaxValue;
+            foreach (var foot in feet)
+                rest = MathF.Min(rest, Vector3.Dot(_tgt.RestWorld[foot].Pos, _tgtView.Up));
+
+            var lowest = float.MaxValue;
+            foreach (var frame in clip.Frames)
+            {
+                SolveFrame(frame);
+                foreach (var foot in feet)
+                    lowest = MathF.Min(lowest, Vector3.Dot(_position[foot], _tgtView.Up));
+            }
+            foreach (var link in _links)
+                link.HeldAngle = null;
+            _groundLift = rest - lowest;
+        }
+
         public XForm[] SolveFrame(XForm[] sourceLocals)
         {
             var source = new Pose(sourceLocals).ToWorld(_src);
@@ -633,7 +665,7 @@ public sealed class PlanarSolver : IRetargetSolver
                 hips = _firstHips + _srcUp * Vector3.Dot(hips - _firstHips, _srcUp);
             var travel = _srcView.ToView(hips - _hipsReference);
             return _tgt.RestWorld[_tgtHips].Pos + _tgtView.ToWorld(
-                new Vector3(travel.X * _scaleH, travel.Y * _scaleV, 0f));
+                new Vector3(travel.X * _scaleH, travel.Y * _scaleV + _groundLift, 0f));
         }
 
         private void SolveLink(Link link, XForm[] source)
