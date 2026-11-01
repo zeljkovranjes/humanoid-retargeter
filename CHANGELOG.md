@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-11-01
+Title: 2D Mode
+### Added
+# Solve
+2D view - a new option (Side, Front, Back, 3/4) retargets a 3D clip through an orthographic camera onto a plane of the target: each bone takes the direction of its projected source segment and the character keeps its own proportions, on the s&box Human, Citizen and custom armatures, including ones drawn flat, with the usual DMX and VMDL output
+2D foreshortening - a limb pointing at the camera shortens as the projection does (down to 10%); on by default, untick it to keep every bone full length
+2D depth order - shoulders and hips sit at the source's own depth, scaled to the target, so the near limbs stay in front of the far ones and swap as the character turns
+
 ## 2026-10-24
 Title: Runtime Facing
 ### Added

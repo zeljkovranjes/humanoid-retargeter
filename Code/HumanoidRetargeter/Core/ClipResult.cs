@@ -89,6 +89,7 @@ public sealed class ClipResult
             : MorphWeights.ToDictionary( entry => entry.Key, entry => keptFrames.Select( index => entry.Value[ index ] ).ToArray() ),
         Fps = Fps,
         Looping = Looping,
+        View2d = View2d,
         ExtractMotion = ExtractMotion,
         FootstepEvents = FootstepEvents,
         IsMirroredVariant = IsMirroredVariant,
@@ -101,6 +102,10 @@ public sealed class ClipResult
 
     /// <summary>Looping flag of the output sequence (source flag or request override).</summary>
     public bool Looping { get; init; }
+
+    /// <summary>The camera of a clip solved in 2D (<see cref="SolverKind.Planar"/>); null for a
+    /// 3D clip. See <see cref="Solve.PlanarSolver.CameraAxes"/> to view it square-on.</summary>
+    public Solve.PlanarView? View2d { get; init; }
 
     /// <summary>Whether the clip's vmdl AnimFile entry carries an ExtractMotion node
     /// (request had <c>RootMotion == Extract</c>).</summary>

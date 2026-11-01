@@ -64,6 +64,8 @@ foreach ( var clip in result.Clips )
 | Model name | `retargeted_animations` | File name of the new animation VMDL (ignored when writing into an existing VMDL). |
 | Root motion | Keep as authored | Keep, strip (in place) or extract root motion. |
 | Looping | From source | Keep the source's looping or force it on or off. |
+| 2D view | Off (3D) | Retarget onto a 2D plane through a Side, Front, Back or 3/4 camera, relative to the way the character faces as the clip starts. Works on 3D armatures and on armatures drawn flat. 2D animations show a `2D` badge, and a flat character previews through a locked orthographic camera. |
+| 2D foreshortening | On | In 2D, shorten a limb pointing toward the camera (down to 10%) instead of keeping it full length. |
 | Foot-plant cleanup | On | Locks planted feet to the ground so they don't slide. |
 | Arm effector IK | On | Pulls wrists onto limb-length-normalized source hand positions. |
 | Natural shoulders, neck, head, feet | On | Keeps the target body's own carriage and transfers only the motion. |
@@ -81,7 +83,9 @@ profiles (or auto-mapped from bone names and topology) to assign humanoid roles,
 solved onto the target rig role by role, with fingers, foot plants, root motion and IK helper bones
 handled in separate passes. The result is written as DMX animation files and a VMDL that s&box
 compiles. Rigs nothing else can map can use the experimental SAME deep-learning solver (no finger
-transfer). All of this lives in `Code/HumanoidRetargeter/Core` and builds as plain .NET; the editor
+transfer). The 2D view swaps the solver for one that projects the source through an orthographic camera and
+turns each target bone to its projected direction, keeping the target's proportions; the output is the same
+DMX and VMDL. All of this lives in `Code/HumanoidRetargeter/Core` and builds as plain .NET; the editor
 window, preview and asset writing live in `Editor/`.
 
 ## Multiplayer
@@ -97,6 +101,7 @@ Standard output is ordinary compiled animation. MMD Playback works locally in si
 - Use FBX 7.x, and keep external model textures and glTF buffers alongside their model.
 - RenderWare ANM/AN5 animations need a companion DFF skeleton. CBA animations need a joint-table JSON; compressed full-body CBA tracks are not supported.
 - The deep-learning fallback does not transfer fingers, and its weights are non-commercial (CC BY-NC 4.0).
+- The 2D view leaves fingers at rest, skips foot-plant cleanup and arm IK, and an armature only counts as flat when it lies along a coordinate plane.
 
 ## Development
 

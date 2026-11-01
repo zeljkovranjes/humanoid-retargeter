@@ -81,6 +81,18 @@ public sealed class SolveOptions
     /// their rest locals.</summary>
     public bool TransferFingers { get; init; } = true;
 
+    /// <summary>The camera of a <see cref="SolverKind.Planar"/> solve.</summary>
+    public PlanarView View { get; init; } = PlanarView.Side;
+
+    /// <summary>Whether a <see cref="SolverKind.Planar"/> solve shortens a limb that points
+    /// toward the camera, as the projection does. Off keeps every bone its full length, which
+    /// can push a foot past the ground when a leg swings along the view axis.</summary>
+    public bool Foreshorten { get; init; } = true;
+
+    // A flat armature has no character frame for the root-motion pass, so the solver strips
+    // the travel itself.
+    internal bool PlanarInPlace { get; init; }
+
     /// <summary>Output clip name; null = the source clip's name.</summary>
     public string? ClipName { get; init; }
 
