@@ -8,8 +8,10 @@ Title: 2D Mode
 2D foreshortening - a limb pointing at the camera shortens as the projection does (down to 10%); on by default, untick it to keep every bone full length
 2D depth order - shoulders and hips sit at the source's own depth, scaled to the target, so the near limbs stay in front of the far ones and swap as the character turns
 # Editor
+2D preview - a 2D clip on a flat character shows through a locked orthographic camera, square-on to its plane, in Preview and Trim; dragging pans and the wheel zooms instead of orbiting, and the camera angle list is hidden. A 3D character keeps its orbit camera
 2D badge - every animation in the list shows a 2D badge while a 2D view is picked, and so does the preview of a 2D clip
 Automatic 2D view - picking a flat humanoid (a sprite, or a flat VMDL, FBX or GLB) sets the 2D view to Front or Side as it was drawn, and going back to a 3D character turns it off
+Sprite preview - a flat character plays on open the way the editor previews a Sprite: lit from the camera, filling the view, with no ground
 
 ## 2026-10-24
 Title: Runtime Facing
