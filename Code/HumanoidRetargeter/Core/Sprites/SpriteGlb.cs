@@ -20,11 +20,12 @@ using Vector3 = System.Numerics.Vector3; // s&box compat: shadow engine's global
 /// custom model takes (material, compile, preview, DMX).
 /// </summary>
 /// <remarks>
-/// As in Bonebase each part (body, arms, legs) is a layer of its own, so a limb that moves
-/// leaves the body whole behind it. Pixels near a limb belong to it as well as to whatever
-/// lies under it, and on a profile both arms and both legs cover the same pixels: the far
-/// limb is the near one's copy, and it shows once they swing apart. Bones keep Mixamo's names
-/// so the rig is recognized outright, even when a profile's legs share a position.
+/// As in Bonebase each part (head, body, arms, legs) is a layer of its own, so a limb that
+/// moves leaves the body whole behind it. A limb takes the pixels as wide as the art really
+/// is around each bone, as well as whatever lies under it, and on a profile both arms and both
+/// legs cover the same pixels: the far limb is the near one's copy, and it shows once they
+/// swing apart. Bones keep Mixamo's names so the rig is recognized outright, even when a
+/// profile's legs share a position.
 /// </remarks>
 public static class SpriteGlb
 {
@@ -36,8 +37,8 @@ public static class SpriteGlb
     /// <summary>The gap between layers, as a share of the figure's height.</summary>
     private const float LayerGap = 0.004f;
 
-    /// <summary>The share of the figure's height a joint blends across.</summary>
-    private const float JointBlend = 0.025f;
+    /// <summary>Points read along a bone to measure how wide the art is around it.</summary>
+    private const int WidthSamples = 9;
 
     /// <summary>How far past the last joint a chain's tip reaches, as a share of its last bone.</summary>
     private const float TipReach = 0.4f;
@@ -64,9 +65,9 @@ public static class SpriteGlb
         (BoneRole.FootR, BoneRole.LowerLegR, "RightFoot"), (BoneRole.ToeR, BoneRole.FootR, "RightToeBase"),
     };
 
-    private sealed record Part(BoneRole[] Chain, float Radius, bool IsLimb, int FrontLayer, int ProfileLayer)
+    private sealed record Part(BoneRole[] Chain, float MaxRadius, int FrontLayer, int ProfileLayer)
     {
-        public List<(Vector2 From, Vector2 To)> Segments { get; } = new();
+        public List<(Vector2 From, Vector2 To, float Radius)> Segments { get; } = new();
         public int[] Joints { get; set; } = Array.Empty<int>();
         public HashSet<(int X, int Y)> Cells { get; } = new();
     }
@@ -74,12 +75,14 @@ public static class SpriteGlb
     private static Part[] Parts() => new[]
     {
         // Bonebase's part order: the far side under the body, the near side over it, and the
-        // character's right is the near side of a profile facing screen-right.
-        new Part(new[] { BoneRole.UpperArmL, BoneRole.LowerArmL, BoneRole.HandL }, 0.05f, true, 2, -2),
-        new Part(new[] { BoneRole.UpperLegL, BoneRole.LowerLegL, BoneRole.FootL, BoneRole.ToeL }, 0.07f, true, -1, -1),
-        new Part(new[] { BoneRole.Hips, BoneRole.Spine0, BoneRole.Spine1, BoneRole.Spine2, BoneRole.Neck, BoneRole.Head }, 0.1f, false, 0, 0),
-        new Part(new[] { BoneRole.UpperLegR, BoneRole.LowerLegR, BoneRole.FootR, BoneRole.ToeR }, 0.07f, true, -1, 2),
-        new Part(new[] { BoneRole.UpperArmR, BoneRole.LowerArmR, BoneRole.HandR }, 0.05f, true, 2, 3),
+        // character's right is the near side of a profile facing screen-right. The head is one
+        // rigid piece on top, as a 2D rig has it: a face stretched over two bones crumples.
+        new Part(new[] { BoneRole.UpperArmL, BoneRole.LowerArmL, BoneRole.HandL }, 0.05f, 2, -2),
+        new Part(new[] { BoneRole.UpperLegL, BoneRole.LowerLegL, BoneRole.FootL, BoneRole.ToeL }, 0.07f, -1, -1),
+        new Part(new[] { BoneRole.Hips, BoneRole.Spine0, BoneRole.Spine1, BoneRole.Spine2, BoneRole.Neck }, 0.2f, 0, 0),
+        new Part(new[] { BoneRole.Head }, 0.2f, 3, 1),
+        new Part(new[] { BoneRole.UpperLegR, BoneRole.LowerLegR, BoneRole.FootR, BoneRole.ToeR }, 0.07f, -1, 2),
+        new Part(new[] { BoneRole.UpperArmR, BoneRole.LowerArmR, BoneRole.HandR }, 0.05f, 2, 3),
     };
 
     /// <summary>
@@ -122,12 +125,12 @@ public static class SpriteGlb
                     : part.Chain[k] == BoneRole.Head
                         ? new Vector2(from.X, rig.Figure.Top)
                         : from + (from - rig.Joints[part.Chain[k - 1]]) * TipReach;
-                part.Segments.Add((from, to));
+                part.Segments.Add((from, to, MeasuredRadius(rig, alpha, from, to, part.Chain[k] == BoneRole.Head, part.MaxRadius * figureSize)));
             }
         }
 
         var cellSize = Math.Max(1, (int)MathF.Ceiling(Math.Max(rig.Width, rig.Height) / (float)MaxCells));
-        AssignCells(rig, alpha, parts, cellSize, figureSize);
+        AssignCells(rig, alpha, parts, cellSize);
 
         using var buffer = new MemoryStream();
         using var binary = new BinaryWriter(buffer);
@@ -151,7 +154,6 @@ public static class SpriteGlb
 
         var vertices = new List<(Vector3 Position, Vector2 Uv, int JointA, int JointB, float WeightB)>();
         var triangles = new List<int>();
-        var blend = JointBlend * figureSize;
         var layerGap = LayerGap * FigureHeightMeters;
         foreach (var part in parts)
         {
@@ -164,7 +166,7 @@ public static class SpriteGlb
                 if (index.TryGetValue((gridX, gridY), out var known))
                     return known;
                 var pixel = new Vector2(gridX * cellSize, gridY * cellSize);
-                var (jointA, jointB, weightB) = Skin(part, pixel, blend);
+                var (jointA, jointB, weightB) = Skin(part, pixel);
                 var position = World(pixel) + new Vector3(0f, 0f, layer);
                 vertices.Add((position, new Vector2(pixel.X / rig.Width, pixel.Y / rig.Height), jointA, jointB, weightB));
                 return index[(gridX, gridY)] = vertices.Count - 1;
@@ -333,13 +335,51 @@ public static class SpriteGlb
         return Container(json, buffer.ToArray());
     }
 
-    /// <summary>Gives every grid cell over the figure to the parts it belongs to.</summary>
-    private static void AssignCells(SpriteRig rig, byte[] alpha, Part[] parts, int cellSize, float figureSize)
+    /// <summary>How far the art reaches either side of a bone, up to <paramref name="cap"/>:
+    /// the cap stands when a bone lies outside the art. A round head is as wide as its widest
+    /// row; anything else is read by its middle, past the joints that run into other parts.</summary>
+    private static float MeasuredRadius(SpriteRig rig, byte[] alpha, Vector2 from, Vector2 to, bool isHead, float cap)
     {
-        var body = Array.Find(parts, part => !part.IsLimb)!;
+        var line = to - from;
+        if (line.LengthSquared() == 0f)
+            return cap;
+        var across = Vector2.Normalize(new Vector2(-line.Y, line.X));
+        var reaches = new float[WidthSamples];
+        for (var i = 0; i < WidthSamples; i++)
+        {
+            var point = from + line * ((i + 0.5f) / WidthSamples);
+            reaches[i] = Math.Max(InkReach(rig, alpha, point, across, cap), InkReach(rig, alpha, point, -across, cap));
+        }
+        Array.Sort(reaches);
+        var reach = isHead ? reaches[^1] : reaches[WidthSamples / 2];
+        return reach > 0f ? reach : cap;
+    }
+
+    /// <summary>How far the opaque pixels run from a point along a direction, up to <paramref name="cap"/>.</summary>
+    private static float InkReach(SpriteRig rig, byte[] alpha, Vector2 point, Vector2 direction, float cap)
+    {
+        var reach = 0f;
+        while (reach < cap)
+        {
+            var sample = point + direction * (reach + 1f);
+            int x = (int)sample.X, y = (int)sample.Y;
+            if (x < 0 || y < 0 || x >= rig.Width || y >= rig.Height || alpha[y * rig.Width + x] < SpriteRig.OpaqueAlpha)
+                break;
+            reach += 1f;
+        }
+        return reach;
+    }
+
+    /// <summary>Gives every grid cell over the figure to the parts it belongs to. A cell goes
+    /// to the part it sits deepest inside, and to any other it falls within: distance is
+    /// measured in each bone's own width, or a thin arm would win the wide body's pixels.</summary>
+    private static void AssignCells(SpriteRig rig, byte[] alpha, Part[] parts, int cellSize)
+    {
+        var body = Array.FindIndex(parts, part => part.Chain[0] == BoneRole.Hips);
+        var neckRow = rig.Joints[BoneRole.Neck].Y;
         var gridWidth = rig.Width / cellSize + 1;
         var gridHeight = rig.Height / cellSize + 1;
-        var distances = new float[parts.Length];
+        var depths = new float[parts.Length];
         for (var y = 0; y < gridHeight; y++)
         {
             for (var x = 0; x < gridWidth; x++)
@@ -347,19 +387,22 @@ public static class SpriteGlb
                 if (!CellHasInk(rig, alpha, x, y, cellSize))
                     continue;
                 var centre = new Vector2((x + 0.5f) * cellSize, (y + 0.5f) * cellSize);
-                var nearest = 0;
+                var deepest = 0;
                 for (var p = 0; p < parts.Length; p++)
                 {
-                    distances[p] = float.MaxValue;
-                    foreach (var (from, to) in parts[p].Segments)
-                        distances[p] = MathF.Min(distances[p], SegmentDistance(centre, from, to));
-                    if (distances[p] < distances[nearest])
-                        nearest = p;
+                    depths[p] = float.MaxValue;
+                    foreach (var (from, to, radius) in parts[p].Segments)
+                        depths[p] = MathF.Min(depths[p], SegmentDistance(centre, from, to) / radius);
+                    // Nothing of the head stays behind on the body but the chin, which reads as a neck.
+                    if (p == body && centre.Y < neckRow)
+                        depths[p] = float.MaxValue;
+                    if (depths[p] < depths[deepest])
+                        deepest = p;
                 }
-                parts[nearest].Cells.Add((x, y));
+                parts[deepest].Cells.Add((x, y));
                 for (var p = 0; p < parts.Length; p++)
                 {
-                    if (distances[p] <= parts[p].Radius * figureSize)
+                    if (depths[p] <= 1f)
                         parts[p].Cells.Add((x, y));
                 }
             }
@@ -392,9 +435,10 @@ public static class SpriteGlb
         return Vector2.Distance(point, from + line * along);
     }
 
-    /// <summary>The bone a vertex rides, and the next one along the chain it eases into near
-    /// their joint, so a bent elbow folds instead of tearing.</summary>
-    private static (int JointA, int JointB, float WeightB) Skin(Part part, Vector2 pixel, float blend)
+    /// <summary>The bone a vertex rides and how much of it the next joint takes: a bone the
+    /// solver shortens takes its skin along instead of folding it past the joint. The share
+    /// rises as a cube: spread evenly, every bent limb curves end to end like a noodle.</summary>
+    private static (int JointA, int JointB, float WeightB) Skin(Part part, Vector2 pixel)
     {
         var best = 0;
         var bestDistance = float.MaxValue;
@@ -408,23 +452,12 @@ public static class SpriteGlb
             }
         }
 
-        var neighbour = -1;
-        var neighbourDistance = float.MaxValue;
-        foreach (var k in new[] { best - 1, best + 1 })
-        {
-            if (k < 0 || k >= part.Segments.Count)
-                continue;
-            var distance = SegmentDistance(pixel, part.Segments[k].From, part.Segments[k].To);
-            if (distance < neighbourDistance)
-            {
-                neighbourDistance = distance;
-                neighbour = k;
-            }
-        }
-        if (neighbour < 0)
+        if (best + 1 == part.Segments.Count)
             return (part.Joints[best], part.Joints[best], 0f);
-        var weight = 0.5f * Math.Clamp(1f - (neighbourDistance - bestDistance) / blend, 0f, 1f);
-        return (part.Joints[best], part.Joints[neighbour], weight);
+        var (from, to, _) = part.Segments[best];
+        var line = to - from;
+        var along = Math.Clamp(Vector2.Dot(pixel - from, line) / line.LengthSquared(), 0f, 1f);
+        return (part.Joints[best], part.Joints[best + 1], along * along * along);
     }
 
     private static byte[] Container(byte[] json, byte[] binary)

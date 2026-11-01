@@ -1,5 +1,6 @@
 using System.Numerics;
 using System.Text;
+using System.Text.Json;
 using HumanoidRetargeter.Core;
 using HumanoidRetargeter.Core.Formats.Gltf;
 using HumanoidRetargeter.Core.Mapping;
@@ -239,6 +240,88 @@ public class SpriteGlbTests
         var knee = rig.Joints[BoneRole.LowerLegL];
         var onLeg = knee.Y < 176f ? 142f + (knee.Y - 130f) * 26f / 46f : 168f - (knee.Y - 176f) * 24f / 46f;
         Assert.True(MathF.Abs(knee.X - onLeg) < 3f, $"knee at {knee}, the leg is at x {onLeg}");
+    }
+
+    [Fact]
+    public void Glb_LimbsTakeOnlyTheirOwnPixels()
+    {
+        var alpha = FigureWithClearArms();
+        var rig = SpriteRig.Fit(alpha, Size, Size);
+
+        var pieces = Vertices(SpriteGlb.Write(rig, alpha, Png, "sprite"));
+
+        // The trunk's edge is 154: an arm riding pixels short of the gap would tear the shirt.
+        var armLeft = pieces.Where(v => v.Bone is "LeftArm" or "LeftForeArm" or "LeftHand").Min(v => v.X);
+        Assert.True(armLeft > 154f, $"the arm reaches in to x {armLeft}");
+    }
+
+    [Fact]
+    public void Glb_KeepsTheHeadOnePieceOverEverything()
+    {
+        var alpha = FigureWithClearArms();
+        var rig = SpriteRig.Fit(alpha, Size, Size);
+
+        var pieces = Vertices(SpriteGlb.Write(rig, alpha, Png, "sprite"));
+
+        var head = pieces.Where(v => v.Bone == "Head" || v.SecondBone == "Head").ToList();
+        Assert.All(head, v => Assert.Equal(("Head", 0f), (v.Bone, v.SecondWeight)));
+        Assert.True(head.Min(v => v.Z) > pieces.Where(v => v.Bone != "Head").Max(v => v.Z));
+        var eye = (X: 136f, Y: 40f);
+        Assert.DoesNotContain(pieces, v => v.Bone != "Head" && MathF.Abs(v.X - eye.X) < 4f && MathF.Abs(v.Y - eye.Y) < 4f);
+    }
+
+    [Fact]
+    public void Glb_KeepsALimbStraightAndHandsItsEndToTheNextBone()
+    {
+        var alpha = FigureWithClearArms();
+        var rig = SpriteRig.Fit(alpha, Size, Size);
+        var shoulderRow = rig.Joints[BoneRole.UpperArmL].Y;
+        var elbowRow = rig.Joints[BoneRole.LowerArmL].Y;
+
+        var pieces = Vertices(SpriteGlb.Write(rig, alpha, Png, "sprite"));
+
+        float ShareAt(float along)
+        {
+            var row = shoulderRow + (elbowRow - shoulderRow) * along;
+            return pieces.Where(v => v.Bone == "LeftArm" && v.SecondBone == "LeftForeArm").OrderBy(v => MathF.Abs(v.Y - row)).First().SecondWeight;
+        }
+        Assert.True(ShareAt(0.5f) < 0.25f, $"the middle of the bone is {ShareAt(0.5f)} on the next one");
+        Assert.True(ShareAt(0.95f) > 0.6f, $"the end of the bone is {ShareAt(0.95f)} on the next one");
+    }
+
+    /// <summary>The written mesh, back in image pixels (y down), by the bones each vertex rides.</summary>
+    private static List<(float X, float Y, float Z, string Bone, string SecondBone, float SecondWeight)> Vertices(byte[] glb)
+    {
+        var jsonLength = BitConverter.ToInt32(glb, 12);
+        using var json = JsonDocument.Parse(glb.AsMemory(20, jsonLength));
+        var root = json.RootElement;
+        var binary = 20 + jsonLength + 8;
+        var attributes = root.GetProperty("meshes")[0].GetProperty("primitives")[0].GetProperty("attributes");
+        var names = root.GetProperty("skins")[0].GetProperty("joints").EnumerateArray()
+            .Select(j => root.GetProperty("nodes")[j.GetInt32()].GetProperty("name").GetString()!.Replace("mixamorig_", ""))
+            .ToArray();
+        int Data(string attribute, out int count)
+        {
+            var accessor = root.GetProperty("accessors")[attributes.GetProperty(attribute).GetInt32()];
+            count = accessor.GetProperty("count").GetInt32();
+            return binary + root.GetProperty("bufferViews")[accessor.GetProperty("bufferView").GetInt32()].GetProperty("byteOffset").GetInt32();
+        }
+        var positions = Data("POSITION", out var total);
+        var uvs = Data("TEXCOORD_0", out _);
+        var joints = Data("JOINTS_0", out _);
+        var weights = Data("WEIGHTS_0", out _);
+        var vertices = new List<(float, float, float, string, string, float)>();
+        for (var i = 0; i < total / 2; i++)
+        {
+            vertices.Add((
+                BitConverter.ToSingle(glb, uvs + i * 8) * Size,
+                BitConverter.ToSingle(glb, uvs + i * 8 + 4) * Size,
+                BitConverter.ToSingle(glb, positions + i * 12 + 8),
+                names[BitConverter.ToUInt16(glb, joints + i * 8)],
+                names[BitConverter.ToUInt16(glb, joints + i * 8 + 2)],
+                BitConverter.ToSingle(glb, weights + i * 16 + 4)));
+        }
+        return vertices;
     }
 
     [Fact]
