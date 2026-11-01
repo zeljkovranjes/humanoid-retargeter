@@ -146,6 +146,78 @@ public class SpriteGlbTests
     }
 
     [Fact]
+    public void Fit_DoesNotTakeTheTopOfARoundHeadForTheNeck()
+    {
+        var alpha = FrontFigure();
+
+        var rig = SpriteRig.Fit(alpha, Size, Size);
+
+        // The figure's neck is near y 56, its hips near 130. A neck read at the crown of the
+        // head (y 40) pulled every joint under it up the body.
+        Assert.InRange(rig.Joints[BoneRole.Neck].Y, 48f, 66f);
+        Assert.InRange(rig.Joints[BoneRole.Hips].Y, 118f, 150f);
+    }
+
+    [Fact]
+    public void Fit_ReadsTheCrotchFromTheGapBetweenTheLegs()
+    {
+        var alpha = new byte[Size * Size];
+        Line(alpha, (128, 42), (128, 44), 14);
+        Line(alpha, (128, 60), (128, 150), 18);
+        foreach (var side in new[] { 1f, -1f })
+            Line(alpha, (128 + 12 * side, 150), (128 + 18 * side, 222), 8);
+
+        var rig = SpriteRig.Fit(alpha, Size, Size);
+
+        Assert.InRange(rig.Joints[BoneRole.UpperLegL].Y, 150f, 180f);
+    }
+
+    [Fact]
+    public void Fit_EndsAStraightHangingArmAtItsHand()
+    {
+        // Wide shoulders over arms hanging straight down, reaching past the template's hands.
+        var alpha = new byte[Size * Size];
+        Line(alpha, (128, 42), (128, 44), 14);
+        Line(alpha, (128, 62), (128, 130), 16);
+        foreach (var side in new[] { 1f, -1f })
+        {
+            Line(alpha, (128, 66), (128 + 80 * side, 66), 6);
+            Line(alpha, (128 + 80 * side, 66), (128 + 80 * side, 140), 6);
+            Line(alpha, (128 + 12 * side, 130), (128 + 16 * side, 222), 9);
+        }
+
+        var rig = SpriteRig.Fit(alpha, Size, Size);
+
+        Assert.True(rig.Joints[BoneRole.HandL].Y > 130f, $"hand at {rig.Joints[BoneRole.HandL].Y}");
+    }
+
+    [Fact]
+    public void Fit_DoesNotTakeTheGapBetweenTwoShoesForTheCrotch()
+    {
+        var alpha = new byte[Size * Size];
+        Line(alpha, (128, 42), (128, 44), 14);
+        Line(alpha, (128, 60), (128, 205), 20);
+        foreach (var side in new[] { 1f, -1f })
+            Line(alpha, (128 + 14 * side, 210), (128 + 16 * side, 222), 8);
+
+        var rig = SpriteRig.Fit(alpha, Size, Size, isProfile: false);
+
+        Assert.True(rig.Joints[BoneRole.Hips].Y < 180f, $"hips at {rig.Joints[BoneRole.Hips].Y}");
+    }
+
+    [Fact]
+    public void Fit_KeepsTemplateProportionsWithoutANeck()
+    {
+        // A hooded figure: no row narrower than the head and shoulders.
+        var alpha = new byte[Size * Size];
+        Line(alpha, (128, 50), (128, 210), 26);
+
+        var rig = SpriteRig.Fit(alpha, Size, Size, isProfile: false);
+
+        Assert.InRange(rig.Joints[BoneRole.Neck].Y, 55f, 80f);
+    }
+
+    [Fact]
     public void Fit_TakesANarrowStandingFigureForAProfile()
     {
         var rig = SpriteRig.Fit(ProfileFigure(), Size, Size);

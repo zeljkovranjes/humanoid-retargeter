@@ -27,11 +27,23 @@ public sealed class SpriteRig
     private const float TemplateNeck = 16f;
     private const float TemplateBottom = 61.5f;
 
+    /// <summary>The template's crotch, where the legs part.</summary>
+    private const float TemplateCrotch = 38f;
+
     /// <summary>The template's width across the shoulders, arms included.</summary>
     private const float TemplateBodyWidth = 24f;
 
     /// <summary>Where a neck can be, as shares of the figure's height.</summary>
     private const float NeckFrom = 0.1f, NeckTo = 0.55f;
+
+    /// <summary>How far below the row the shoulders are looked for, as a share of the height.</summary>
+    private const float ShoulderReach = 0.25f;
+
+    /// <summary>A neck is narrower than the head and shoulders by this share of the narrower of them.</summary>
+    private const float NeckDip = 0.1f;
+
+    /// <summary>Where a crotch can be, as shares of the figure's height: lower is the gap between two shoes.</summary>
+    private const float CrotchFrom = 0.3f, CrotchTo = 0.75f;
 
     /// <summary>Toes must reach this share of the height past the legs to say which way a profile faces.</summary>
     private const float FacingReach = 0.03f;
@@ -157,16 +169,22 @@ public sealed class SpriteRig
 
         var neck = NeckRow(alpha, width, figure);
         var centre = TrunkCentre(alpha, width, figure);
+        var crotch = profile ? null : CrotchRow(alpha, width, figure, centre, neck);
         var mirror = left ? -1f : 1f;
         // Head and body fit apart: a chibi's head is half of it, a realistic figure's an eighth.
         var headScale = (neck - figure.Top) / (TemplateNeck - TemplateTop);
         var bodyScale = (figure.Bottom + 1 - neck) / (TemplateBottom - TemplateNeck);
+        var waist = crotch ?? neck + (TemplateCrotch - TemplateNeck) * bodyScale;
+        var trunkScale = (waist - neck) / (TemplateCrotch - TemplateNeck);
+        var legScale = (figure.Bottom + 1 - waist) / (TemplateBottom - TemplateCrotch);
         var widthScale = MathF.Min(bodyScale, RowWidth(alpha, width, figure, neck + (figure.Bottom - neck) / 6) / TemplateBodyWidth);
         foreach (var (role, x, y) in profile ? ProfileTemplate : FrontTemplate)
         {
             var rowY = y <= TemplateNeck
                 ? figure.Top + (y - TemplateTop) * headScale
-                : neck + (y - TemplateNeck) * bodyScale;
+                : y <= TemplateCrotch
+                    ? neck + (y - TemplateNeck) * trunkScale
+                    : waist + (y - TemplateCrotch) * legScale;
             rig.Joints[role] = new Vector2(centre + (x - TemplateCentre) * widthScale * mirror, rowY);
         }
         foreach (var (leftRole, rightRole) in Sides)
@@ -179,35 +197,72 @@ public sealed class SpriteRig
         return rig;
     }
 
-    /// <summary>The narrowest row between head and shoulders: where the head stops.</summary>
+    /// <summary>Where the head stops: the row that dips deepest under both the head above it
+    /// and the shoulders below. The top of a round head is narrow too, but nothing above it
+    /// is wider. With no dip (a hood, long hair) the template's proportion stands.</summary>
     private static int NeckRow(byte[] alpha, int width, (int Left, int Top, int Right, int Bottom) figure)
     {
         var size = figure.Bottom - figure.Top + 1;
         var first = figure.Top + (int)(size * NeckFrom);
         var last = figure.Top + (int)(size * NeckTo);
-        var neck = first;
-        var narrowest = int.MaxValue;
+        var reach = (int)(size * ShoulderReach);
+        var neck = figure.Top + (int)(size * (TemplateNeck - TemplateTop) / (TemplateBottom - TemplateTop));
+        var deepest = 0f;
         for (var y = first; y <= last; y++)
         {
             var rowWidth = RowWidth(alpha, width, figure, y);
-            if (rowWidth > 0 && rowWidth < narrowest)
+            if (rowWidth == 0)
+                continue;
+            int above = 0, below = 0;
+            for (var r = figure.Top; r < y; r++)
+                above = Math.Max(above, RowWidth(alpha, width, figure, r));
+            for (var r = y + 1; r <= Math.Min(figure.Bottom, y + reach); r++)
+                below = Math.Max(below, RowWidth(alpha, width, figure, r));
+            var dip = Math.Min(above, below) - rowWidth;
+            if (dip > deepest && dip >= NeckDip * Math.Min(above, below))
             {
-                narrowest = rowWidth;
+                deepest = dip;
                 neck = y;
             }
         }
         return neck;
     }
 
+    /// <summary>The row the legs part at on a front view: the top of the gap that runs up the
+    /// middle from the feet. Null when the legs touch all the way down.</summary>
+    private static float? CrotchRow(byte[] alpha, int width, (int Left, int Top, int Right, int Bottom) figure, float centre, int neck)
+    {
+        var size = figure.Bottom - figure.Top + 1;
+        var highest = Math.Max(neck, figure.Top + (int)(size * CrotchFrom));
+        var lowest = figure.Top + (int)(size * CrotchTo);
+        var x = Math.Clamp((int)MathF.Round(centre), figure.Left, figure.Right);
+        int? crotch = null;
+        for (var y = figure.Bottom; y >= highest; y--)
+        {
+            if (alpha[y * width + x] >= OpaqueAlpha)
+            {
+                if (crotch is not null)
+                    break;
+                continue;
+            }
+            crotch = y;
+        }
+        return crotch <= lowest ? crotch : null;
+    }
+
+    /// <summary>A row's outer width: holes inside the figure (an eye, a gap) don't narrow it.</summary>
     private static int RowWidth(byte[] alpha, int width, (int Left, int Top, int Right, int Bottom) figure, int row)
     {
-        var count = 0;
+        int first = -1, last = -1;
         for (var x = figure.Left; x <= figure.Right; x++)
         {
-            if (alpha[row * width + x] >= OpaqueAlpha)
-                count++;
+            if (alpha[row * width + x] < OpaqueAlpha)
+                continue;
+            if (first < 0)
+                first = x;
+            last = x;
         }
-        return count;
+        return first < 0 ? 0 : last - first + 1;
     }
 
     private static (int Left, int Top, int Right, int Bottom) OpaqueBounds(byte[] alpha, int width, int height)
@@ -333,8 +388,9 @@ public sealed class SpriteRig
             {
                 if (alpha[y * Width + x] < OpaqueAlpha)
                     continue;
+                // At equal reach the lower row wins: an arm hanging straight ends at its hand.
                 var distance = (x - centre) * side;
-                if (distance > furthest)
+                if (distance > 0f && distance >= furthest)
                 {
                     furthest = distance;
                     best = new Vector2(x, y);
