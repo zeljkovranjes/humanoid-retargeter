@@ -80,6 +80,10 @@ public sealed class PreviewDialog : Dialog
 
 		// ---- header: clip, camera and view toggles -------------------------------------------
 		var header = card.Header( "accessibility_new", fileName );
+		var is2d = _clips.Any( c => c.View2d is not null );
+		var isFlat2d = is2d && HumanoidRetargeter.Core.Solve.PlanarSolver.DrawnView( target.Spec.Rig ) is not null;
+		if ( is2d )
+			header.Add( new RtPill( card, RtStyle.Badge2d, Theme.Blue, RtStyle.Badge2dTip ) );
 		header.AddStretchCell();
 		if ( _clips.Count > 1 )
 		{
@@ -103,8 +107,9 @@ public sealed class PreviewDialog : Dialog
 		_preview.MinimumSize = new Vector2( 240, 240 );
 		foreach ( var (label, yaw, pitch) in CameraViews )
 			_cameraCombo.AddItem( label, null, () => _preview.SetView( yaw, pitch ), selected: label == "3/4 view" );
+		_cameraCombo.Visible = !isFlat2d; // a flat character has the one view it was drawn from
 
-		header.Add( RtStyle.Toggle( card, "grid_on", true, on => _preview.ShowGround = on,
+		header.Add( RtStyle.Toggle( card, "grid_on", !isFlat2d, on => _preview.ShowGround = on,
 			"Ground: floor grid and feet contact rings" ) );
 		// Skeleton view: switches between the skinned model and the retargeted animation drawn
 		// as bones (and back). Targets with no compiled preview model are locked to it.

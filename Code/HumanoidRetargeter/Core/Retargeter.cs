@@ -710,6 +710,7 @@ public static class Retargeter
 			MorphWeights = outputClip.MorphWeights,
             Fps = fps,
             Looping = looping,
+            View2d = request.Solver == SolverKind.Planar ? (request.Solve ?? new SolveOptions()).View : null,
             ExtractMotion = extractMotion,
             FootstepEvents = events,
             IsMirroredVariant = isMirrored,
@@ -800,6 +801,7 @@ public static class Retargeter
         SourceScene scene, MappingResult map, MappingReportInfo report, int take, string clipName)
     {
         var requested = request.Solve ?? new SolveOptions();
+        var isPlanar = request.Solver == SolverKind.Planar;
         var solver = ResolveSolver(request, target, context, report);
         var solved = solver.Solve(scene, map, target.Rig, new SolveOptions
         {
@@ -808,6 +810,9 @@ public static class Retargeter
             HipScaleVertical = requested.HipScaleVertical,
             TransferFingers = requested.TransferFingers,
             TransferModes = requested.TransferModes,
+            View = requested.View,
+            Foreshorten = requested.Foreshorten,
+            PlanarInPlace = isPlanar && request.RootMotion == RootMotionMode.InPlace,
             ClipIndex = take,
             ClipName = clipName,
         });
@@ -818,7 +823,7 @@ public static class Retargeter
             PassThroughSourceTranslations(scene, target.Rig, frames, take, report);
 
         // ---- foot-plant cleanup (target space; up axis from the TARGET character frame) ----
-        if (request.FootPlantCleanup)
+        if (request.FootPlantCleanup && !isPlanar)
         {
             if (context.Up is { } up && context.FootChains is { } feet)
             {
@@ -849,7 +854,7 @@ public static class Retargeter
 
         // ---- optional arm effector IK (default off: the solver already matches anatomical
         // directions; arm IK is only for reach-critical work) ----
-        if (request.ArmEffectorIk)
+        if (request.ArmEffectorIk && !isPlanar)
         {
             var problem = ArmIkCleanup.Apply(frames, scene, map, target.Rig, context, take);
             if (problem is not null)
@@ -857,7 +862,9 @@ public static class Retargeter
         }
 
         // ---- root motion (see class remarks for the Extract ↔ ExtractMotion mapping) ----
-        ApplyRootMotion(request.RootMotion, frames, context, report);
+        ApplyRootMotion(
+            isPlanar && request.RootMotion == RootMotionMode.InPlace ? RootMotionMode.Off : request.RootMotion,
+            frames, context, report);
 
         // ---- IK helper bones (root_IK, IK targets, ikrule) need real baked channels ----
         if (context.HasIkBakedBones)
@@ -1340,6 +1347,14 @@ public static class Retargeter
         RetargetRequest request, RetargetTargetSpec target, TargetContext context,
         MappingReportInfo report)
     {
+        if (request.Solver == SolverKind.Planar)
+        {
+            AddNote(report,
+                "2D solve: bones take projected directions, so the foot-plant and arm IK "
+                + "cleanups are skipped and finger bones stay at rest.");
+            return new PlanarSolver();
+        }
+
         if (request.Solver != SolverKind.DeepLearning)
             return new GeometricSolver();
 

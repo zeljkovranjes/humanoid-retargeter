@@ -83,6 +83,9 @@ internal static class RtStyle
 		return button;
 	}
 
+	public const string Badge2d = "2D";
+	public const string Badge2dTip = "This animation is retargeted onto a 2D plane";
+
 	public static Checkbox Check( Layout parent, string text, bool value, Action<bool> changed, string tooltip = null )
 	{
 		var box = parent.Add( new Checkbox( text ) { Value = value, ToolTip = tooltip } );

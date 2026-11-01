@@ -70,6 +70,16 @@ public sealed class PreviewWidget : SceneRenderingWidget
 	float _zoom = 1f;
 	Vector3 _pan;
 
+	// ---- 2D camera: a clip solved in 2D is seen square-on through a locked orthographic lens --
+	const float SpriteFraming = 1.25f; // orthographic height, in character heights
+	(Vector3 Up, Vector3 Toward)? _planarAxes;
+	const float SpriteLightStrength = 0.6f; // two lights at the camera: this shows the art's own colours
+	const float SpriteLightRadius = 2000f;
+	readonly List<(ScenePointLight Light, Vector3 Position, Color Color, float Radius)> _lights = new();
+
+	/// <summary>True while a flat character plays a 2D clip: orthographic, and dragging pans instead of orbiting.</summary>
+	public bool Is2d => _planarAxes is not null;
+
 	// ---- ground check (opt-in: the window shows it; headless gate renders stay unchanged) --
 	int[] _footBones = Array.Empty<int>();
 	int[] _soleBones = Array.Empty<int>();
@@ -294,8 +304,10 @@ public sealed class PreviewWidget : SceneRenderingWidget
 		}
 
 		var world = Scene.SceneWorld;
-		new ScenePointLight( world, new Vector3( 120, 100, 120 ), 600, Color.White * 3.5f ).ShadowsEnabled = false;
-		new ScenePointLight( world, new Vector3( -120, -100, 90 ), 600, Color.White * 2.0f ).ShadowsEnabled = false;
+		AddLight( new Vector3( 120, 100, 120 ), Color.White * 3.5f );
+		AddLight( new Vector3( -120, -100, 90 ), Color.White * 2.0f );
+		void AddLight( Vector3 position, Color color )
+			=> _lights.Add( (new ScenePointLight( world, position, 600, color ) { ShadowsEnabled = false }, position, color, 600f) );
 
 		if ( previewModelPath is not null )
 		{
@@ -505,6 +517,10 @@ public sealed class PreviewWidget : SceneRenderingWidget
 	public void SetClip( HumanoidRetargeter.Core.ClipResult clip )
 	{
 		_clip = clip;
+		// Only a flat character has one way to be seen: a 3D one keeps its orbit camera.
+		var isFlat = HumanoidRetargeter.Core.Solve.PlanarSolver.DrawnView( _rig ) is not null;
+		_planarAxes = isFlat && clip?.View2d is { } view ? PlanarAxes( view ) : null;
+		ApplySpriteStyle( _planarAxes is not null );
 		_morphTracks = clip?.MorphWeights.Select( entry =>
 			(HumanoidRetargeter.Core.Formats.Dmx.DmxWriter.MorphName( entry.Key ), entry.Value) ).ToArray()
 			?? Array.Empty<(string, float[])>();
@@ -859,6 +875,30 @@ public sealed class PreviewWidget : SceneRenderingWidget
 	/// (position (x, y, z) → (x, −z, y); rotation q → q_R ⊗ q), then cm→inch position
 	/// scaling. Identity + scale for engine-space rigs.
 	/// </summary>
+	/// <summary>A flat armature is shown the way the editor previews a Sprite resource: lit
+	/// from the camera, filling the view, on a clean background. The usual side lights leave
+	/// a card facing the camera nearly black.</summary>
+	void ApplySpriteStyle( bool enabled )
+	{
+		foreach ( var (light, position, color, radius) in _lights )
+		{
+			light.Position = position;
+			light.LightColor = enabled ? Color.White * SpriteLightStrength : color;
+			light.Radius = enabled ? SpriteLightRadius : radius;
+		}
+		if ( enabled )
+			ShowGround = false;
+	}
+
+	(Vector3 Up, Vector3 Toward) PlanarAxes( HumanoidRetargeter.Core.Solve.PlanarView view )
+	{
+		var (up, toward) = HumanoidRetargeter.Core.Solve.PlanarSolver.CameraAxes( _rig, view );
+		return (RigDirectionToEngine( up ), RigDirectionToEngine( toward ));
+	}
+
+	Vector3 RigDirectionToEngine( VecN direction )
+		=> RigWorldToEngine( new XForm( direction, System.Numerics.Quaternion.Identity ) ).Position.Normal;
+
 	Transform RigWorldToEngine( in XForm w )
 	{
 		var pos = w.Pos;
@@ -1362,12 +1402,24 @@ public sealed class PreviewWidget : SceneRenderingWidget
 			? MathF.Max( _sceneModel.Model.Bounds.Size.Length * 0.5f, 8f )
 			: _skeletonRadius;
 		var distance = MathX.SphereCameraDistance( radius, Camera.FieldOfView ) * 1.05f * _zoom;
+		_viewRadius = radius;
+
+		Camera.Orthographic = _planarAxes is not null;
+		if ( _planarAxes is { } axes )
+		{
+			// Zoom is the lens here: dollying in as well would put the camera inside the character.
+			Camera.OrthographicHeight = _characterHeight * SpriteFraming * _zoom;
+			Camera.WorldPosition = center + _pan + axes.Toward * (distance / _zoom);
+			Camera.WorldRotation = Rotation.LookAt( -axes.Toward, axes.Up );
+			foreach ( var (light, _, _, _) in _lights )
+				light.Position = Camera.WorldPosition;
+			return;
+		}
 
 		var yawRad = MathX.DegreeToRadian( _yaw );
 		var pitchRad = MathX.DegreeToRadian( _pitch );
 		var dir = new Vector3( MathF.Cos( yawRad ) * MathF.Cos( pitchRad ), MathF.Sin( yawRad ) * MathF.Cos( pitchRad ),
 			MathF.Sin( pitchRad ) ).Normal;
-		_viewRadius = radius;
 		Camera.WorldPosition = center + _pan + dir * distance;
 		Camera.WorldRotation = Rotation.LookAt( -dir, Vector3.Up );
 	}
@@ -1381,17 +1433,18 @@ public sealed class PreviewWidget : SceneRenderingWidget
 	public bool SmoothCamera { get; set; }
 
 	// Left drag orbits (horizontal) and tilts (vertical); right or middle drag pans; the wheel zooms.
+	// A 2D clip has one view, so every drag pans.
 	protected override void OnMouseMove( MouseEvent e )
 	{
 		base.OnMouseMove( e );
 		var delta = e.LocalPosition - _lastMouse;
 		_lastMouse = e.LocalPosition;
-		if ( (e.ButtonState & MouseButtons.Left) != 0 )
+		if ( (e.ButtonState & MouseButtons.Left) != 0 && !Is2d )
 		{
 			_yaw -= delta.x * 0.4f;
 			_pitch = Math.Clamp( _pitch + delta.y * 0.3f, -10f, 80f );
 		}
-		else if ( (e.ButtonState & (MouseButtons.Right | MouseButtons.Middle)) != 0 && Camera.IsValid() )
+		else if ( (e.ButtonState & (MouseButtons.Left | MouseButtons.Right | MouseButtons.Middle)) != 0 && Camera.IsValid() )
 		{
 			var scale = _viewRadius * _zoom * 0.004f;
 			_pan += (Camera.WorldRotation.Left * delta.x + Camera.WorldRotation.Up * delta.y) * scale;

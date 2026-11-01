@@ -22,4 +22,9 @@ public enum SolverKind
     /// Requires <see cref="RetargetTargetSpec.DlWeights"/>; ignores per-role mapping
     /// (only hips/alignment heuristics consult it) and leaves fingers at rest.</summary>
     DeepLearning,
+
+    /// <summary>The 2D <see cref="Solve.PlanarSolver"/>: retargets through an orthographic
+    /// camera (<see cref="Solve.SolveOptions.View"/>) onto a plane of the target armature,
+    /// which may be drawn flat. Skips the foot-plant and arm IK cleanups, which work in 3D.</summary>
+    Planar,
 }
