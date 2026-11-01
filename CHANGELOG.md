@@ -16,6 +16,7 @@ Sprite preview - a flat character plays on open the way the editor previews a Sp
 ### Fixed
 # Editor
 Red and black checkerboard on Linux - a custom model's generated materials no longer load as the error material until the editor restarts; they are now compiled and registered before the model that uses them
+Transparent textures on custom models - a model with a transparent texture whose size is not a power of two no longer shows the red and black checkerboard; such textures are stretched to the next power of two (512x768 becomes 512x1024), which keeps their UVs
 
 ## 2026-10-24
 Title: Runtime Facing
