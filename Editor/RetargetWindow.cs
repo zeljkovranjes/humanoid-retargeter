@@ -927,6 +927,14 @@ public sealed class RetargetWindow : Widget
 		var dialog = new PreviewDialog( this, take.DisplayName, result.Clips, target, entry.Mapping.Source,
 			entry.Scene.Skeleton, SourceClipFor( take ), entry.Mapping )
 		{
+			Reproject = async view =>
+			{
+				_planarView = view; // still this target's view: leaving it for a 3D target clears it
+				var edited = BuildRequest( take );
+				var solved = await Task.Run( () => Retargeter.Convert( edited, target.Spec ) );
+				await EditorPipeline.SwitchToMainThread();
+				return solved.Clips.FirstOrDefault( c => c.Success && c.SolvedFrames is { Count: > 0 } );
+			},
 			Confirmed = savePreset =>
 			{
 				if ( savePreset )

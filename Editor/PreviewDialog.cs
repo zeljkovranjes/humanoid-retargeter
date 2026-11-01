@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using Editor;
 using Sandbox;
 using HumanoidRetargeter.Core.Mapping;
@@ -21,6 +22,14 @@ public sealed class PreviewDialog : Dialog
 {
 	readonly PreviewWidget _preview;
 	readonly FloatSlider _scrubber;
+	readonly PlanarSkeletonView _sourceView;
+	readonly FloatSlider _turnSlider;
+	readonly FloatSlider _tiltSlider;
+	HumanoidRetargeter.Core.Solve.PlanarView _view;
+	bool _isSolving;
+
+	/// <summary>Solves the clip again through a new 2D camera; null keeps the camera fixed.</summary>
+	public Func<HumanoidRetargeter.Core.Solve.PlanarView, Task<HumanoidRetargeter.Core.ClipResult>> Reproject { get; set; }
 	readonly Label _frameLabel;
 	readonly IconButton _playButton;
 	readonly IconButton _ghostButton;
@@ -127,7 +136,27 @@ public sealed class PreviewDialog : Dialog
 		}, "Reset the camera" ) );
 
 		// ---- viewport ---------------------------------------------------------------------------
-		card.Layout.Add( _preview, 1 );
+		_view = _clips.FirstOrDefault()?.View2d ?? default;
+		if ( isFlat2d && sourceSkeleton is not null && sourceClip is not null && sourceMapping is not null )
+		{
+			// Bonebase's layout: what the camera sees of the source beside the rig it drives.
+			var split = card.Layout.AddRow( 1 );
+			split.Spacing = 4;
+			_sourceView = split.Add( new PlanarSkeletonView( card, sourceSkeleton, sourceClip, sourceMapping, _view ), 1 );
+			_sourceView.Dragged = ( turn, tilt ) => EditView( _view with
+			{
+				YawDegrees = WrapDegrees( _view.YawDegrees + turn ),
+				PitchDegrees = Math.Clamp( _view.PitchDegrees + tilt, -90f, 90f ),
+			} );
+			split.Add( _preview, 1 );
+			_turnSlider = CameraSlider( card, "Turn", -180f, 180f, _view.YawDegrees, v => EditView( _view with { YawDegrees = v } ) );
+			_tiltSlider = CameraSlider( card, "Tilt", -90f, 90f, _view.PitchDegrees, v => EditView( _view with { PitchDegrees = v } ) );
+			CameraSlider( card, "Roll", -180f, 180f, _view.RollDegrees, v => EditView( _view with { RollDegrees = v } ) );
+		}
+		else
+		{
+			card.Layout.Add( _preview, 1 );
+		}
 
 		if ( sourceSkeleton is not null && sourceClip is not null && sourceMapping is not null )
 			_preview.SetSourceGhost( sourceSkeleton, sourceClip, sourceMapping );
@@ -166,6 +195,7 @@ public sealed class PreviewDialog : Dialog
 		_preview.FrameChanged = frame =>
 		{
 			_scrubber.Value = frame;
+			_sourceView?.SetFrame( frame );
 			UpdateReadouts();
 		};
 
@@ -199,6 +229,63 @@ public sealed class PreviewDialog : Dialog
 		Window.Size = new Vector2( 560, 620 );
 	}
 
+	FloatSlider CameraSlider( Widget parent, string label, float minimum, float maximum, float value, Action<float> changed )
+	{
+		var row = parent.Layout.AddRow();
+		row.Spacing = 8;
+		row.Add( RtStyle.Muted( new Label( this ) { Text = label, FixedWidth = 36, FixedHeight = RtStyle.ControlHeight } ) );
+		var slider = row.Add( new FloatSlider( parent ) { FixedHeight = RtStyle.ControlHeight }, 1 );
+		slider.Minimum = minimum;
+		slider.Maximum = maximum;
+		slider.Value = value;
+		var readout = row.Add( RtStyle.Muted( new Label( this ) { Text = $"{value:0} deg", FixedWidth = 60, FixedHeight = RtStyle.ControlHeight } ) );
+		readout.Alignment = TextFlag.RightCenter;
+		slider.OnValueEdited = () =>
+		{
+			readout.Text = $"{slider.Value:0} deg";
+			changed( slider.Value );
+		};
+		return slider;
+	}
+
+	static float WrapDegrees( float degrees ) => (degrees + 540f) % 360f - 180f;
+
+	/// <summary>A new 2D camera: the source shows it at once, and the rig follows as soon as
+	/// the clip is solved. Edits arriving during a solve collapse into the next one.</summary>
+	async void EditView( HumanoidRetargeter.Core.Solve.PlanarView view )
+	{
+		_view = view;
+		_sourceView?.SetView( view );
+		if ( _turnSlider.IsValid() && MathF.Abs( _turnSlider.Value - view.YawDegrees ) > 0.5f )
+			_turnSlider.Value = view.YawDegrees;
+		if ( _tiltSlider.IsValid() && MathF.Abs( _tiltSlider.Value - view.PitchDegrees ) > 0.5f )
+			_tiltSlider.Value = view.PitchDegrees;
+		if ( _isSolving || Reproject is null )
+			return;
+
+		_isSolving = true;
+		try
+		{
+			var solved = default( HumanoidRetargeter.Core.Solve.PlanarView );
+			do
+			{
+				solved = _view;
+				var clip = await Reproject( solved );
+				if ( clip is not null && IsValid )
+					_preview.SwapClip( clip );
+			}
+			while ( solved != _view && IsValid );
+		}
+		catch ( Exception e )
+		{
+			Log.Warning( $"[humanoid-retargeter] 2D camera solve failed: {e.Message}" );
+		}
+		finally
+		{
+			_isSolving = false;
+		}
+	}
+
 	void SelectClip( HumanoidRetargeter.Core.ClipResult clip )
 	{
 		_preview.SetClip( clip );
@@ -220,7 +307,7 @@ public sealed class PreviewDialog : Dialog
 	void UpdateReadouts()
 	{
 		_frameLabel.Text = $"{_preview.CurrentFrame + 1} / {_preview.FrameCount}";
-		if ( _preview.FootClearance is not { } feet )
+		if ( _preview.Is2d || _preview.FootClearance is not { } feet )
 		{
 			_feetLabel.Text = "";
 			return;
@@ -234,7 +321,8 @@ public sealed class PreviewDialog : Dialog
 	/// <summary>Whole-clip verdict: does the character ever touch the floor, or sink into it?</summary>
 	void UpdateGroundVerdict()
 	{
-		if ( _preview.ClipClearance is not { } lowest )
+		// The contact check reads 3D feet; a flat character's stand on the solver's ground line.
+		if ( _preview.Is2d || _preview.ClipClearance is not { } lowest )
 		{
 			_groundPill.Set( "", Theme.TextLight );
 			return;
