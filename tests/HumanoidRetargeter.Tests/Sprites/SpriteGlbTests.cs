@@ -319,6 +319,41 @@ public class SpriteGlbTests
         Assert.InRange(differing, 0, 4);
     }
 
+    [Theory]
+    [InlineData("chibi")]
+    [InlineData("profile")]
+    public void Bake_RedrawsTheClipFrameByFrame(string name)
+    {
+        var folder = new[] { "Assets", "data", "humanoid_retargeter", "sprites" };
+        var character = SpriteCharacter.Parse(File.ReadAllText(RepoFile(folder.Append($"bonebase_{name}.rig.json").ToArray())));
+        var rig = Imported(File.ReadAllBytes(RepoFile(folder.Append($"bonebase_{name}.glb").ToArray())));
+        var clip = Walk(rig, PlanarView.Side);
+
+        var frames = SpriteBake.Frames(character, rig, clip.SolvedFrames!, clip.Fps, clip.Looping, PlanarView.Side);
+
+        // 59 frames at 30 fps are 1.97 s: 24 frames at 12 fps on a loop, 25 without.
+        Assert.InRange(frames.Count, 24, 25);
+        Assert.All(frames, frame =>
+        {
+            Assert.Equal(character.Width * character.Height * 4, frame.Length);
+            Assert.True(frame.Where((_, i) => i % 4 == 3).Count(alpha => alpha > 0) > 100);
+        });
+        Assert.False(frames[1].SequenceEqual(frames[frames.Count / 2]));
+    }
+
+    [Fact]
+    public void Bake_NamesTheBoneARigLacks()
+    {
+        var character = SpriteCharacter.Parse(File.ReadAllText(
+            RepoFile("Assets", "data", "humanoid_retargeter", "sprites", "bonebase_chibi.rig.json")));
+        var rig = Imported(Glb(FrontFigure()));
+
+        var error = Assert.Throws<ArgumentException>(() =>
+            SpriteBake.Frames(character, rig, new[] { Array.Empty<HumanoidRetargeter.Core.Maths.XForm>() }, 30f, true, PlanarView.Side));
+
+        Assert.Contains("hips", error.Message);
+    }
+
     [Fact]
     public void BuiltInChibi_KeepsItsFeetOnTheGround()
     {
