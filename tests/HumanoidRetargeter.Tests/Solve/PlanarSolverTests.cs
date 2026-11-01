@@ -227,6 +227,36 @@ public class PlanarSolverTests
     }
 
     [Fact]
+    public void Roll_TurnsThePictureInItsPlane()
+    {
+        var target = FlatTarget(profile: true);
+        var rig = target.Rig;
+        var upright = World(Convert(Walk(PlanarView.Side), target), rig, 20);
+        var rolled = World(Convert(Walk(PlanarView.Side with { RollDegrees = 90f }), target), rig, 20);
+
+        var trunk = Between(rig, upright, BoneRole.Hips, BoneRole.Spine2);
+        var turned = Between(rig, rolled, BoneRole.Hips, BoneRole.Spine2);
+
+        Assert.True(MathF.Abs(Vector3.Dot(Vector3.Normalize(trunk), Vector3.Normalize(turned))) < 0.05f);
+    }
+
+    [Fact]
+    public void SourceCamera_MatchesWhatTheSolverProjects()
+    {
+        var scene = HumanoidRetargeter.Core.Formats.Bvh.BvhImporter.Import(
+            Encoding.UTF8.GetBytes(WalkFixture.SyntheticWalkBvh()));
+        var map = Retargeter.ResolveSource(scene).Mapping;
+        var first = new Pose(scene.Clips[0].Frames[0]).ToWorld(scene.Skeleton);
+
+        var (right, up, toward) = PlanarSolver.SourceCamera(scene.Skeleton, map, first, PlanarView.Side);
+
+        // Toes point +Z and up is +Y: side on, the character faces screen right.
+        TestUtil.AssertVectorEqual(Vector3.UnitZ, right, 1e-3f);
+        TestUtil.AssertVectorEqual(Vector3.UnitY, up, 1e-3f);
+        Assert.Equal(0f, Vector3.Dot(right, toward), 3);
+    }
+
+    [Fact]
     public void Front_ForeshortensALegSwingingAlongTheViewAxis()
     {
         var rig = SboxTarget.Value.Rig;

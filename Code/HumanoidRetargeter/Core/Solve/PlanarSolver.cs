@@ -140,6 +140,38 @@ public sealed class PlanarSolver : IRetargetSolver
         return toeSpan > hipSpan ? PlanarView.Side : PlanarView.Front;
     }
 
+    /// <summary>
+    /// The camera a <see cref="SolverKind.Planar"/> solve looks at a source through, in the
+    /// source's own space, for showing that source the way it is projected.
+    /// <paramref name="firstFrame"/> is the clip's first frame in world space.
+    /// </summary>
+    /// <exception cref="ArgumentException">Thrown when the mapping lacks the bones a character
+    /// frame needs.</exception>
+    public static (Vector3 Right, Vector3 Up, Vector3 Toward) SourceCamera(
+        SkeletonModel skeleton, MappingResult map, XForm[] firstFrame, PlanarView view)
+    {
+        ArgumentNullException.ThrowIfNull(skeleton);
+        ArgumentNullException.ThrowIfNull(map);
+        ArgumentNullException.ThrowIfNull(firstFrame);
+        var anatomical = CharacterFrame.Compute(skeleton, map, skeleton.RestWorld).Up;
+        var basis = ViewBasis.Of(FacingFrame(skeleton, map, firstFrame, NearestAxis(anatomical)), view).Rolled(view.RollDegrees);
+        return (basis.Right, basis.Up, basis.Toward);
+    }
+
+    /// <summary>A character frame around <paramref name="up"/>, facing the way the clip starts.</summary>
+    private static CharacterFrame FacingFrame(SkeletonModel skeleton, MappingResult map, XForm[] firstFrame, Vector3 up)
+    {
+        try
+        {
+            return CharacterFrame.Compute(skeleton, map, firstFrame, up);
+        }
+        catch (ArgumentException)
+        {
+            // A first frame lying on its side has no hip line to face along.
+            return CharacterFrame.Compute(skeleton, map, skeleton.RestWorld, up);
+        }
+    }
+
     private static ViewBasis TargetBasis(TargetRig rig, PlanarView view)
         => FlatAxis(rig) is { } axis ? FlatBasis(rig, axis) : ViewBasis.Of(TargetFrame(rig), view);
 
@@ -240,6 +272,16 @@ public sealed class PlanarSolver : IRetargetSolver
             return new ViewBasis(right,
                 MathF.Cos(pitch) * frame.Up - MathF.Sin(pitch) * toward,
                 MathF.Cos(pitch) * toward + MathF.Sin(pitch) * frame.Up);
+        }
+
+        /// <summary>The same camera turned in the picture's own plane.</summary>
+        public ViewBasis Rolled(float degrees)
+        {
+            var roll = degrees * MathF.PI / 180f;
+            return new ViewBasis(
+                MathF.Cos(roll) * Right + MathF.Sin(roll) * Up,
+                MathF.Cos(roll) * Up - MathF.Sin(roll) * Right,
+                Toward);
         }
 
         /// <summary>A rig-space vector as (right, up, toward).</summary>
@@ -344,7 +386,7 @@ public sealed class PlanarSolver : IRetargetSolver
                 _ => new Vector3(0f, source.UpAxisSign, 0f),
             };
             var firstWorld = new Pose(clip.Frames[0]).ToWorld(_src);
-            _srcView = ViewBasis.Of(SourceFrame(fileUp, firstWorld), options.View);
+            _srcView = ViewBasis.Of(SourceFrame(fileUp, firstWorld), options.View).Rolled(options.View.RollDegrees);
             _srcUp = fileUp;
 
             _tgtIsFlat = FlatAxis(rig) is not null;
@@ -412,15 +454,7 @@ public sealed class PlanarSolver : IRetargetSolver
             {
                 var anatomical = CharacterFrame.Compute(_src, _srcMap, _src.RestWorld).Up;
                 var up = Vector3.Dot(anatomical, fileUp) < 0.70710678f ? fileUp : NearestAxis(anatomical);
-                try
-                {
-                    return CharacterFrame.Compute(_src, _srcMap, firstWorld, up);
-                }
-                catch (ArgumentException)
-                {
-                    // A first frame lying on its side has no hip line to face along.
-                    return CharacterFrame.Compute(_src, _srcMap, _src.RestWorld, up);
-                }
+                return FacingFrame(_src, _srcMap, firstWorld, up);
             }
             catch (ArgumentException e)
             {
