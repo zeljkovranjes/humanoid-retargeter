@@ -16,7 +16,7 @@ Title: 2D Mode
 2D characters - Chibi, Humanoid and Profile, ready-made targets baked from Bonebase's own rigs and skin (one capsule per bone); limbs stay whole however the clip moves, and they start from the side
 2D sprite frames - a new Extra output redraws every clip on a built-in 2D character frame by frame into a real Sprite resource (12 fps, in place), the way Bonebase draws it, so limbs stay smooth and whole; it plays in a SpriteRenderer with no model, and the option is off for anything that can't be redrawn
 Automatic 2D view - picking a flat humanoid (a sprite, or a flat VMDL, FBX or GLB) sets the 2D view to Front or Side as it was drawn, and going back to a 3D character turns it off
-Sprite preview - a flat character plays on open on a transparency checker, lit from the camera, standing at the foot of the view, with the source skeleton beside it: drag that skeleton, or move Turn, Tilt and Roll, and the character follows at once (about 40 ms)
+Sprite preview - a flat character plays on open on a transparency checker, in the art's own colours with no sheen or shading, standing at the foot of the view, with the source skeleton beside it: drag that skeleton, or move Turn, Tilt and Roll, and the character follows at once (about 40 ms)
 ### Fixed
 # Editor
 Red and black checkerboard on Linux - a custom model's generated materials no longer load as the error material until the editor restarts; they are now compiled and registered before the model that uses them

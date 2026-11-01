@@ -80,9 +80,8 @@ public sealed class PreviewWidget : SceneRenderingWidget
 	const float CanvasCompileTimeoutSeconds = 30f;
 	SceneObject _canvas;
 	(Vector3 Up, Vector3 Toward)? _planarAxes;
-	const float SpriteLightStrength = 0.6f; // two lights at the camera: this shows the art's own colours
-	const float SpriteLightRadius = 2000f;
-	readonly List<(ScenePointLight Light, Vector3 Position, Color Color, float Radius)> _lights = new();
+	readonly List<(ScenePointLight Light, Color Color)> _lights = new();
+	readonly AmbientLight _spriteAmbient;
 
 	/// <summary>True while a flat character plays a 2D clip: orthographic, and dragging pans instead of orbiting.</summary>
 	public bool Is2d => _planarAxes is not null;
@@ -310,11 +309,17 @@ public sealed class PreviewWidget : SceneRenderingWidget
 			Camera.Enabled = true;
 		}
 
+		using ( Scene.Push() )
+		{
+			_spriteAmbient = new GameObject( true, "sprite ambient" ).GetOrAddComponent<AmbientLight>( false );
+			_spriteAmbient.Color = Color.White;
+		}
+
 		var world = Scene.SceneWorld;
 		AddLight( new Vector3( 120, 100, 120 ), Color.White * 3.5f );
 		AddLight( new Vector3( -120, -100, 90 ), Color.White * 2.0f );
 		void AddLight( Vector3 position, Color color )
-			=> _lights.Add( (new ScenePointLight( world, position, 600, color ) { ShadowsEnabled = false }, position, color, 600f) );
+			=> _lights.Add( (new ScenePointLight( world, position, 600, color ) { ShadowsEnabled = false }, color) );
 
 		if ( previewModelPath is not null )
 		{
@@ -890,17 +895,14 @@ public sealed class PreviewWidget : SceneRenderingWidget
 	/// (position (x, y, z) → (x, −z, y); rotation q → q_R ⊗ q), then cm→inch position
 	/// scaling. Identity + scale for engine-space rigs.
 	/// </summary>
-	/// <summary>A flat armature is shown the way the editor previews a Sprite resource: lit
-	/// from the camera, filling the view, on a clean background. The usual side lights leave
-	/// a card facing the camera nearly black.</summary>
+	/// <summary>A flat armature is shown the way the editor previews a Sprite resource: in
+	/// the art's own colours, filling the view, on a clean background. It is lit by ambient
+	/// light alone, as a lamp leaves a sheen on a card facing the camera, or leaves it black.</summary>
 	void ApplySpriteStyle( bool enabled )
 	{
-		foreach ( var (light, position, color, radius) in _lights )
-		{
-			light.Position = position;
-			light.LightColor = enabled ? Color.White * SpriteLightStrength : color;
-			light.Radius = enabled ? SpriteLightRadius : radius;
-		}
+		foreach ( var (light, color) in _lights )
+			light.LightColor = enabled ? Color.Black : color;
+		_spriteAmbient.Enabled = enabled;
 		if ( enabled )
 		{
 			ShowGround = false;
@@ -1450,8 +1452,6 @@ public sealed class PreviewWidget : SceneRenderingWidget
 			center = center.WithZ( _groundZ + Camera.OrthographicHeight * SpriteGroundLine );
 			Camera.WorldPosition = center + _pan + axes.Toward * (distance / _zoom);
 			Camera.WorldRotation = Rotation.LookAt( -axes.Toward, axes.Up );
-			foreach ( var (light, _, _, _) in _lights )
-				light.Position = Camera.WorldPosition;
 			if ( _canvas.IsValid() )
 			{
 				var side = Camera.OrthographicHeight * CanvasShare;
