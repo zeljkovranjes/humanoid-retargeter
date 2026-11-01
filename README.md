@@ -65,6 +65,7 @@ foreach ( var clip in result.Clips )
 | Root motion | Keep as authored | Keep, strip (in place) or extract root motion. |
 | Looping | From source | Keep the source's looping or force it on or off. |
 | 2D view | Off (3D) | Retarget onto a 2D plane through a Side, Front, Back or 3/4 camera, relative to the way the character faces as the clip starts. Works on 3D armatures and on armatures drawn flat. 2D animations show a `2D` badge, and a flat character previews beside its source skeleton with live Turn, Tilt and Roll. |
+| 2D sprite frames | Off | On a built-in 2D character, also redraws every clip frame by frame into a `.sprite` (12 fps, in place) that plays with no model. |
 | 2D foreshortening | On | In 2D, shorten a limb pointing toward the camera (down to 10%) instead of keeping it full length. |
 | Foot-plant cleanup | On | Locks planted feet to the ground so they don't slide. |
 | Arm effector IK | On | Pulls wrists onto limb-length-normalized source hand positions. |
