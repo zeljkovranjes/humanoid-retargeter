@@ -33,6 +33,8 @@ namespace HumanoidRetargeter.EditorTools;
 [Alias( "HumanoidRetargeter.Editor.EditorPipeline" )]
 public static class EditorPipeline
 {
+	const float MaterialCompileTimeoutSeconds = 60f;
+
 	// ============================================================== threading
 
 	/// <summary>
@@ -232,6 +234,35 @@ public static class EditorPipeline
 		TargetPickers.ResolvedTarget target, string outputFolderRelative, out string error,
 		List<string> report = null )
 		=> PrepareModelTargetMesh( target, outputFolderRelative, out error, report );
+
+	/// <summary>Compiles a target's generated materials and registers what they produced. A
+	/// material left to compile on demand under its model arrives too late: the asset system
+	/// has not registered its compiled file (seen on Linux), the model loads with the error
+	/// material, and that stays cached for the session.</summary>
+	static async Task CompileTargetMaterialsAsync( TargetPickers.ResolvedTarget target, string assetsPath )
+	{
+		if ( target.Spec.MaterialRemaps is not { Count: > 0 } remaps )
+			return;
+
+		foreach ( var relative in remaps.Values.Distinct( StringComparer.OrdinalIgnoreCase ) )
+		{
+			var absolute = Path.GetFullPath( Path.Combine( assetsPath, relative.Replace( '/', Path.DirectorySeparatorChar ) ) );
+			if ( !File.Exists( absolute ) )
+				continue;
+			await SwitchToMainThread();
+			var asset = Try( () => AssetSystem.RegisterFile( absolute ) );
+			if ( asset is null || !await CompileAndWaitAsync( asset, MaterialCompileTimeoutSeconds ) )
+			{
+				Log.Warning( $"[humanoid-retargeter] material did not compile: {relative}" );
+				continue;
+			}
+
+			var textures = Path.Combine( Path.GetDirectoryName( absolute )!, "textures" );
+			if ( Directory.Exists( textures ) )
+				foreach ( var compiled in Directory.EnumerateFiles( textures, "*.generated.vtex_c" ) )
+					Try( () => AssetSystem.RegisterFile( compiled ) );
+		}
+	}
 
 	/// <summary>Prepares an FBX, GLB, or glTF custom target mesh for ModelDoc.</summary>
 	public static bool PrepareModelTargetMesh(
@@ -1006,7 +1037,10 @@ public static class EditorPipeline
 					builder.AppendLine( $"\tTextureSelfIllumMask \"{emissive}\"" );
 				}
 				builder.AppendLine( "}" );
-				File.WriteAllText( vmatPath, builder.ToString() );
+				// Unchanged text stays unwritten: a rewrite throws away the compiled material.
+				var text = builder.ToString();
+				if ( !File.Exists( vmatPath ) || File.ReadAllText( vmatPath ) != text )
+					File.WriteAllText( vmatPath, text );
 				Try( () => AssetSystem.RegisterFile( vmatPath ) );
 				Log.Info( $"[humanoid-retargeter] generated material {Path.GetFileName( vmatPath )} "
 					+ $"(color: {color ?? "default"}, normal: {normal ?? "default"}, rough: {rough ?? "default"})" );
@@ -1496,6 +1530,8 @@ public static class EditorPipeline
 		var assetsPath = Project.Current?.GetAssetsPath();
 		if ( assetsPath is null )
 			return false;
+
+		await CompileTargetMaterialsAsync( target, assetsPath );
 
 		try
 		{

@@ -13,6 +13,9 @@ Title: 2D Mode
 2D sprites - a new target, 2D sprite (.png/.sprite), reads a humanoid off a sprite's silhouette, front or profile, lets you drag its joints, and builds a rigged model any 3D animation can be retargeted onto; output is the usual VMDL
 Automatic 2D view - picking a flat humanoid (a sprite, or a flat VMDL, FBX or GLB) sets the 2D view to Front or Side as it was drawn, and going back to a 3D character turns it off
 Sprite preview - a flat character plays on open the way the editor previews a Sprite: lit from the camera, filling the view, with no ground
+### Fixed
+# Editor
+Red and black checkerboard on Linux - a custom model's generated materials no longer load as the error material until the editor restarts; they are now compiled and registered before the model that uses them
 
 ## 2026-10-24
 Title: Runtime Facing
