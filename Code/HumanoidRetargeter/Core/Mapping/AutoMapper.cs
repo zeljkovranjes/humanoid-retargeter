@@ -887,7 +887,7 @@ public static class AutoMapper
         // Legs: walk each leg chain — upper leg, lower leg, foot, toe.
         foreach (var (root, side) in SidedRoots(legsPair))
         {
-            var chain = PrimaryChain(children, subtreeDepth, root);
+            var chain = PrimaryChain(children, subtreeDepth, root, positions);
             var roles = new[] { "UpperLeg", "LowerLeg", "Foot", "Toe" };
             for (var i = 0; i < roles.Length && i < chain.Count; i++)
                 map[Enum.Parse<BoneRole>(roles[i] + side)] = chain[i];
@@ -897,7 +897,7 @@ public static class AutoMapper
         // fingers), then assign backwards: lower arm, upper arm, clavicle.
         foreach (var (root, side) in SidedRoots(armsPair))
         {
-            var chain = PrimaryChain(children, subtreeDepth, root);
+            var chain = PrimaryChain(children, subtreeDepth, root, positions);
             var handIndex = -1;
             for (var i = 0; i < chain.Count; i++)
             {
@@ -954,7 +954,7 @@ public static class AutoMapper
         foreach (var root in new[] { legs.Left, legs.Right })
         {
             // upper leg, lower leg, ankle, then the foot's bones out to the tip of the toes
-            var chain = PrimaryChain(children, subtreeDepth, root);
+            var chain = PrimaryChain(children, subtreeDepth, root, positions);
             if (chain.Count < 4)
                 return false;
             var toes = positions[chain[^1]] - positions[chain[2]];
@@ -1003,7 +1003,7 @@ public static class AutoMapper
             var d = float.MaxValue;
             foreach (var (root, _) in SidedRoots(p))
             {
-                var chain = PrimaryChain(children, subtreeDepth, root);
+                var chain = PrimaryChain(children, subtreeDepth, root, positions);
                 var e = Component(positions[chain[^1]], upAxis);
                 d = MathF.Min(d, MathF.Min(e - lo, hi - e));
             }
@@ -1272,7 +1272,11 @@ public static class AutoMapper
 
     /// <summary>Greedy deepest-descent chain from a node (the anatomical limb continues
     /// along the deepest subtree; short decorations branch off).</summary>
-    private static List<int> PrimaryChain(List<int>[] children, int[] subtreeDepth, int start)
+    /// <summary>Walks down from <paramref name="start"/> by the deepest child. Given
+    /// <paramref name="positions"/>, children equally deep go by length: a limb continues
+    /// through its long bone, not a helper partway along it like a shin twist.</summary>
+    private static List<int> PrimaryChain(
+        List<int>[] children, int[] subtreeDepth, int start, Vector3[]? positions = null)
     {
         var chain = new List<int>();
         var current = start;
@@ -1282,7 +1286,11 @@ public static class AutoMapper
             var kids = children[current];
             if (kids.Count == 0)
                 break;
-            current = kids.OrderByDescending(c => subtreeDepth[c]).First();
+            var from = current;
+            current = kids
+                .OrderByDescending(c => subtreeDepth[c])
+                .ThenByDescending(c => positions is null ? 0f : Vector3.DistanceSquared(positions[c], positions[from]))
+                .First();
         }
         return chain;
     }
