@@ -18,6 +18,8 @@ Title: 2D Mode
 Automatic 2D view - picking a flat humanoid (a sprite, or a flat VMDL, FBX or GLB) sets the 2D view to Front or Side as it was drawn, and going back to a 3D character turns it off
 Sprite preview - a flat character plays on open on a transparency checker, in the art's own colours with no sheen or shading, standing at the foot of the view, with the source skeleton beside it: drag that skeleton, or move Turn, Tilt and Roll, and the character follows at once (about 40 ms)
 ### Fixed
+# Mapping
+Shin twists - where a rig has no ankle, the foot is now the longer child of the lower leg, where a twist bone halfway down the shin used to be taken for it
 # Editor
 Red and black checkerboard on Linux - a custom model's generated materials no longer load as the error material until the editor restarts; they are now compiled and registered before the model that uses them
 Preview after converting - a custom model no longer drops to the skeleton view when it is picked again or after Convert All; its compiled model is kept while nothing has changed
