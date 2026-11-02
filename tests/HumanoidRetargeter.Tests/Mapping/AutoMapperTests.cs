@@ -248,6 +248,38 @@ public class AutoMapperTests
     // ---------------------------------------------------------------- stage B: topology fallback
 
     [Fact]
+    public void StageB_FootIsTheLongerChildOfTheLowerLeg_NotAShinTwist()
+    {
+        // A ported GMod skeleton: named like a citizen, but with no ankle. Each lower leg has
+        // two childless children, a twist halfway down the shin and the foot at the ground.
+        var bones = new List<(string, string?, System.Numerics.Vector3)>
+        {
+            ("pelvis", null, new(0, 94, 0)),
+            ("spine_1", "pelvis", new(0, 112, 0)),
+            ("spine_2", "spine_1", new(0, 124, 0)),
+            ("neck_0", "spine_2", new(0, 145, 0)),
+            ("head", "neck_0", new(0, 153, 0)),
+        };
+        foreach (var (s, x) in new[] { ("L", 1f), ("R", -1f) })
+        {
+            bones.Add(($"clavicle_{s}", "spine_2", new(2 * x, 138, 0)));
+            bones.Add(($"arm_upper_{s}", $"clavicle_{s}", new(18 * x, 136, 0)));
+            bones.Add(($"arm_lower_{s}", $"arm_upper_{s}", new(34 * x, 115, 0)));
+            bones.Add(($"hand_{s}", $"arm_lower_{s}", new(51 * x, 98, 0)));
+            bones.Add(($"leg_upper_{s}", "pelvis", new(10 * x, 88, 0)));
+            bones.Add(($"leg_lower_{s}", $"leg_upper_{s}", new(14 * x, 48, 0)));
+            bones.Add(($"leg_lower_{s}_twist1", $"leg_lower_{s}", new(17 * x, 28, 0)));
+            bones.Add(($"ball_{s}", $"leg_lower_{s}", new(21 * x, 1, 6)));
+        }
+        var skeleton = MappingFixtures.FromWorldPositions(bones);
+
+        var result = AutoMapper.Map(skeleton);
+
+        Assert.Equal("ball_L", skeleton[result.RoleToBone[BoneRole.FootL]].Name);
+        Assert.Equal("ball_R", skeleton[result.RoleToBone[BoneRole.FootR]].Name);
+    }
+
+    [Fact]
     public void StageB_RenamedZombieCrawl_ResolvedByTopology()
     {
         var original = MappingFixtures.LoadZombieCrawl();
