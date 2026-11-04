@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-11-03
+Title: AnimGraph2
+### Added
+# Editor
+AnimGraph2 Citizens - Create Citizen animation model gives the model the shipped Citizen's AnimGraph2 graph (.ag) when it has one, beside its AnimGraph1 graph, and the model animates through it; a model made from an AnimGraph1 Citizen (all shipped ones today) comes out exactly as before
+Editable AnimGraph2 graph - Copy editable Citizen animgraph copies an AnimGraph2 graph to graphs/<model name>.ag, pointed at the new model; a graph whose skeleton and clips come compiled only (the shipped Human's human.ag: human.skel and 308 clips, which AnimGraph2 can't compile a copy against) is rebased onto a skeleton and clips of the model's own, written to <model name>_citizen_sources/animgraph2, so the copy compiles and stock replacement works on it
+Create Citizen animation model on AnimGraph2 - a fitted armature now gets the AnimGraph2 graph too, rebased onto its own skeleton and the 308 shipped clips retargeted to it the way Smart Port retargets, beside the AnimGraph1 graph and its retargeted stock sequences (about 6 minutes for the Human)
+Graph system - "AnimGraph1 (legacy)" or "Using AnimGraph2" shows under Create Citizen animation model, beside the model in the stock replacement dialog, and in the status line after Create or Replace
+AnimGraph2 stock replacement - on an AnimGraph2 model the clip is written as an .anim on the graph's skeleton, scaled to that skeleton's units, and every clip and pose node playing the slot (walk_forward, sprint_forward, ... as well as the sequence names) is pointed at it; the graph keeps its .bak and is restored if the compile fails, as on AnimGraph1
+Smart Port from AnimGraph2 - Use the source's setup on a source driven by AnimGraph2 (the Human's human.ag) gives the target its own skeleton and a clip per animation the graph plays, retargeted like the source's sequences with their bone masks, IK goals, events, sync and root motion, and the graph rebased onto them; a hero ported from the AnimGraph2 Human moves within 2.8 units of its AnimGraph1 port (308 clips, about 5 minutes)
+
 ## 2026-11-01
 Title: 2D Mode
 ### Added

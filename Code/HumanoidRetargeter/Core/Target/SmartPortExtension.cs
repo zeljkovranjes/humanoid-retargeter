@@ -10,6 +10,9 @@ public static class SmartPortExtension
 {
     public const string Parameter = "hr_smartport_clip";
 
+    /// <summary>The selection option (0) that plays the target's original graph.</summary>
+    public const string OriginalOption = "Existing animations";
+
     public static string MergeModel(string targetText, string portedText, string graphPath,
         out IReadOnlyDictionary<string, string> names)
     {
@@ -96,7 +99,7 @@ public static class SmartPortExtension
         parameter = Parameter;
         for (var suffix = 2; usedNames.Contains(parameter); suffix++) parameter = Parameter + "_" + suffix;
         var parameterId = Allocate();
-        var options = Array(new KvString("Existing animations"));
+        var options = Array(new KvString(OriginalOption));
         var children = Array(original);
         var tags = Array(Id(uint.MaxValue));
         var positions = nodes.Items.OfType<KvObject>().Select(n => n.GetOrNull("value")).OfType<KvObject>()

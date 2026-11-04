@@ -61,13 +61,18 @@ public static class CitizenAnimationSetup
         var root = (KvObject)((KvObject)document.Root)["rootNode"];
         var shipped = (KvObject)((KvObject)Kv3.Parse(shippedVmdl).Root)["rootNode"];
         var graph = shipped.GetString("anim_graph_name");
-        if (string.IsNullOrEmpty(graph))
+        // An AnimGraph2 Citizen names its .ag graph too (or only), and that graph drives the model
+        var graph2 = shipped.GetString(AnimGraph2Document.VmdlKey);
+        if (string.IsNullOrEmpty(graph) && string.IsNullOrEmpty(graph2))
             throw new InvalidOperationException("The shipped model has no animation graph.");
         if (!string.IsNullOrEmpty(root.GetString("base_model_name")))
             throw new InvalidOperationException("Use a standalone custom model, not an animation-only Base Model.");
-        var existingGraph = root.GetString("anim_graph_name");
-        if (!string.IsNullOrEmpty(existingGraph) && existingGraph != graph)
-            throw new InvalidOperationException("The custom model already uses a different animation graph.");
+        foreach (var (key, expected) in new[] { ("anim_graph_name", graph), (AnimGraph2Document.VmdlKey, graph2) })
+        {
+            var existingGraph = root.GetString(key);
+            if (!string.IsNullOrEmpty(expected) && !string.IsNullOrEmpty(existingGraph) && existingGraph != expected)
+                throw new InvalidOperationException("The custom model already uses a different animation graph.");
+        }
         var children = (KvArray)root["children"];
         var shippedChildren = (KvArray)shipped["children"];
         ValidateSourceScale(customVmdl);
@@ -113,7 +118,10 @@ public static class CitizenAnimationSetup
             // Includes Human's inline CopyPinky constraints as well as all animation prefabs.
             children.Items.Add(source);
         }
-        root["anim_graph_name"] = new KvString(graph);
+        if (!string.IsNullOrEmpty(graph))
+            root["anim_graph_name"] = new KvString(graph);
+        if (!string.IsNullOrEmpty(graph2))
+            root[AnimGraph2Document.VmdlKey] = new KvString(graph2);
         return Kv3.Serialize(document);
     }
 

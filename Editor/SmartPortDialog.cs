@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Editor;
+using HumanoidRetargeter.Engine;
 using Sandbox;
 
 namespace HumanoidRetargeter.EditorTools;
@@ -96,7 +97,7 @@ public sealed class SmartPortDialog : Dialog
 			var asset = assets.FirstOrDefault();
 			if ( asset is null ) return;
 			if ( source ) { _source = asset; _sourcePick.SetModel( asset.Path ); }
-			else { _target = asset; _targetPick.SetModel( asset.Path ); }
+			else { _target = asset; _targetPick.SetModel( asset.Path, AnimGraphVersions.Describe( AnimGraphVersions.Of( Model.Load( asset.Path ) ) ) ); }
 			Refresh();
 		};
 		picker.Show();
@@ -181,7 +182,7 @@ public sealed class SmartPortDialog : Dialog
 	{
 		readonly string _icon, _role, _hint;
 		readonly Action _clicked;
-		string _path;
+		string _path, _note;
 
 		public ModelTile( Widget parent, string icon, string role, string hint, Action clicked ) : base( parent )
 		{
@@ -196,9 +197,11 @@ public sealed class SmartPortDialog : Dialog
 			ToolTip = $"{hint}: click to choose a model (local or cloud)";
 		}
 
-		public void SetModel( string path )
+		/// <summary>Shows <paramref name="path"/>, with an optional <paramref name="note"/> (the graph system) beside the role.</summary>
+		public void SetModel( string path, string note = null )
 		{
 			_path = path;
+			_note = note;
 			Update();
 		}
 
@@ -228,7 +231,7 @@ public sealed class SmartPortDialog : Dialog
 			var width = Width - x - 12;
 			Paint.SetDefaultFont( 7, 600 );
 			Paint.SetPen( Theme.TextLight );
-			Paint.DrawText( new Rect( x, 12, width, 14 ), $"{_role} · {_hint}", TextFlag.LeftCenter );
+			Paint.DrawText( new Rect( x, 12, width, 14 ), _note is null ? $"{_role} · {_hint}" : $"{_role} · {_hint} · {_note}", TextFlag.LeftCenter );
 			Paint.SetDefaultFont( 9, chosen ? 600 : 400 );
 			Paint.SetPen( !Enabled ? Theme.TextDisabled : chosen ? Theme.Text : Theme.TextLight );
 			var text = chosen ? _path : "Choose…";

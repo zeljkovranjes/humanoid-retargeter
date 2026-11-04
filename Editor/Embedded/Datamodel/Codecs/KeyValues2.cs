@@ -23,7 +23,14 @@ namespace HumanoidRetargeter.EditorTools.Embedded.Datamodel.Codecs;
     [CodecFormat("keyvalues2_noids", 4)]
     class KeyValues2 : ICodec
     {
+#if SANDBOX
+        // Hotloads carry static values over to the new assembly: keep each assembly's own types (its static constructor's)
+        [Sandbox.SkipHotload]
+#endif
         static readonly Dictionary<Type, string> TypeNames = [];
+#if SANDBOX
+        [Sandbox.SkipHotload]
+#endif
         static readonly Dictionary<int, Type[]> ValidAttributes = [];
         static KeyValues2()
         {

@@ -80,11 +80,52 @@ partial class ModelExtract
                 frames[i] = transfer == null ? frame : transfer(frame);
             }
 
-            ProcessRootMotionChannel(anim, dmeSkeleton, clip, motionScale);
-            ProcessBoneChannels(skeleton, anim, transforms, clip, frames);
-            ProcessFlexChannels(flexControllers, anim, clip, frames);
+            if (anim.HasMovementData())
+            {
+                ProcessRootMotionChannel(dmeSkeleton, clip, anim.FrameCount, anim.Fps, time =>
+                {
+                    var movement = anim.GetMovementOffsetData(time);
+                    return (movement.Position, movement.Angle);
+                }, motionScale);
+            }
+            ProcessBoneChannels(skeleton, anim.FrameCount, anim.Fps, transforms, clip, frames);
+            ProcessFlexChannels(flexControllers, anim.FrameCount, anim.Fps, clip, frames);
         }
 
+        return Save(dmx, dmeSkeleton, animationList, clip);
+    }
+
+    /// <summary>
+    /// Converts frames already decoded on <paramref name="skeleton"/> (Smart Port's AnimGraph2 clips, which have no
+    /// <see cref="Animation"/>) to DMX, like <see cref="ToDmxAnim(Model, Animation)"/>. <paramref name="movement"/>
+    /// gives the root motion (position, yaw in degrees) at a time in seconds, or is null for a clip without any.
+    /// <paramref name="isModel"/> also names the skeleton the file's model, which skeleton importers look for.
+    /// </summary>
+    internal static byte[] ToDmxAnim(Skeleton skeleton, Frame[] frames, float fps,
+        Func<float, (global::System.Numerics.Vector3 Position, float Angle)>? movement, bool isModel = false)
+    {
+        using var dmx = new HumanoidRetargeter.EditorTools.Embedded.Datamodel.Datamodel("model", 22);
+        var dmeSkeleton = BuildDmeDagSkeleton(skeleton, out var transforms);
+        var animationList = new DmeAnimationList();
+        var clip = new DmeChannelsClip
+        {
+            FrameRate = fps
+        };
+        if (frames.Length > 0)
+        {
+            clip.TimeFrame.Duration = TimeSpan.FromSeconds((double)(frames.Length - 1) / MathF.Max(1f, fps));
+            if (movement != null)
+            {
+                ProcessRootMotionChannel(dmeSkeleton, clip, frames.Length, fps, movement, 1f);
+            }
+            ProcessBoneChannels(skeleton, frames.Length, fps, transforms, clip, frames);
+        }
+        return Save(dmx, dmeSkeleton, animationList, clip, isModel);
+    }
+
+    private static byte[] Save(HumanoidRetargeter.EditorTools.Embedded.Datamodel.Datamodel dmx, DmeModel dmeSkeleton,
+        DmeAnimationList animationList, DmeChannelsClip clip, bool isModel = false)
+    {
         animationList.Animations.Add(clip);
 
         using var stream = new MemoryStream();
@@ -99,6 +140,10 @@ partial class ModelExtract
                 ["source"] = $"Generated with {StringToken.Generator}",
             }
         };
+        if (isModel)
+        {
+            dmx.Root["model"] = dmeSkeleton;
+        }
 
         dmx.Save(stream, "binary", 9);
 
@@ -187,26 +232,23 @@ partial class ModelExtract
         flexLayer.LayerValues[frame.FrameIndex] = flexValue;
     }
 
-    private static void ProcessRootMotionChannel(Animation anim, DmeModel skeleton, DmeChannelsClip clip, float motionScale)
+    private static void ProcessRootMotionChannel(DmeModel skeleton, DmeChannelsClip clip, int frameCount, float fps,
+        Func<float, (global::System.Numerics.Vector3 Position, float Angle)> movementAt, float motionScale)
     {
-        if (!anim.HasMovementData())
-        {
-            return;
-        }
         var rootPositionChannel = BuildDmeChannel<global::System.Numerics.Vector3>($"_p", skeleton.Transform, "position", out var rootPositionLog);
         var rootPositionLayer = rootPositionLog.GetLayer(0);
-        rootPositionLayer.LayerValues = new global::System.Numerics.Vector3[anim.FrameCount];
+        rootPositionLayer.LayerValues = new global::System.Numerics.Vector3[frameCount];
 
         var rootOrientationChannel = BuildDmeChannel<global::System.Numerics.Quaternion>($"_o", skeleton.Transform, "orientation", out var rootOrientationLog);
         var rootOrientationLayer = rootOrientationLog.GetLayer(0);
-        rootOrientationLayer.LayerValues = new global::System.Numerics.Quaternion[anim.FrameCount];
+        rootOrientationLayer.LayerValues = new global::System.Numerics.Quaternion[frameCount];
 
-        for (var i = 0; i < anim.FrameCount; i++)
+        for (var i = 0; i < frameCount; i++)
         {
-            var time = i / MathF.Max(1f, anim.Fps);
+            var time = i / MathF.Max(1f, fps);
             var timespan = TimeSpan.FromSeconds(time);
 
-            var movement = anim.GetMovementOffsetData(time);
+            var movement = movementAt(time);
 
             rootPositionLayer.LayerValues[i] = movement.Position * motionScale;
             rootPositionLayer.Times.Add(timespan);
@@ -222,7 +264,7 @@ partial class ModelExtract
         clip.Channels.Add(rootOrientationChannel);
     }
 
-    private static void ProcessFlexChannels(FlexController[] flexControllers, Animation anim, DmeChannelsClip clip, Frame[] frames)
+    private static void ProcessFlexChannels(FlexController[] flexControllers, int frameCount, float fps, DmeChannelsClip clip, Frame[] frames)
     {
         for (var flexId = 0; flexId < flexControllers.Length; flexId++)
         {
@@ -236,19 +278,19 @@ partial class ModelExtract
 
             var flexChannel = BuildDmeChannel<float>($"{flexController.Name}_flex_channel", flexElement, "flexWeight", out var flexLog);
             var flexLogLayer = flexLog.GetLayer(0);
-            flexLogLayer.LayerValues = new float[anim.FrameCount];
+            flexLogLayer.LayerValues = new float[frameCount];
 
-            for (var i = 0; i < anim.FrameCount; i++)
+            for (var i = 0; i < frameCount; i++)
             {
                 var frame = frames[i];
-                var time = TimeSpan.FromSeconds((double)i / MathF.Max(1f, anim.Fps));
+                var time = TimeSpan.FromSeconds((double)i / MathF.Max(1f, fps));
                 ProcessFlexFrameForDmeChannel(flexId, frame, time, flexLogLayer);
             }
             clip.Channels.Add(flexChannel);
         }
     }
 
-    private static void ProcessBoneChannels(Skeleton skeleton, Animation anim, DmeTransform[] transforms, DmeChannelsClip clip, Frame[] frames)
+    private static void ProcessBoneChannels(Skeleton skeleton, int frameCount, float fps, DmeTransform[] transforms, DmeChannelsClip clip, Frame[] frames)
     {
         foreach (var bone in skeleton.Bones)
         {
@@ -260,14 +302,14 @@ partial class ModelExtract
             var positionLogLayer = positionLog.GetLayer(0);
             var orientationLogLayer = orientationLog.GetLayer(0);
 
-            positionLogLayer.LayerValues = new global::System.Numerics.Vector3[anim.FrameCount];
-            orientationLogLayer.LayerValues = new global::System.Numerics.Quaternion[anim.FrameCount];
+            positionLogLayer.LayerValues = new global::System.Numerics.Vector3[frameCount];
+            orientationLogLayer.LayerValues = new global::System.Numerics.Quaternion[frameCount];
 
-            for (var i = 0; i < anim.FrameCount; i++)
+            for (var i = 0; i < frameCount; i++)
             {
                 var frame = frames[i];
 
-                var time = TimeSpan.FromSeconds((double)i / MathF.Max(1f, anim.Fps));
+                var time = TimeSpan.FromSeconds((double)i / MathF.Max(1f, fps));
 
                 ProcessBoneFrameForDmeChannel(bone, frame, time, positionLogLayer, orientationLogLayer);
             }

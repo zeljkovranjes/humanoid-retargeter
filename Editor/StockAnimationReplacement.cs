@@ -7,6 +7,7 @@ using Editor;
 using HumanoidRetargeter.Core;
 using HumanoidRetargeter.Core.Target;
 using HumanoidRetargeter.Core.Skeleton;
+using HumanoidRetargeter.Engine;
 
 namespace HumanoidRetargeter.EditorTools;
 
@@ -33,27 +34,38 @@ internal static class StockAnimationReplacement
 			throw new InvalidOperationException( "Create the Citizen animation model first so its complete stock library is retargeted to this fitted armature." );
 		var vmdl = original ?? CitizenAnimationModels.BuildModelText( target, referencePath, folder );
 		CitizenAnimationSetup.ValidateSourceScale( vmdl );
-		var graphPath = StockAnimationGraph.GraphPath( folder, name );
+		// The model's AnimGraph2 graph drives it whenever it names one (on engines that have AnimGraph2)
+		var animGraph2 = AnimGraphVersions.IsAnimGraph2Available && !string.IsNullOrEmpty( AnimGraph2Document.GraphName( vmdl ) );
+		var graphPath = animGraph2 ? AnimGraph2Document.GraphPath( folder, name ) : StockAnimationGraph.GraphPath( folder, name );
 		var graphFile = CitizenAnimationModels.ProjectFile( graphPath );
 		var previousGraph = File.Exists( graphFile ) ? File.ReadAllText( graphFile ) : null;
-		if ( previousGraph is not null && !string.Equals( StockAnimationGraph.GraphName( vmdl ).Replace( '\\', '/' ), graphPath, StringComparison.OrdinalIgnoreCase ) )
+		var currentGraph = animGraph2 ? AnimGraph2Document.GraphName( vmdl ) : StockAnimationGraph.GraphName( vmdl );
+		if ( previousGraph is not null && !string.Equals( currentGraph.Replace( '\\', '/' ), graphPath, StringComparison.OrdinalIgnoreCase ) )
 			throw new InvalidOperationException( "An unrelated graph already exists at " + graphPath + ". Choose another model name to preserve it." );
-		var graph = CitizenAnimationModels.ReadGraph( vmdl );
+		var graph = CitizenAnimationModels.ReadGraph( vmdl, animGraph2 );
+		if ( animGraph2 && CitizenAnimationModels.MissingAnimGraph2Sources( graph ) is { Count: > 0 } missing )
+			throw new InvalidOperationException( CitizenAnimationModels.CompiledOnlyMessage( missing ) + " Stock animations can only be replaced in a graph that compiles in the project." );
 		var spec = TargetSpec( referencePath, resolved.PreviewModelPath );
 		var batch = await Task.Run( () => Retargeter.ConvertBatch( new[] { request }, spec,
 			new BatchOptions { DmxFolderRelative = folder } ) );
 		if ( batch.Clips.Count != 1 || !batch.Clips[0].Success || batch.Errors.Count > 0 )
 			throw new InvalidOperationException( string.Join( "\n", batch.Errors.Concat( batch.Clips.Where( c => !c.Success ).Select( c => c.Error ) ) ) );
 		var clip = batch.Clips[0];
-		var replacement = StockAnimationGraph.Replace( graph, slot, clip.ClipName, modelPath,
-			CitizenAnimationModels.ReadGraphSource, StockAnimationGraph.SubgraphFolder( folder, name ) );
+		var clipSource = string.IsNullOrEmpty( folder ) ? clip.DmxFileName : folder + "/" + clip.DmxFileName;
+		// AnimGraph2 plays the clip as an .anim on the graph's own skeleton; AnimGraph1 as the model's sequence
+		var animPath = Path.ChangeExtension( clipSource, ".anim" );
+		var replacement = animGraph2
+			? StockAnimationGraph.ReplaceAnimGraph2( graph, slot, animPath, modelPath )
+			: StockAnimationGraph.Replace( graph, slot, clip.ClipName, modelPath,
+				CitizenAnimationModels.ReadGraphSource, StockAnimationGraph.SubgraphFolder( folder, name ) );
+		var anim = animGraph2 ? AnimGraph2Sources.Clip( clipSource, AnimGraph2Document.SkeletonOf( graph ), StockClipScale( graph ) ) : null;
 		graph = replacement.Graph;
 		vmdl = VmdlAugmenter.Augment( vmdl, new[] { new AnimEntry
 		{
-			Name = clip.ClipName, SourceFilename = string.IsNullOrEmpty( folder ) ? clip.DmxFileName : folder + "/" + clip.DmxFileName,
+			Name = clip.ClipName, SourceFilename = clipSource,
 			Looping = clip.Looping, Events = clip.FootstepEvents,
 		} }, out _, new AugmentOptions { DefaultRootBone = spec.DefaultRootBone } );
-		vmdl = StockAnimationGraph.Attach( vmdl, graphPath );
+		vmdl = animGraph2 ? AnimGraph2Document.Attach( vmdl, graphPath ) : StockAnimationGraph.Attach( vmdl, graphPath );
 		batch.StandaloneVmdl = vmdl;
 		batch.AugmentedVmdl = vmdl;
 		await EditorPipeline.SwitchToMainThread();
@@ -63,8 +75,10 @@ internal static class StockAnimationReplacement
 			throw new InvalidOperationException( "The output changed during conversion. Retry to preserve those edits." );
 		Directory.CreateDirectory( Path.GetDirectoryName( graphFile ) );
 		if ( previousGraph is not null ) File.Copy( graphFile, graphFile + ".bak", overwrite: true );
-		// Subgraph copies first: the graph only compiles against the subgraphs it now names.
+		// Subgraph copies (or the AnimGraph2 clip) first: the graph only compiles against the subgraphs it now names.
 		var subgraphFiles = replacement.Subgraphs.ToDictionary( s => CitizenAnimationModels.ProjectFile( s.Key ), s => s.Value );
+		if ( anim is not null )
+			subgraphFiles[CitizenAnimationModels.ProjectFile( animPath )] = anim;
 		var previousSubgraphs = subgraphFiles.Keys.ToDictionary( f => f, f => File.Exists( f ) ? File.ReadAllText( f ) : null );
 		foreach ( var (file, text) in subgraphFiles )
 		{
@@ -95,6 +109,12 @@ internal static class StockAnimationReplacement
 			}
 		}
 	}
+
+	// The retargeted DMX is in the stock source units (centimetres, as ValidateSourceScale requires): scaled to the
+	// graph's skeleton, a shipped one or one Create Citizen animation model ported in engine units
+	static double StockClipScale( string graph )
+		=> SmartPortAnimGraph2.CentimetreClipScale( CitizenAnimationModels.ReadGraphSource( AnimGraph2Document.SkeletonOf( graph ) )
+			?? throw new InvalidOperationException( "The graph's skeleton has no source: " + AnimGraph2Document.SkeletonOf( graph ) ) );
 
 	internal static RetargetTargetSpec TargetSpec( string referencePath, string modelPath )
 	{

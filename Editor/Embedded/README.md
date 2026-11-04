@@ -15,7 +15,7 @@ Namespaces live under `HumanoidRetargeter.EditorTools.Embedded.<Component>` (fol
 
 `Resource.cs` dispatches only the blocks used for model/graph recovery. `IFileLoader.cs`, `ContentFile.cs`, `SubFile.cs`, `FileExtract.cs` (in `ValveResourceFormat/IO/`) and `ResourceTypes/Morph.cs` supply the small file-loader/content abstractions (formerly one `ExtractionTypes.cs`). `Compression/Lz4.cs` and `Lz4Chain.cs` provide bounded block and chained-dictionary decoding. Viewer, shader, texture, glTF, native entry point and unrelated resource export code is excluded. Mesh index decoding is brought over without the glTF exporter. Unused material shader evaluation and diagnostic REDI serialization are omitted.
 
-The ModelDoc exporter fixes quaternion-to-Euler pole handling. Current s&box's packed octahedral normals are decoded; ModelDoc regenerates their tangents from UVs. The host serializes ModelDoc numbers without exponents and confines every recovered file to the chosen output directory.
+The ModelDoc exporter fixes quaternion-to-Euler pole handling. `ToDmxAnim` also takes frames already sampled (Smart Port's AnimGraph2 clips), and Datamodel.NET's static type tables are marked `SkipHotload` in s&box so a hotload can't leave them pointing at a previous assembly's types. Current s&box's packed octahedral normals are decoded; ModelDoc regenerates their tangents from UVs. The host serializes ModelDoc numbers without exponents and confines every recovered file to the chosen output directory.
 
 Version 17 is intentional: later exporter versions omit legacy ANIM-only sequences present in s&box models. Do not upgrade based only on parsing/compiling successfully: run the optional compiled fixture test and native play-mode test in `tests/SmartPort`.
 
