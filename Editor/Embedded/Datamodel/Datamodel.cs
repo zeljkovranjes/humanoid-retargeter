@@ -37,6 +37,10 @@ namespace HumanoidRetargeter.EditorTools.Embedded.Datamodel;
 
         #region Attribute types
 
+#if SANDBOX
+        // Hotloads carry static values over to the new assembly: keep each assembly's own types (its static constructor's)
+        [Sandbox.SkipHotload]
+#endif
         private static readonly Type[] attributeTypes = [
             typeof(Element),
             typeof(int),
@@ -111,6 +115,9 @@ namespace HumanoidRetargeter.EditorTools.Embedded.Datamodel;
         }
 
         #region Codecs
+#if SANDBOX
+        [Sandbox.SkipHotload]
+#endif
         public static readonly Dictionary<CodecRegistration, Type> Codecs = [];
 
         public static IEnumerable<CodecRegistration> CodecsRegistered => Codecs.Keys.OrderBy(reg => string.Join(null, reg.Item1, reg.Item2)).ToArray();

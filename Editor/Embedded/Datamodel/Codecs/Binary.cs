@@ -19,6 +19,10 @@ namespace HumanoidRetargeter.EditorTools.Embedded.Datamodel.Codecs;
     [CodecFormat("binary", 9)]
     class Binary : IDeferredAttributeCodec
     {
+#if SANDBOX
+        // Hotloads carry static values over to the new assembly: keep each assembly's own types (its static constructor's)
+        [Sandbox.SkipHotload]
+#endif
         static readonly Dictionary<int, Type?[]> SupportedAttributes = [];
         BinaryReader? Reader;
 
