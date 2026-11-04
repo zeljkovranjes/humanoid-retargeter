@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using Editor;
 using HumanoidRetargeter.Core;
 using HumanoidRetargeter.Core.Target;
+using HumanoidRetargeter.Engine;
 using Sandbox;
 
 namespace HumanoidRetargeter.EditorTools;
@@ -54,6 +55,8 @@ internal static class CitizenAnimationSetupGate
 			var model = Model.Load( result.VmdlAsset.Path );
 			if ( model is null || model.IsError || model.AnimGraph is null || model.AnimGraph.IsError )
 				throw new Exception( "Citizen setup has no working animation graph." );
+			if ( AnimGraphVersions.Of( model ) != AnimGraphVersions.Of( sourceModel ) )
+				throw new Exception( $"Graph system {AnimGraphVersions.Describe( AnimGraphVersions.Of( model ) )} differs from the shipped model's." );
 			if ( model.AnimGraph.Name != sourceModel.AnimGraph.Name )
 				throw new Exception( $"Wrong graph: {model.AnimGraph.Name}; expected {sourceModel.AnimGraph.Name}." );
 			var missing = sourceModel.AnimationNames.Except( model.AnimationNames ).ToArray();

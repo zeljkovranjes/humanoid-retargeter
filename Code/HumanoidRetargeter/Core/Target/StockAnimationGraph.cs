@@ -32,6 +32,14 @@ public static class StockAnimationGraph
             ["Run"] = new[] { "Run_{0}", "Run_{0}_m", "Run_{0}_f", "Run2X_{0}", "Sprint_{0}", "Sprint_{0}_m", "Sprint_{0}_f" },
             ["CrouchWalk"] = new[] { "CrouchWalk_{0}", "CrouchWalkLow_{0}" },
         };
+        // The AnimGraph2 graph names walk and run clips by direction word (run_forward_left); crouch walks keep
+        // their sequence names
+        var clipTiers = new Dictionary<string, string[]>
+        {
+            ["Walk"] = new[] { "walk_{0}" },
+            ["Run"] = new[] { "run_{0}", "sprint_{0}" },
+            ["CrouchWalk"] = Array.Empty<string>(),
+        };
         foreach (var (stem, label) in new[] { ("Walk", "Walk"), ("Run", "Run"), ("CrouchWalk", "Crouch walk") })
         foreach (var (direction, title) in new[] { ("N", "forward"), ("S", "backward"), ("E", "right"), ("W", "left"),
             ("NE", "forward-right"), ("NW", "forward-left"), ("SE", "backward-right"), ("SW", "backward-left") })
@@ -39,7 +47,10 @@ public static class StockAnimationGraph
             var sequences = tiers[stem].Select(t => string.Format(t, direction)).ToArray();
             slots.Add(new(stem.ToLowerInvariant() + "_" + direction.ToLowerInvariant(), label + " " + title, true, sequences,
                 "Replaces this direction at every speed of the gait (for a run: run, fast run and sprint), so the clip plays at any movement speed. "
-                + "Other directions, blend thresholds and foot-sync settings stay unchanged. Use a matching looping clip; review foot sliding and transitions."));
+                + "Other directions, blend thresholds and foot-sync settings stay unchanged. Use a matching looping clip; review foot sliding and transitions.")
+            {
+                Clips = clipTiers[stem].Select(t => string.Format(t, title.Replace('-', '_'))).ToArray(),
+            });
         }
         return slots.ToArray();
     }
@@ -138,6 +149,30 @@ public static class StockAnimationGraph
             throw new InvalidOperationException($"This graph has no compatible '{slot.Label}' sequence references. Its structure may have been customized; automatic replacement was not applied.");
         SetPreview((KvObject)doc.Root, modelPath);
         return new StockGraphReplacement(Kv3.Serialize(doc), outputs, references);
+    }
+
+    /// <summary>
+    /// Points the slot's clips in an AnimGraph2 graph (<c>.ag</c>) at <paramref name="clipPath"/> (an <c>.anim</c>),
+    /// in every node and variation override that plays them, and previews the graph on <paramref name="modelPath"/>.
+    /// AnimGraph2 graphs hold their nested graphs inline, so there are no subgraph copies.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The graph plays none of the slot's clips.</exception>
+    public static StockGraphReplacement ReplaceAnimGraph2(string graph, StockAnimationSlot slot, string clipPath, string modelPath)
+    {
+        var rewritten = AnimGraph2Document.RewriteAnimations(graph, name => IsSlotClip(slot, name) ? clipPath : null, out var references);
+        if (references == 0)
+            throw new InvalidOperationException($"This graph has no compatible '{slot.Label}' clip references. Its structure may have been customized; automatic replacement was not applied.");
+        return new StockGraphReplacement(AnimGraph2Document.CopyForModel(rewritten, modelPath),
+            new Dictionary<string, string>(), references);
+    }
+
+    /// <summary>Whether AnimGraph2 animation <paramref name="animationName"/> is one of the slot's stock clips, or an
+    /// earlier replacement of them.</summary>
+    public static bool IsSlotClip(StockAnimationSlot slot, string animationName)
+    {
+        var stem = AnimGraph2Document.AnimationStem(animationName);
+        return slot.Sequences.Concat(slot.Clips).Contains(stem, StringComparer.OrdinalIgnoreCase)
+            || stem.StartsWith(slot.ReplacementPrefix, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>Where a model's project-owned subgraph copies live, beside its graph.</summary>

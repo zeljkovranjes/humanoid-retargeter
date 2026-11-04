@@ -10,6 +10,7 @@ using HumanoidRetargeter.Core;
 using HumanoidRetargeter.Core.Cleanup;
 using HumanoidRetargeter.Core.Mapping;
 using HumanoidRetargeter.Core.Target;
+using HumanoidRetargeter.Engine;
 using Sandbox;
 
 namespace HumanoidRetargeter.EditorTools;
@@ -75,6 +76,7 @@ public sealed class RetargetWindow : Widget
 	Layout _listLayout;
 	Button _convertButton;
 	Button _citizenSetupButton;
+	Label _citizenGraphLabel;
 	RtButton _pickAugmentButton;
 	Label _statusLabel;
 	Widget _progressBar;
@@ -277,8 +279,13 @@ public sealed class RetargetWindow : Widget
 		_citizenSetupButton = character.Layout.Add( new Button( "Create Citizen animation model", "accessibility_new" ) { FixedHeight = 26 } );
 		_citizenSetupButton.Enabled = false;
 		_citizenSetupButton.Clicked = () => _ = CreateCitizenAnimationModelAsync();
+		_citizenGraphLabel = character.Layout.Add( RtStyle.Muted( new Label( "", character )
+		{
+			ToolTip = "The animation graph system the Citizen animation model uses: the shipped Citizen's own. On AnimGraph2 a fitted armature gets the graph rebased onto a skeleton and clips retargeted to it.",
+		}, small: true ) );
+		_citizenGraphLabel.Visible = false;
 		RtStyle.Check( character.Layout, "Copy editable Citizen animgraph", _copyAnimGraph, v => _copyAnimGraph = v,
-			"Setup copies the actual Citizen graph to graphs/<model name>.vanmgrph beside the output model. Stock replacements always use a project-owned copy." );
+			"Setup copies the actual Citizen graph to graphs/<model name>.vanmgrph (AnimGraph2: graphs/<model name>.ag, rebased onto a skeleton and clips of the model's own when the shipped ones come compiled only) beside the output model. Stock replacements always use a project-owned copy." );
 
 		// -- output ----------------------------------------------------------------------------
 		var output = canvas.Layout.Add( new RtCard( canvas ) );
@@ -655,7 +662,7 @@ public sealed class RetargetWindow : Widget
 			var result = await CitizenAnimationModels.CreateAsync( target, NormalizedOutputFolder(), NormalizedOutputName(), _copyAnimGraph,
 				message => SetStatus( message, Theme.Blue ), groundModel: true );
 			await EditorPipeline.SwitchToMainThread();
-			SetStatus( result.Compiled ? $"Citizen animation model ready: {result.VmdlAsset?.Path}"
+			SetStatus( result.Compiled ? $"Citizen animation model ready: {result.VmdlAsset?.Path} ({AnimGraphVersions.Describe( AnimGraphVersions.Of( Model.Load( result.VmdlAsset.Path ) ) )})"
 				: result.Errors.FirstOrDefault() ?? "The Citizen animation model did not compile.",
 				result.Compiled ? Theme.Green : Theme.Red );
 			MainAssetBrowser.Instance?.Local?.UpdateAssetList();
@@ -676,7 +683,10 @@ public sealed class RetargetWindow : Widget
 	void RefreshCitizenSetupButton()
 	{
 		if ( !_citizenSetupButton.IsValid() ) return;
-		var detected = CitizenAnimationModels.TryDetect( _target, out _, out var reason );
+		var detected = CitizenAnimationModels.TryDetect( _target, out var referencePath, out var reason );
+		_citizenGraphLabel.Visible = detected;
+		if ( detected )
+			_citizenGraphLabel.Text = AnimGraphVersions.Describe( CitizenAnimationModels.OutputVersion( referencePath ) );
 		_citizenSetupButton.Enabled = detected && !_converting && !_augmentMode && _targetError is null;
 		_citizenSetupButton.SetStyles( _citizenSetupButton.Enabled ? $"color: {Theme.Green.Hex};" : "" );
 		_citizenSetupButton.ToolTip = _augmentMode ? "Choose New animation vmdl to create a Citizen-ready custom model."
@@ -1901,6 +1911,9 @@ public sealed class RetargetWindow : Widget
 		clipRow.AddStretchCell();
 		var modelRow = RtStyle.FieldRow( card, card.Layout, "Model", caption );
 		modelRow.Add( RtStyle.Muted( new Label( card ) { Text = path, FixedHeight = RtStyle.FieldHeight, ToolTip = path } ), 1 );
+		if ( AssetSystem.FindByPath( path ) is not null && Model.Load( path ) is { IsError: false } destination )
+			modelRow.Add( RtStyle.Muted( new Label( card ) { Text = AnimGraphVersions.Describe( AnimGraphVersions.Of( destination ) ), FixedHeight = RtStyle.FieldHeight,
+				ToolTip = "The animation graph system this model uses; the replacement goes into a project-owned copy of that graph." }, small: true ) );
 
 		var slotRow = RtStyle.FieldRow( card, card.Layout, "Replace", caption );
 		var combo = slotRow.Add( RtStyle.Field( new ComboBox( card ) ), 1 );
@@ -1949,7 +1962,8 @@ public sealed class RetargetWindow : Widget
 		{
 			var result = await StockAnimationReplacement.ReplaceAsync( _target, BuildRequest( take, slot ), slot, modelPath );
 			await EditorPipeline.SwitchToMainThread();
-			SetStatus( result.Compiled ? $"Replaced {slot.Label}. Editable graph: {StockAnimationGraph.GraphPath( Path.GetDirectoryName( modelPath ).Replace( '\\', '/' ), Path.GetFileNameWithoutExtension( modelPath ) )}"
+			var model = result.Compiled ? Model.Load( modelPath ) : null;
+			SetStatus( result.Compiled ? $"Replaced {slot.Label}. Editable graph: {AnimGraphVersions.GraphPathOf( model ) ?? StockAnimationGraph.GraphPath( Path.GetDirectoryName( modelPath ).Replace( '\\', '/' ), Path.GetFileNameWithoutExtension( modelPath ) )} ({AnimGraphVersions.Describe( AnimGraphVersions.Of( model ) )})"
 				: string.Join( "\n", result.Errors ), result.Compiled ? Theme.Green : Theme.Red );
 		}
 		catch ( Exception e ) { await EditorPipeline.SwitchToMainThread(); SetStatus( e.Message, Theme.Red ); }
