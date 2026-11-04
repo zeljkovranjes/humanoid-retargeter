@@ -22,7 +22,7 @@
  */
 // Adapted from BulletXNA 73b2e1b9: namespace isolation, no XNA rendering, one type per file.
 #nullable disable
-#pragma warning disable CS1591, CS0168, CS0219, CS0414, CS0660, CS0661, CS0659, CS0693, CS8981, CS0108, CS0114
+#pragma warning disable CS1591, CS0168, CS0219, CS0414, CS0660, CS0661, CS0659, CS0693, CS8981, CS0108, CS0114, CS0649, CS0169, CS0162
 using System;
 using System.Diagnostics;
 using HumanoidRetargeter.Core.Formats.Mmd.Bullet.BulletCollision;
