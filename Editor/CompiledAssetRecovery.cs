@@ -46,6 +46,14 @@ internal static class CompiledAssetRecovery
 		return SmartPortSetup.Rebase( text, rebase );
 	}
 
+	/// <summary>The data of a compiled resource that has no source (an AnimGraph2 skeleton or clip) as KV3 text.</summary>
+	internal static string ReadData( string input, string assetPath )
+	{
+		using var resource = new Resource { FileName = assetPath };
+		resource.Read( input );
+		return resource.DataBlock?.ToString() ?? throw new InvalidDataException( "Missing resource data: " + assetPath );
+	}
+
 	internal static string ConfinedPath( string root, string relative )
 	{
 		foreach ( var part in relative.Split( '/', '\\' ) )

@@ -1871,9 +1871,9 @@ public static class EditorPipeline
 			foreach ( var path in additionalAssetPaths )
 				Try( () => AssetSystem.RegisterFile( path ) );
 		// The model's graph has to be compiled before the model is loaded to verify it: compiled on demand by that load,
-		// it arrives too late and the model is cached without one
+		// it arrives too late and the model is cached without one. An AnimGraph2 graph needs its skeleton and clips first.
 		if ( additionalAssetPaths is not null )
-			foreach ( var path in additionalAssetPaths.Where( p => p.EndsWith( ".vanmgrph", StringComparison.OrdinalIgnoreCase ) ) )
+			foreach ( var path in additionalAssetPaths.Where( p => GraphCompileOrder( p ) >= 0 ).OrderBy( GraphCompileOrder ) )
 				if ( Try( () => AssetSystem.FindByPath( path ) ) is { } graph )
 					await CompileAndWaitAsync( graph, compileTimeoutSeconds );
 
@@ -1940,6 +1940,13 @@ public static class EditorPipeline
 
 		return result;
 	}
+
+	// Graph sources compiled ahead of their model, in dependency order: AnimGraph2 skeletons, then the clips compiled
+	// against them, then graphs. -1 for anything else
+	static readonly string[] GraphSourceExtensions = { ".skel", ".anim", ".vanmgrph", ".ag" };
+
+	static int GraphCompileOrder( string path )
+		=> Array.FindIndex( GraphSourceExtensions, extension => path.EndsWith( extension, StringComparison.OrdinalIgnoreCase ) );
 
 	/// <summary>The vmdl's base_model_name, or null.</summary>
 	static string BaseModelOf( string vmdlPath )
@@ -2076,6 +2083,19 @@ public static class EditorPipeline
 			&& l.Contains( vmdlFileName, StringComparison.OrdinalIgnoreCase ) );
 	}
 
+	// The editor refuses single compiles while its own content build runs (registering new files starts one) and logs
+	// "Not compiling <path>: a content build is running"
+	const string ContentBuildRefusal = "a content build is running";
+
+	// How long to wait before asking again for a compile the content build refused
+	const int RefusedCompileRetryMilliseconds = 2000;
+
+	/// <summary>True when the log slice since <paramref name="fromOffset"/> shows the editor refusing to compile
+	/// <paramref name="fileName"/> because its content build is running.</summary>
+	static bool LogSliceShowsRefusedCompile( long fromOffset, string fileName )
+		=> ReadLogSlice( fromOffset )?.Split( '\n' ).Any( l => l.Contains( ContentBuildRefusal, StringComparison.OrdinalIgnoreCase )
+			&& l.Contains( fileName, StringComparison.OrdinalIgnoreCase ) ) == true;
+
 	/// <summary>Reads the log slice written since <paramref name="fromOffset"/> and returns
 	/// the lines that look like compiler errors for our files, or null when none found.</summary>
 	static string TryReadCompileErrors( long fromOffset, IReadOnlyList<string> fileNames )
@@ -2125,6 +2145,9 @@ public static class EditorPipeline
 	/// engine logs an abandoned recompile for that file (so the caller's retry path runs
 	/// without waiting out the full timeout).</param>
 	/// <param name="watchFileName">File name to watch for in abandoned-recompile log lines.</param>
+	/// <remarks>A compile the editor refuses while its content build runs is asked for again every
+	/// <see cref="RefusedCompileRetryMilliseconds"/> until it runs; refused until the timeout, it fails with a warning
+	/// saying so.</remarks>
 	public static async Task<bool> CompileAndWaitAsync(
 		Asset asset, float timeoutSeconds = 120, long logOffset = -1, string watchFileName = null )
 	{
@@ -2157,14 +2180,20 @@ public static class EditorPipeline
 			// unreadable timestamp: treat as no pre-existing file (existence will satisfy)
 		}
 
-		try
+		var fileName = Path.GetFileName( Try( () => asset.AbsolutePath ) ?? "" );
+		var requestOffset = SboxLogLength();
+		void RequestCompile()
 		{
-			asset.Compile( full: true );
+			try
+			{
+				asset.Compile( full: true );
+			}
+			catch ( Exception e )
+			{
+				Log.Warning( $"[humanoid-retargeter] asset.Compile threw: {e.Message}" );
+			}
 		}
-		catch ( Exception e )
-		{
-			Log.Warning( $"[humanoid-retargeter] asset.Compile threw: {e.Message}" );
-		}
+		RequestCompile();
 
 		bool CompiledFileFresh()
 		{
@@ -2182,6 +2211,7 @@ public static class EditorPipeline
 		}
 
 		var sw = Stopwatch.StartNew();
+		var refusals = 0;
 		while ( sw.Elapsed.TotalSeconds < timeoutSeconds )
 		{
 			await SwitchToMainThread();
@@ -2203,6 +2233,19 @@ public static class EditorPipeline
 						Try( () => AssetSystem.RegisterFile( child ) );
 				return true;
 			}
+			// Refused (not marked failed) while the editor's content build runs: ask again once it may be over. That build
+			// compiles a changed file itself meanwhile, which the freshness check above accepts
+			if ( fileName.Length > 0 && LogSliceShowsRefusedCompile( requestOffset, fileName ) )
+			{
+				refusals++;
+				await Task.Delay( RefusedCompileRetryMilliseconds );
+				await SwitchToMainThread();
+				if ( CompiledFileFresh() )
+					continue;
+				requestOffset = SboxLogLength();
+				RequestCompile();
+				continue;
+			}
 			// The asset's own compiled flags are trusted only when no stale .vmdl_c could
 			// be feeding them (no pre-existing file and no resolvable compiled path).
 			if ( compiledAbs is null && preexistingWriteUtc is null
@@ -2217,7 +2260,12 @@ public static class EditorPipeline
 			await Task.Delay( 250 );
 		}
 
-		return CompiledFileFresh();
+		if ( CompiledFileFresh() )
+			return true;
+		if ( refusals > 0 )
+			Log.Warning( $"[humanoid-retargeter] Compile of {fileName} failed: the editor's content build was still running and "
+				+ $"refused it {refusals} time(s) in {timeoutSeconds:F0} s" );
+		return false;
 	}
 
 	static T Try<T>( Func<T> getter )

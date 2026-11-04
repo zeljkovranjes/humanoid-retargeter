@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-03
+Title: AnimGraph2
+### Added
+# Editor
+Smart Port from AnimGraph2 - Use the source's setup on a source driven by AnimGraph2 (the Human's human.ag) gives the target its own skeleton and a clip per animation the graph plays, retargeted like the source's sequences with their bone masks, IK goals, events, sync and root motion, and the graph rebased onto them; a hero ported from the AnimGraph2 Human moves within 2.8 units of its AnimGraph1 port (308 clips, about 5 minutes)
+
 ## 2026-11-01
 Title: 2D Mode
 ### Added
